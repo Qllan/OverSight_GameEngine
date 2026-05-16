@@ -1,0 +1,26 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "vn_engine"
+version = "0.1.0"
+description = "Visual Novel Engine - 2D game engine with block-based visual logic"
+readme = "README.md"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+    "dearpygui>=1.0",
+    "pytest>=7.0",
+    "mypy>=1.0",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+python-source = "python"
+module-name = "vn_engine"
