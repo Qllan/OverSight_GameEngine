@@ -19,6 +19,7 @@ dependencies = []
 [project.optional-dependencies]
 editor = ["dearpygui>=1.0"]
 player = ["pygame-ce>=2.4"]
+export = ["pygame-ce>=2.4", "pyinstaller>=6"]
 dev = ["pytest>=7.0", "mypy>=1.0"]
 
 [tool.maturin]
@@ -34,5 +35,5 @@ files = ["python/vn_engine"]
 strict = true
 
 [[tool.mypy.overrides]]
-module = ["dearpygui.*"]
+module = ["dearpygui.*", "PyInstaller.*"]
 ignore_missing_imports = true

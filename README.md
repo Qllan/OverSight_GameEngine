@@ -294,6 +294,21 @@ settings in `project.json`:
 `examples/demo` is a small playable project with generated art and sounds
 (`examples/demo/make_assets.py` recreates them).
 
+## Export
+
+```bash
+pip install pyinstaller
+python -m vn_engine.export examples/demo/project.json --name ParkDemo   # --onefile for one file
+./dist/ParkDemo/ParkDemo
+```
+
+The project is validated first (the export stops with the list of problems).
+Scenes are inlined into one `project.json`, the asset folder is copied, and
+PyInstaller bundles the player, the Rust extension, pygame and the game data
+into `dist/<name>/` (about 40 MB for the demo). The game starts at its title
+screen; saves go to the player's data folder. Build on each target system;
+PyInstaller does not cross-compile. CI builds the demo and runs the result.
+
 ## Compilation
 
 Each node becomes a labelled block of opcodes, emitted depth-first from the
@@ -430,5 +445,9 @@ maturin build --release
 1. **SDL2 dependencies**: pygame-ce may need system libraries (libsdl2-dev).
 2. **Determinism**: Floating point in blocks could break determinism.
 
-### Next: quality of life
-- Export to a standalone executable (PyInstaller + Rust binary)
+### Next
+- Editor: undo/redo, copy/paste of nodes, search, a variables panel
+- Player: transitions and animations (fade, move), a settings screen
+  (volume, text speed, fullscreen), gamepad input
+- Localization: string tables per language
+- App icon and metadata in exported games

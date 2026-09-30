@@ -33,11 +33,13 @@ jobs:
       - name: Install package
         run: |
           python -m pip install --upgrade pip
-          pip install pytest mypy pygame-ce
+          pip install pytest mypy pygame-ce pyinstaller
           pip install -e .
 
-      - name: Python tests
+      - name: Python tests (including a PyInstaller build of the demo)
         run: pytest
+        env:
+          VN_ENGINE_TEST_EXPORT: "1"
 
       - name: Type check
         run: mypy
