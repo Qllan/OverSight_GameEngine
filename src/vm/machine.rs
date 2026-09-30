@@ -10,6 +10,8 @@ use serde_json::Value as JsonValue;
 use std::collections::{BTreeMap, HashMap};
 
 use crate::compiler::codegen::{CompiledProgram, Opcode};
+use crate::compiler::expr::BinaryOp;
+use crate::vm::values;
 use crate::core::event_bus::Event;
 
 /// What an opcode asks the machine to do next
@@ -316,16 +318,80 @@ impl Machine {
                 Ok(Flow::Next)
             }
 
-            Opcode::EQ => {
-                let b = self.stack.pop().ok_or("EQ: Stack underflow")?;
-                let a = self.stack.pop().ok_or("EQ: Stack underflow")?;
-                self.stack.push(JsonValue::Bool(json_eq(&a, &b)));
+            Opcode::POP => {
+                self.pop(opcode)?;
+                Ok(Flow::Next)
+            }
+
+            Opcode::DUP => {
+                let top = self.stack.last().cloned().ok_or("DUP: Stack underflow")?;
+                self.stack.push(top);
+                Ok(Flow::Next)
+            }
+
+            Opcode::ADD
+            | Opcode::SUB
+            | Opcode::MUL
+            | Opcode::DIV
+            | Opcode::MOD
+            | Opcode::EQ
+            | Opcode::NE
+            | Opcode::LT
+            | Opcode::LE
+            | Opcode::GT
+            | Opcode::GE => {
+                let b = self.pop(opcode)?;
+                let a = self.pop(opcode)?;
+                let op = match opcode {
+                    Opcode::ADD => BinaryOp::Add,
+                    Opcode::SUB => BinaryOp::Sub,
+                    Opcode::MUL => BinaryOp::Mul,
+                    Opcode::DIV => BinaryOp::Div,
+                    Opcode::MOD => BinaryOp::Mod,
+                    Opcode::EQ => BinaryOp::Eq,
+                    Opcode::NE => BinaryOp::Ne,
+                    Opcode::LT => BinaryOp::Lt,
+                    Opcode::LE => BinaryOp::Le,
+                    Opcode::GT => BinaryOp::Gt,
+                    _ => BinaryOp::Ge,
+                };
+                self.stack.push(values::binary(op, &a, &b)?);
+                Ok(Flow::Next)
+            }
+
+            Opcode::NEG => {
+                let value = self.pop(opcode)?;
+                self.stack.push(values::negate(&value)?);
+                Ok(Flow::Next)
+            }
+
+            Opcode::NOT => {
+                let value = self.pop(opcode)?;
+                self.stack.push(JsonValue::Bool(!values::truthy(&value)));
+                Ok(Flow::Next)
+            }
+
+            Opcode::CONCAT { count } => {
+                let parts = self.pop_many(opcode, *count)?;
+                let text: String = parts.iter().map(values::display).collect();
+                self.stack.push(JsonValue::String(text));
+                Ok(Flow::Next)
+            }
+
+            Opcode::MAKE_ARRAY { count } => {
+                let items = self.pop_many(opcode, *count)?;
+                self.stack.push(JsonValue::Array(items));
                 Ok(Flow::Next)
             }
 
             Opcode::IF_JUMP { target } => {
-                let condition = self.stack.pop().ok_or("IF_JUMP: Stack underflow")?;
-                Ok(if truthy(&condition) { Flow::Jump(*target) } else { Flow::Next })
+                let condition = self.pop(opcode)?;
+                Ok(if values::truthy(&condition) { Flow::Jump(*target) } else { Flow::Next })
+            }
+
+            Opcode::JUMP_IF_FALSE { target } => {
+                let condition = self.pop(opcode)?;
+                Ok(if values::truthy(&condition) { Flow::Next } else { Flow::Jump(*target) })
             }
 
             Opcode::JUMP { target } => Ok(Flow::Jump(*target)),
@@ -374,6 +440,20 @@ impl Machine {
         }
     }
 
+    fn pop(&mut self, opcode: &Opcode) -> Result<JsonValue, String> {
+        self.stack
+            .pop()
+            .ok_or_else(|| format!("{}: Stack underflow", opcode))
+    }
+
+    /// Pop `count` values, returned in push order
+    fn pop_many(&mut self, opcode: &Opcode, count: usize) -> Result<Vec<JsonValue>, String> {
+        if self.stack.len() < count {
+            return Err(format!("{}: Stack underflow", opcode));
+        }
+        Ok(self.stack.split_off(self.stack.len() - count))
+    }
+
     /// Record a runtime error, stop the machine and return the message
     fn fail(&mut self, message: String) -> String {
         self.log_event(&format!("Error: {}", message));
@@ -388,25 +468,6 @@ impl Machine {
     fn log_event(&mut self, message: &str) {
         log::info!("[VM] {}", message);
         self.log.push(message.to_string());
-    }
-}
-
-/// Equality that treats 1 and 1.0 as equal
-fn json_eq(a: &JsonValue, b: &JsonValue) -> bool {
-    match (a, b) {
-        (JsonValue::Number(x), JsonValue::Number(y)) => x.as_f64() == y.as_f64(),
-        _ => a == b,
-    }
-}
-
-fn truthy(value: &JsonValue) -> bool {
-    match value {
-        JsonValue::Null => false,
-        JsonValue::Bool(b) => *b,
-        JsonValue::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
-        JsonValue::String(s) => !s.is_empty(),
-        JsonValue::Array(a) => !a.is_empty(),
-        JsonValue::Object(o) => !o.is_empty(),
     }
 }
 
@@ -585,6 +646,79 @@ mod tests {
         let program = compile_graph(&parse_json_graph(EXAMPLE).unwrap()).unwrap();
         assert_eq!(program.fingerprint(), compile_graph(&parse_json_graph(EXAMPLE).unwrap()).unwrap().fingerprint());
         assert_eq!(program.fingerprint().len(), 16);
+    }
+
+    /// Play a graph answering choices in order; returns shown (text, choices)
+    fn play(json: &str, vars: &[(&str, JsonValue)], choices: &[i64]) -> (Machine, Vec<JsonValue>) {
+        let mut m = machine_for(json);
+        for (name, value) in vars {
+            m.set_variable(name, value.clone());
+        }
+        let mut shown = Vec::new();
+        let mut choices = choices.iter();
+        m.run_until_blocked(1000).unwrap();
+        while m.is_running() {
+            let args = m.last_block.as_ref().unwrap().1.clone();
+            if m.yield_reason() == Some("choice") {
+                shown.push(args["choices"].clone());
+                m.resume(Some(json!(choices.next().unwrap()))).unwrap();
+            } else {
+                shown.push(args["text"].clone());
+                m.resume(None).unwrap();
+            }
+            m.run_until_blocked(1000).unwrap();
+        }
+        (m, shown)
+    }
+
+    const AFFECTION: &str = include_str!("../../examples/affection.json");
+
+    #[test]
+    fn expressions_drive_the_story() {
+        let vars = [("player", json!("Alex")), ("speaker_name", json!("Mia"))];
+        let (m, shown) = play(AFFECTION, &vars, &[0]);
+        assert_eq!(
+            shown,
+            vec![
+                json!("Hi, Alex! It's been a while."),
+                json!(["Missed you, Mia", "Whatever."]),
+                json!("She smiles. (affection: 3)"),
+            ]
+        );
+        assert!(m.stack.is_empty(), "stack leaked: {:?}", m.stack);
+
+        let (m, shown) = play(AFFECTION, &vars, &[1]);
+        assert_eq!(shown.last().unwrap(), &json!("She frowns."));
+        assert_eq!(m.get_variable("affection"), Some(&json!(-1)));
+    }
+
+    #[test]
+    fn and_short_circuits() {
+        // `missing` is never read because the left side is already false
+        let graph = r#"{"graph_id":"g","version":"1.0",
+            "nodes":[{"id":"s","type":"entry"},
+                     {"id":"v","type":"SetVariable","parameters":{"name":"r","expression":"flag and missing"}},
+                     {"id":"w","type":"SetVariable","parameters":{"name":"o","expression":"flag or 'fallback'"}}],
+            "edges":[{"from":"s","to":"v"},{"from":"v","to":"w"}]}"#;
+        let (m, _) = play(graph, &[("flag", json!(false))], &[]);
+        assert_eq!(m.get_variable("r"), Some(&json!(false)));
+        assert_eq!(m.get_variable("o"), Some(&json!("fallback")));
+        assert!(m.stack.is_empty());
+    }
+
+    #[test]
+    fn expression_errors_stop_at_the_node() {
+        let mut m = machine_for(
+            r#"{"graph_id":"g","version":"1.0",
+                "nodes":[{"id":"s","type":"entry"},
+                         {"id":"bad","type":"SetVariable","parameters":{"name":"x","expression":"10 / zero"}}],
+                "edges":[{"from":"s","to":"bad"}]}"#,
+        );
+        m.set_variable("zero", json!(0));
+        let err = m.run_until_blocked(100).unwrap_err();
+        assert_eq!(err, "division by zero");
+        assert!(m.take_events().iter().any(|e| matches!(e,
+            Event::Error { node_id: Some(n), .. } if n == "bad")));
     }
 
     #[test]

@@ -6,8 +6,10 @@
 //! depth-first order from the start node, so a node's first successor usually
 //! follows it directly and needs no jump.
 //!
-//! Opcodes: PUSH, VAR_SET, VAR_GET, EQ, IF_JUMP, JUMP, YIELD, WAIT, CALL_BLOCK, END
+//! Expressions (conditions, assignments, `{...}` in text) compile to stack
+//! code; `and`/`or` short-circuit with jumps local to the node.
 
+use crate::compiler::expr::{parse_expr, parse_template, BinaryOp, Expr, TemplatePart, UnaryOp};
 use crate::compiler::graph_parser::{AstGraph, AstNode};
 use pyo3::prelude::*;
 use serde_json::Value as JsonValue;
@@ -27,12 +29,33 @@ pub fn node_waits_for_player(node_type: &str) -> bool {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Opcode {
     PUSH(JsonValue),
+    POP,
+    DUP,
     VAR_SET { name: String },
     VAR_GET { name: String },
-    /// Pop b, pop a, push (a == b)
+    // Binary operators pop b, pop a and push (a op b)
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    MOD,
     EQ,
+    NE,
+    LT,
+    LE,
+    GT,
+    GE,
+    // Unary operators replace the top of the stack
+    NEG,
+    NOT,
+    /// Pop `count` values, push their text joined in push order
+    CONCAT { count: usize },
+    /// Pop `count` values, push them as an array in push order
+    MAKE_ARRAY { count: usize },
     /// Pop condition, jump if truthy
     IF_JUMP { target: usize },
+    /// Pop condition, jump if falsy
+    JUMP_IF_FALSE { target: usize },
     JUMP { target: usize },
     YIELD { wait_type: String },
     WAIT { frames: u32 },
@@ -44,10 +67,27 @@ impl fmt::Display for Opcode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Opcode::PUSH(v) => write!(f, "PUSH({})", v),
+            Opcode::POP => write!(f, "POP"),
+            Opcode::DUP => write!(f, "DUP"),
             Opcode::VAR_SET { name } => write!(f, "VAR_SET({})", name),
             Opcode::VAR_GET { name } => write!(f, "VAR_GET({})", name),
+            Opcode::ADD => write!(f, "ADD"),
+            Opcode::SUB => write!(f, "SUB"),
+            Opcode::MUL => write!(f, "MUL"),
+            Opcode::DIV => write!(f, "DIV"),
+            Opcode::MOD => write!(f, "MOD"),
             Opcode::EQ => write!(f, "EQ"),
+            Opcode::NE => write!(f, "NE"),
+            Opcode::LT => write!(f, "LT"),
+            Opcode::LE => write!(f, "LE"),
+            Opcode::GT => write!(f, "GT"),
+            Opcode::GE => write!(f, "GE"),
+            Opcode::NEG => write!(f, "NEG"),
+            Opcode::NOT => write!(f, "NOT"),
+            Opcode::CONCAT { count } => write!(f, "CONCAT({})", count),
+            Opcode::MAKE_ARRAY { count } => write!(f, "MAKE_ARRAY({})", count),
             Opcode::IF_JUMP { target } => write!(f, "IF_JUMP({})", target),
+            Opcode::JUMP_IF_FALSE { target } => write!(f, "JUMP_IF_FALSE({})", target),
             Opcode::JUMP { target } => write!(f, "JUMP({})", target),
             Opcode::YIELD { wait_type } => write!(f, "YIELD({})", wait_type),
             Opcode::WAIT { frames } => write!(f, "WAIT({})", frames),
@@ -228,8 +268,8 @@ impl Codegen {
             "ShowText" => {
                 let text = node.param("text").unwrap_or(JsonValue::String(String::new()));
                 let speaker = node.param("speaker").unwrap_or(JsonValue::Null);
-                self.emit(Opcode::PUSH(text), id);
-                self.emit(Opcode::PUSH(speaker), id);
+                self.emit_text(&text, id)?;
+                self.emit_text(&speaker, id)?;
                 // Args are listed in push order; the VM pops them in reverse
                 self.emit(
                     Opcode::CALL_BLOCK {
@@ -245,7 +285,7 @@ impl Codegen {
 
             "BranchChoice" => {
                 let choices = node.param("choices").unwrap_or(JsonValue::Array(Vec::new()));
-                self.emit(Opcode::PUSH(choices), id);
+                self.emit_choices(&choices, id)?;
                 self.emit(
                     Opcode::CALL_BLOCK {
                         block_type: "BranchChoice".to_string(),
@@ -273,12 +313,45 @@ impl Codegen {
                     Some(JsonValue::String(name)) if !name.is_empty() => name,
                     _ => return Err(format!("SetVariable '{}' has no variable name", id)),
                 };
-                let value = node
-                    .param("value")
-                    .ok_or_else(|| format!("SetVariable '{}' has no value", id))?;
-                self.emit(Opcode::PUSH(value), id);
+                match (node.param("expression"), node.param("value")) {
+                    (Some(JsonValue::String(source)), None) => {
+                        let expr = parse_expr(&source)
+                            .map_err(|e| format!("SetVariable '{}': {}", id, e))?;
+                        self.emit_expr(&expr, id);
+                    }
+                    (None, Some(value)) => self.emit(Opcode::PUSH(value), id),
+                    _ => {
+                        return Err(format!(
+                            "SetVariable '{}' needs either 'value' or an 'expression' string",
+                            id
+                        ))
+                    }
+                }
                 self.emit(Opcode::VAR_SET { name }, id);
                 self.emit_flow(node, next_emitted);
+            }
+
+            "If" => {
+                let condition = match node.param("condition") {
+                    Some(JsonValue::String(source)) => {
+                        parse_expr(&source).map_err(|e| format!("If '{}': {}", id, e))?
+                    }
+                    Some(value) => Expr::Literal(value),
+                    None => return Err(format!("If '{}' has no condition", id)),
+                };
+                let [when_true, when_false] = node.successors.as_slice() else {
+                    return Err(format!("If '{}' needs a true and a false output", id));
+                };
+                self.emit_expr(&condition, id);
+                if Some(when_true) == next_emitted {
+                    // True branch follows directly
+                    self.emit_jump(Opcode::JUMP_IF_FALSE { target: 0 }, when_false, id);
+                } else {
+                    self.emit_jump(Opcode::IF_JUMP { target: 0 }, when_true, id);
+                    if Some(when_false) != next_emitted {
+                        self.emit_jump(Opcode::JUMP { target: 0 }, when_false, id);
+                    }
+                }
             }
 
             "EndScene" | "End" => {
@@ -306,6 +379,105 @@ impl Codegen {
         Ok(())
     }
 
+    /// Compile an expression that leaves its value on the stack
+    fn emit_expr(&mut self, expr: &Expr, id: &str) {
+        match expr {
+            Expr::Literal(value) => self.emit(Opcode::PUSH(value.clone()), id),
+            Expr::Var(name) => self.emit(Opcode::VAR_GET { name: name.clone() }, id),
+            Expr::Unary(op, operand) => {
+                self.emit_expr(operand, id);
+                let op = match op {
+                    UnaryOp::Neg => Opcode::NEG,
+                    UnaryOp::Not => Opcode::NOT,
+                };
+                self.emit(op, id);
+            }
+            Expr::Binary(op, a, b) => {
+                self.emit_expr(a, id);
+                self.emit_expr(b, id);
+                let op = match op {
+                    BinaryOp::Add => Opcode::ADD,
+                    BinaryOp::Sub => Opcode::SUB,
+                    BinaryOp::Mul => Opcode::MUL,
+                    BinaryOp::Div => Opcode::DIV,
+                    BinaryOp::Mod => Opcode::MOD,
+                    BinaryOp::Eq => Opcode::EQ,
+                    BinaryOp::Ne => Opcode::NE,
+                    BinaryOp::Lt => Opcode::LT,
+                    BinaryOp::Le => Opcode::LE,
+                    BinaryOp::Gt => Opcode::GT,
+                    BinaryOp::Ge => Opcode::GE,
+                };
+                self.emit(op, id);
+            }
+            // a and b: keep a if it is falsy, otherwise evaluate b
+            // a or b:  keep a if it is truthy, otherwise evaluate b
+            Expr::And(a, b) | Expr::Or(a, b) => {
+                self.emit_expr(a, id);
+                self.emit(Opcode::DUP, id);
+                let skip = self.opcodes.len();
+                let jump = if matches!(expr, Expr::And(..)) {
+                    Opcode::JUMP_IF_FALSE { target: 0 }
+                } else {
+                    Opcode::IF_JUMP { target: 0 }
+                };
+                self.emit(jump, id);
+                self.emit(Opcode::POP, id);
+                self.emit_expr(b, id);
+                let end = self.opcodes.len();
+                if let Opcode::IF_JUMP { target } | Opcode::JUMP_IF_FALSE { target } =
+                    &mut self.opcodes[skip]
+                {
+                    *target = end;
+                }
+            }
+        }
+    }
+
+    /// Push a text value, expanding `{expression}` placeholders in strings
+    fn emit_text(&mut self, value: &JsonValue, id: &str) -> Result<(), String> {
+        let JsonValue::String(source) = value else {
+            self.emit(Opcode::PUSH(value.clone()), id);
+            return Ok(());
+        };
+        let parts = parse_template(source).map_err(|e| format!("Node '{}': {}", id, e))?;
+        if let [TemplatePart::Text(text)] = parts.as_slice() {
+            self.emit(Opcode::PUSH(JsonValue::String(text.clone())), id);
+            return Ok(());
+        }
+        for part in &parts {
+            match part {
+                TemplatePart::Text(text) => {
+                    self.emit(Opcode::PUSH(JsonValue::String(text.clone())), id)
+                }
+                TemplatePart::Expr(expr) => self.emit_expr(expr, id),
+            }
+        }
+        self.emit(Opcode::CONCAT { count: parts.len() }, id);
+        Ok(())
+    }
+
+    /// Push the choice list; labels may contain placeholders
+    fn emit_choices(&mut self, choices: &JsonValue, id: &str) -> Result<(), String> {
+        let JsonValue::Array(items) = choices else {
+            self.emit(Opcode::PUSH(choices.clone()), id);
+            return Ok(());
+        };
+        let is_static = |item: &JsonValue| match item {
+            JsonValue::String(s) => !s.contains(['{', '}']),
+            _ => true,
+        };
+        if items.iter().all(is_static) {
+            self.emit(Opcode::PUSH(choices.clone()), id);
+            return Ok(());
+        }
+        for item in items {
+            self.emit_text(item, id)?;
+        }
+        self.emit(Opcode::MAKE_ARRAY { count: items.len() }, id);
+        Ok(())
+    }
+
     fn resolve_jumps(&mut self) -> Result<(), String> {
         for (index, target_node) in &self.patches {
             let target = *self
@@ -313,7 +485,9 @@ impl Codegen {
                 .get(target_node)
                 .ok_or_else(|| format!("Jump to unknown node '{}'", target_node))?;
             match &mut self.opcodes[*index] {
-                Opcode::JUMP { target: t } | Opcode::IF_JUMP { target: t } => *t = target,
+                Opcode::JUMP { target: t }
+                | Opcode::IF_JUMP { target: t }
+                | Opcode::JUMP_IF_FALSE { target: t } => *t = target,
                 other => return Err(format!("Opcode {} at {} is not a jump", other, index)),
             }
         }

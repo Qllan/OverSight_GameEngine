@@ -8,8 +8,10 @@
 //! - Parameter validation
 
 use crate::compiler::codegen::node_waits_for_player;
+use crate::compiler::expr::{parse_expr, parse_template};
 use crate::compiler::graph_parser::{AstGraph, AstNode};
 use pyo3::prelude::*;
+use serde_json::Value as JsonValue;
 use std::collections::HashSet;
 
 /// Validation error with human-readable message
@@ -184,41 +186,31 @@ fn validate_node_type(node_id: &str, node: &AstNode, errors: &mut Vec<Validation
                 ));
             }
         }
+        "If" => validate_if(node_id, node, errors),
         _ => {
-            if node.node_type == "SetVariable" {
-                let name_ok = matches!(
-                    node.param("name"),
-                    Some(serde_json::Value::String(ref s)) if !s.is_empty()
-                );
-                if !name_ok {
-                    errors.push(ValidationError::new(
-                        "MISSING_PARAMETER",
-                        "SetVariable requires a non-empty 'name' parameter",
-                        Some(node_id),
-                        Some("Set the variable name."),
-                    ));
+            match node.node_type.as_str() {
+                "SetVariable" => validate_set_variable(node_id, node, errors),
+                "ShowText" => {
+                    for name in ["text", "speaker"] {
+                        if let Some(value) = node.param(name) {
+                            check_text(node_id, name, &value, errors);
+                        }
+                    }
                 }
-                if node.param("value").is_none() {
-                    errors.push(ValidationError::new(
-                        "MISSING_PARAMETER",
-                        "SetVariable requires a 'value' parameter",
-                        Some(node_id),
-                        Some("Set the value to assign."),
-                    ));
-                }
+                _ => {}
             }
 
-            // Only BranchChoice may fork the flow
+            // Only BranchChoice and If may fork the flow
             if node.successors.len() > 1 {
                 errors.push(ValidationError::new(
                     "MULTIPLE_OUTPUTS",
                     &format!(
-                        "'{}' node has {} outputs; only BranchChoice can have more than one",
+                        "'{}' node has {} outputs; only BranchChoice and If can have more than one",
                         node.node_type,
                         node.successors.len()
                     ),
                     Some(node_id),
-                    Some("Use a BranchChoice node to split the flow."),
+                    Some("Use a BranchChoice or If node to split the flow."),
                 ));
             }
             if node.successors.is_empty() {
@@ -229,9 +221,103 @@ fn validate_node_type(node_id: &str, node: &AstNode, errors: &mut Vec<Validation
     }
 }
 
+fn check_expression(node_id: &str, param: &str, source: &str, errors: &mut Vec<ValidationError>) {
+    if let Err(e) = parse_expr(source) {
+        errors.push(ValidationError::new(
+            "INVALID_EXPRESSION",
+            &format!("'{}' is not a valid expression: {}", param, e),
+            Some(node_id),
+            Some("Example: affection >= 5 and not met_rival"),
+        ));
+    }
+}
+
+/// Text may contain {expression} placeholders
+fn check_text(node_id: &str, param: &str, value: &JsonValue, errors: &mut Vec<ValidationError>) {
+    if let JsonValue::String(source) = value {
+        if let Err(e) = parse_template(source) {
+            errors.push(ValidationError::new(
+                "INVALID_TEXT",
+                &format!("'{}' has a broken placeholder: {}", param, e),
+                Some(node_id),
+                Some("Write {name} to insert a variable, {{ and }} for literal braces."),
+            ));
+        }
+    }
+}
+
+fn validate_set_variable(node_id: &str, node: &AstNode, errors: &mut Vec<ValidationError>) {
+    let name_ok = matches!(node.param("name"), Some(JsonValue::String(ref s)) if !s.is_empty());
+    if !name_ok {
+        errors.push(ValidationError::new(
+            "MISSING_PARAMETER",
+            "SetVariable requires a non-empty 'name' parameter",
+            Some(node_id),
+            Some("Set the variable name."),
+        ));
+    }
+    match (node.param("value"), node.param("expression")) {
+        (Some(_), None) => {}
+        (None, Some(JsonValue::String(source))) => {
+            check_expression(node_id, "expression", &source, errors)
+        }
+        (None, Some(_)) => errors.push(ValidationError::new(
+            "INVALID_PARAMETER",
+            "SetVariable 'expression' must be a string",
+            Some(node_id),
+            Some("Example: \"score + 1\""),
+        )),
+        (None, None) => errors.push(ValidationError::new(
+            "MISSING_PARAMETER",
+            "SetVariable requires a 'value' or an 'expression' parameter",
+            Some(node_id),
+            Some("Set a constant 'value', or an 'expression' such as \"score + 1\"."),
+        )),
+        (Some(_), Some(_)) => errors.push(ValidationError::new(
+            "INVALID_PARAMETER",
+            "SetVariable has both 'value' and 'expression'",
+            Some(node_id),
+            Some("Keep only one of them."),
+        )),
+    }
+}
+
+fn validate_if(node_id: &str, node: &AstNode, errors: &mut Vec<ValidationError>) {
+    match node.param("condition") {
+        Some(JsonValue::String(source)) => check_expression(node_id, "condition", &source, errors),
+        Some(_) => {}
+        None => errors.push(ValidationError::new(
+            "MISSING_PARAMETER",
+            "If requires a 'condition' parameter",
+            Some(node_id),
+            Some("Example: affection >= 5"),
+        )),
+    }
+    if node.successors.len() != 2 {
+        errors.push(ValidationError::new(
+            "INVALID_IF",
+            &format!(
+                "If needs exactly 2 outputs (0: true, 1: false), found {}",
+                node.successors.len()
+            ),
+            Some(node_id),
+            Some("Connect output 0 for true and output 1 for false."),
+        ));
+    } else if node.successor_ports.iter().any(|p| p.is_some())
+        && node.successor_ports != [Some(0), Some(1)]
+    {
+        errors.push(ValidationError::new(
+            "INVALID_PORT",
+            &format!("If output ports must be 0 and 1, found {:?}", node.successor_ports),
+            Some(node_id),
+            Some("Connect output 0 for true and output 1 for false."),
+        ));
+    }
+}
+
 fn validate_branch(node_id: &str, node: &AstNode, errors: &mut Vec<ValidationError>) {
     let choices = match node.param("choices") {
-        Some(serde_json::Value::Array(choices)) if !choices.is_empty() => choices,
+        Some(JsonValue::Array(choices)) if !choices.is_empty() => choices,
         Some(_) => {
             errors.push(ValidationError::new(
                 "INVALID_PARAMETER",
@@ -251,6 +337,10 @@ fn validate_branch(node_id: &str, node: &AstNode, errors: &mut Vec<ValidationErr
             return;
         }
     };
+
+    for choice in &choices {
+        check_text(node_id, "choices", choice, errors);
+    }
 
     if node.successors.len() != choices.len() {
         errors.push(ValidationError::new(
@@ -381,6 +471,45 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].error_type, "BUSY_LOOP");
         assert_eq!(errors[0].message, "Loop never waits for the player: a -> b -> a");
+    }
+
+    #[test]
+    fn affection_example_is_valid() {
+        let types = error_types(include_str!("../../examples/affection.json"));
+        assert!(types.is_empty(), "{:?}", types);
+    }
+
+    #[test]
+    fn expression_and_text_errors() {
+        let graph = parse_json_graph(
+            r#"{"graph_id":"g","version":"1.0",
+                "nodes":[{"id":"s","type":"entry"},
+                         {"id":"t","type":"ShowText","parameters":{"text":"Hi {name"}},
+                         {"id":"i","type":"If","parameters":{"condition":"a = 1"}},
+                         {"id":"x","type":"End"},
+                         {"id":"v","type":"SetVariable","parameters":{"name":"n","value":1,"expression":"2"}}],
+                "edges":[{"from":"s","to":"t"},{"from":"t","to":"i"},{"from":"i","to":"x"},{"from":"v","to":"x"}]}"#,
+        )
+        .unwrap();
+        let errors: Vec<(String, String)> = validate_graph(&graph)
+            .into_iter()
+            .map(|e| (e.error_type, e.node_id.unwrap_or_default()))
+            .collect();
+        let expected = [
+            ("INVALID_EXPRESSION", "i"),
+            ("INVALID_IF", "i"),
+            ("INVALID_TEXT", "t"),
+            ("INVALID_PARAMETER", "v"),
+        ];
+        for (kind, node) in expected {
+            assert!(
+                errors.contains(&(kind.to_string(), node.to_string())),
+                "missing {} on {}: {:?}",
+                kind,
+                node,
+                errors
+            );
+        }
     }
 
     #[test]

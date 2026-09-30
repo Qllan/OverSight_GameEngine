@@ -8,7 +8,7 @@ import sys
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-NODE_TYPES = ["entry", "ShowText", "BranchChoice", "SetVariable", "PlayVoice", "EndScene"]
+NODE_TYPES = ["entry", "ShowText", "BranchChoice", "If", "SetVariable", "PlayVoice", "EndScene"]
 
 
 class NodeEditor:
@@ -37,6 +37,7 @@ class NodeEditor:
             "entry": {},
             "ShowText": {"text": "", "speaker": ""},
             "BranchChoice": {"choices": ["Option 1", "Option 2"]},
+            "If": {"condition": "true"},
             "SetVariable": {"name": "", "value": ""},
             "PlayVoice": {"voice_id": "", "volume": 1.0},
             "EndScene": {},
@@ -44,13 +45,20 @@ class NodeEditor:
         return dict(defaults.get(node_type, {}))
 
     @staticmethod
-    def output_count(node: Dict[str, Any]) -> int:
-        """Number of output ports a node has"""
+    def output_labels(node: Dict[str, Any]) -> List[str]:
+        """Labels of a node's output ports"""
         if node["type"] == "BranchChoice":
-            return len(node["parameters"].get("choices", []))
+            return [f"{i}: {c}" for i, c in enumerate(node["parameters"].get("choices", []))]
+        if node["type"] == "If":
+            return ["0: true", "1: false"]
         if node["type"] in ("EndScene", "End"):
-            return 0
-        return 1
+            return []
+        return ["next"]
+
+    @classmethod
+    def output_count(cls, node: Dict[str, Any]) -> int:
+        """Number of output ports a node has"""
+        return len(cls.output_labels(node))
 
     @staticmethod
     def has_input(node: Dict[str, Any]) -> bool:
@@ -268,12 +276,9 @@ class EditorApp:
                                    default_value=format_param(value),
                                    callback=self._on_param_edit, user_data=(node_id, name))
 
-        count = self.model.output_count(node)
-        labels = node["parameters"].get("choices", []) if node["type"] == "BranchChoice" else ["next"]
-        for port in range(count):
+        for port, label in enumerate(self.model.output_labels(node)):
             attr = dpg.add_node_attribute(parent=item, attribute_type=dpg.mvNode_Attr_Output)
-            dpg.add_text(f"{port}: {labels[port]}" if node["type"] == "BranchChoice" else "next",
-                         parent=attr)
+            dpg.add_text(label, parent=attr)
             self.output_attrs[attr] = (node_id, port)
 
     def _draw_link(self, from_id: str, port: int, to_id: str) -> None:

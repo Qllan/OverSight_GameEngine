@@ -5,6 +5,7 @@
 
 pub mod opcodes;
 pub mod machine;
+pub mod values;
 pub mod executor;
 pub mod stack_frame;
 pub mod state;

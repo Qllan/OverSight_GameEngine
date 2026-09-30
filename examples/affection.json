@@ -1,0 +1,37 @@
+{
+  "graph_id": "affection",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "position": [20, 160], "parameters": {}},
+    {"id": "init", "type": "SetVariable", "position": [150, 160],
+     "parameters": {"name": "affection", "value": 0}},
+    {"id": "greet", "type": "ShowText", "position": [420, 160],
+     "parameters": {"text": "Hi, {player}! It's been a while.", "speaker": "Mia"}},
+    {"id": "answer", "type": "BranchChoice", "position": [800, 160],
+     "parameters": {"choices": ["Missed you, {speaker_name}", "Whatever."]}},
+    {"id": "kind", "type": "SetVariable", "position": [1180, 60],
+     "parameters": {"name": "affection", "expression": "affection + 3"}},
+    {"id": "rude", "type": "SetVariable", "position": [1180, 280],
+     "parameters": {"name": "affection", "expression": "affection - 1"}},
+    {"id": "check", "type": "If", "position": [1450, 160],
+     "parameters": {"condition": "affection >= 3 and player != ''"}},
+    {"id": "smile", "type": "ShowText", "position": [1700, 60],
+     "parameters": {"text": "She smiles. (affection: {affection})", "speaker": "Mia"}},
+    {"id": "frown", "type": "ShowText", "position": [1700, 280],
+     "parameters": {"text": "She frowns.", "speaker": "Mia"}},
+    {"id": "end", "type": "EndScene", "position": [2080, 160], "parameters": {}}
+  ],
+  "edges": [
+    {"from": "start", "to": "init"},
+    {"from": "init", "to": "greet"},
+    {"from": "greet", "to": "answer"},
+    {"from": "answer", "to": "kind", "port": 0},
+    {"from": "answer", "to": "rude", "port": 1},
+    {"from": "kind", "to": "check"},
+    {"from": "rude", "to": "check"},
+    {"from": "check", "to": "smile", "port": 0},
+    {"from": "check", "to": "frown", "port": 1},
+    {"from": "smile", "to": "end"},
+    {"from": "frown", "to": "end"}
+  ]
+}

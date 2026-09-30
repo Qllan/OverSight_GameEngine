@@ -185,3 +185,28 @@ def test_save_from_other_graph_is_rejected(engine):
     state["fingerprint"] = "0" * 16
     with pytest.raises(ValueError, match="different version"):
         engine.load_state(state)
+
+
+def test_expressions_and_interpolation():
+    e = Engine()
+    e.init()
+    e.load_graph(str(Path(__file__).parents[1] / "examples" / "affection.json"))
+    e.set_variable("player", "Alex")
+    e.set_variable("speaker_name", "Mia")
+    e.run()
+    shown = []
+    state = e.run_until_yield()
+    while state is not None:
+        args = state["last_block_args"]
+        if state["yield_reason"] == "choice":
+            shown.append(args["choices"])
+            e.resume(0)
+        else:
+            shown.append(args["text"])
+            e.resume()
+        state = e.run_until_yield()
+    assert shown == [
+        "Hi, Alex! It's been a while.",
+        ["Missed you, Mia", "Whatever."],
+        "She smiles. (affection: 3)",
+    ]

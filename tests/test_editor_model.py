@@ -70,3 +70,17 @@ def test_parse_param():
     assert parse_param("true") is True
     assert parse_param("hello") == "hello"
     assert parse_param('["a", "b"]') == ["a", "b"]
+
+
+def test_if_node_has_true_and_false_outputs():
+    ed = NodeEditor()
+    start = ed.create_node("entry")
+    check = ed.create_node("If")
+    ed.set_node_param(check, "condition", "score > 1")
+    yes = ed.create_node("EndScene")
+    no = ed.create_node("EndScene")
+    ed.add_edge(start, check)
+    assert ed.add_edge(check, yes, 0) and ed.add_edge(check, no, 1)
+    assert not ed.add_edge(check, no, 2)
+    assert ed.output_labels(ed.nodes[check]) == ["0: true", "1: false"]
+    assert ed.validate_graph() == []
