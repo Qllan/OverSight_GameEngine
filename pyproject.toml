@@ -27,3 +27,11 @@ module-name = "vn_engine._core"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.mypy]
+files = ["python/vn_engine"]
+strict = true
+
+[[tool.mypy.overrides]]
+module = ["dearpygui.*"]
+ignore_missing_imports = true

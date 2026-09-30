@@ -111,7 +111,8 @@ class VMExecutor:
 
     def save_state(self) -> Dict[str, Any]:
         """Execution state as a JSON-compatible dict."""
-        return json.loads(self._vm.save_state())
+        state: Dict[str, Any] = json.loads(self._vm.save_state())
+        return state
 
     def load_state(self, state: Dict[str, Any]) -> None:
         """Restore a state from save_state() of the same compiled graph."""

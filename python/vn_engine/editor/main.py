@@ -54,7 +54,7 @@ class NodeEditor:
 
     @staticmethod
     def has_input(node: Dict[str, Any]) -> bool:
-        return node["type"] != "entry"
+        return bool(node["type"] != "entry")
 
     def delete_node(self, node_id: str) -> None:
         """Delete a node and its edges"""

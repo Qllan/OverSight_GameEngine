@@ -51,6 +51,7 @@
 │       └── novel_plugin.rs # Visual novel blocks
 ├── python/vn_engine/
 │   ├── __init__.py         # Package init
+│   ├── _core.pyi           # Type stubs for the Rust extension
 │   ├── engine.py           # High-level Engine API
 │   ├── compiler.py         # GraphCompiler wrapper
 │   ├── vm.py               # VMExecutor wrapper
@@ -266,6 +267,7 @@ python -m vn_engine.editor.main examples/simple_novel.json
 # Run tests
 cargo test                  # compiler + VM unit tests
 pytest                      # Python API, VM and editor model tests
+mypy                        # strict type check (uses vn_engine/_core.pyi)
 ```
 
 ### Release Build

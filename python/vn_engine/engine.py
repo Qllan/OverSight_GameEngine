@@ -27,16 +27,18 @@ class Engine:
             state = engine.run_until_yield()
     """
 
+    # Created by init(); methods call _require_init() before using them
+    _event_bus: "_core.EventBus"
+    _plugin_registry: "_core.PluginRegistry"
+    _asset_manager: "_core.AssetManager"
+    _tick_loop: "_core.FixedTickLoop"
+    _compiler: "_core.GraphCompiler"
+    _vm: "_core.VMExecutor"
+
     def __init__(self) -> None:
         self._initialized = False
-        self._event_bus: Any = None
-        self._plugin_registry: Any = None
-        self._asset_manager: Any = None
-        self._tick_loop: Any = None
-        self._compiler: Any = None
-        self._vm: Any = None
         self._current_graph_id: Optional[str] = None
-        self._compiled_program: Any = None
+        self._compiled_program: Optional["_core.CompiledProgram"] = None
 
     def init(self) -> None:
         """Initialize the engine core systems."""
@@ -212,7 +214,8 @@ class Engine:
         run_until_yield()); loading it continues from the same point.
         """
         self._require_init()
-        return json.loads(self._vm.save_state())
+        state: Dict[str, Any] = json.loads(self._vm.save_state())
+        return state
 
     def load_state(self, state: Dict[str, Any]) -> None:
         """
