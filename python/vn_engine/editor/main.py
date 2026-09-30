@@ -8,7 +8,10 @@ import sys
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
-NODE_TYPES = ["entry", "ShowText", "BranchChoice", "If", "SetVariable", "PlayVoice", "EndScene"]
+NODE_TYPES = [
+    "entry", "ShowText", "BranchChoice", "If", "SetVariable", "PlayVoice",
+    "Wait", "CallScene", "JumpScene", "EndScene",
+]
 
 
 class NodeEditor:
@@ -38,6 +41,9 @@ class NodeEditor:
             "ShowText": {"text": "", "speaker": ""},
             "BranchChoice": {"choices": ["Option 1", "Option 2"]},
             "If": {"condition": "true"},
+            "Wait": {"frames": 60},
+            "CallScene": {"scene": ""},
+            "JumpScene": {"scene": ""},
             "SetVariable": {"name": "", "value": ""},
             "PlayVoice": {"voice_id": "", "volume": 1.0},
             "EndScene": {},
@@ -51,7 +57,7 @@ class NodeEditor:
             return [f"{i}: {c}" for i, c in enumerate(node["parameters"].get("choices", []))]
         if node["type"] == "If":
             return ["0: true", "1: false"]
-        if node["type"] in ("EndScene", "End"):
+        if node["type"] in ("EndScene", "End", "JumpScene"):
             return []
         return ["next"]
 

@@ -22,6 +22,9 @@ def state_to_dict(state: Optional["_core.PyVMState"]) -> Optional[Dict[str, Any]
         "last_block_args": (
             json.loads(state.last_block_args) if state.last_block_args is not None else None
         ),
+        "current_graph_id": state.current_graph_id,
+        "call_depth": state.call_depth,
+        "waiting_frames": state.waiting_frames,
     }
 
 
@@ -62,6 +65,14 @@ class VMExecutor:
             State dict, or None once the VM has stopped
         """
         return state_to_dict(self._vm.step())
+
+    def load_project(self, project: "_core.CompiledProject") -> None:
+        """Load a compiled project (see GraphCompiler.compile_project)."""
+        self._vm.load_project(project)
+
+    def tick(self, max_steps: int = 100_000) -> Optional[Dict[str, Any]]:
+        """Advance one frame. Returns None once stopped."""
+        return state_to_dict(self._vm.tick(max_steps))
 
     def run_until_yield(self, max_steps: int = 100_000) -> Optional[Dict[str, Any]]:
         """Step until the VM yields or stops. Returns None once stopped."""

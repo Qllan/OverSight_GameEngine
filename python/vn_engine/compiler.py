@@ -85,6 +85,10 @@ class GraphCompiler:
             "disassembly": program.disassemble(),
         }
 
+    def compile_project(self, project_data: Dict[str, Any]) -> "_core.CompiledProject":
+        """Compile a project whose scenes are inline graph dicts."""
+        return self._compiler.compile_project_json(json.dumps(project_data))
+
     def get_last_errors(self) -> List[str]:
         """Get errors from last compilation."""
         return self._compiler.get_last_errors()

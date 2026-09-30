@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 use serde_json::Value as JsonValue;
 
 use crate::compiler::codegen::CompiledProgram;
+use crate::compiler::project::CompiledProject;
 use crate::core::event_bus::EventBus;
 use crate::pyjson::py_to_json;
 use crate::vm::machine::Machine;
@@ -36,6 +37,11 @@ impl VMExecutor {
     /// Load a compiled program (clears variables and state)
     fn load(&mut self, program: &CompiledProgram) {
         self.machine.load(program.clone());
+    }
+
+    /// Load a compiled project (clears variables and state)
+    fn load_project(&mut self, project: &CompiledProject) {
+        self.machine.load_project(project.clone());
     }
 
     /// Set the event bus that receives engine events (shared, not copied)
@@ -71,6 +77,14 @@ impl VMExecutor {
         Ok(Self::state_if_running(slf))
     }
 
+    /// Advance one frame: count down a Wait, then run until the VM yields,
+    /// waits or stops. Returns the state, or None once stopped.
+    #[pyo3(signature = (max_steps = DEFAULT_MAX_STEPS))]
+    fn tick(slf: &Bound<'_, Self>, max_steps: usize) -> PyResult<Option<PyVMState>> {
+        Self::with_machine(slf, |m| m.frame(max_steps))?;
+        Ok(Self::state_if_running(slf))
+    }
+
     /// Stop execution
     fn stop(slf: &Bound<'_, Self>) -> PyResult<()> {
         Self::with_machine(slf, |m| {
@@ -81,16 +95,7 @@ impl VMExecutor {
 
     /// Get current VM state
     fn get_state(&self) -> PyVMState {
-        let m = &self.machine;
-        PyVMState::from_state(
-            m.pc,
-            &m.stack,
-            &m.variables,
-            m.current_node_id.as_deref(),
-            m.yield_reason(),
-            m.is_running(),
-            m.last_block.as_ref(),
-        )
+        PyVMState::from_exec(self.machine.state())
     }
 
     /// Get a variable value as a JSON string

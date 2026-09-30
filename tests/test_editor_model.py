@@ -84,3 +84,10 @@ def test_if_node_has_true_and_false_outputs():
     assert not ed.add_edge(check, no, 2)
     assert ed.output_labels(ed.nodes[check]) == ["0: true", "1: false"]
     assert ed.validate_graph() == []
+
+
+def test_scene_nodes_ports():
+    ed = NodeEditor()
+    assert ed.output_count(ed.nodes[ed.create_node("JumpScene")]) == 0
+    assert ed.output_count(ed.nodes[ed.create_node("CallScene")]) == 1
+    assert ed.nodes[ed.create_node("Wait")]["parameters"] == {"frames": 60}

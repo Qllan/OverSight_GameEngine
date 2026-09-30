@@ -38,6 +38,7 @@ fn vn_engine_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<compiler::validator::GraphValidator>()?;
     m.add_class::<compiler::validator::ValidationError>()?;
     m.add_class::<compiler::codegen::CompiledProgram>()?;
+    m.add_class::<compiler::project::CompiledProject>()?;
 
     // VM
     m.add_class::<vm::executor::VMExecutor>()?;

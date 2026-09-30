@@ -7,7 +7,7 @@
 //! - Connection integrity
 //! - Parameter validation
 
-use crate::compiler::codegen::node_waits_for_player;
+use crate::compiler::codegen::{node_waits_for_player, scene_param};
 use crate::compiler::expr::{parse_expr, parse_template};
 use crate::compiler::graph_parser::{AstGraph, AstNode};
 use crate::core::plugin_registry::{
@@ -29,32 +29,50 @@ pub struct ValidationError {
     pub node_id: Option<String>,
     #[pyo3(get)]
     pub hint: Option<String>,
+    /// Scene the error is in (set when validating a project)
+    #[pyo3(get)]
+    pub graph_id: Option<String>,
 }
 
 #[pymethods]
 impl ValidationError {
     #[new]
-    #[pyo3(signature = (error_type, message, node_id = None, hint = None))]
-    pub fn new(
+    #[pyo3(signature = (error_type, message, node_id = None, hint = None, graph_id = None))]
+    fn py_new(
         error_type: &str,
         message: &str,
         node_id: Option<&str>,
         hint: Option<&str>,
+        graph_id: Option<&str>,
     ) -> Self {
+        let mut error = Self::new(error_type, message, node_id, hint);
+        error.graph_id = graph_id.map(String::from);
+        error
+    }
+
+    fn __repr__(&self) -> String {
+        let node_info = match (&self.graph_id, &self.node_id) {
+            (Some(g), Some(n)) => format!("{}/{}", g, n),
+            (None, Some(n)) => n.clone(),
+            (Some(g), None) => g.clone(),
+            (None, None) => "unknown".to_string(),
+        };
+        format!(
+            "ValidationError[{}]: {} (node: {})",
+            self.error_type, self.message, node_info
+        )
+    }
+}
+
+impl ValidationError {
+    pub fn new(error_type: &str, message: &str, node_id: Option<&str>, hint: Option<&str>) -> Self {
         ValidationError {
             error_type: error_type.to_string(),
             message: message.to_string(),
             node_id: node_id.map(String::from),
             hint: hint.map(String::from),
+            graph_id: None,
         }
-    }
-
-    fn __repr__(&self) -> String {
-        let node_info = self.node_id.as_deref().unwrap_or("unknown");
-        format!(
-            "ValidationError[{}]: {} (node: {})",
-            self.error_type, self.message, node_info
-        )
     }
 }
 
@@ -197,6 +215,33 @@ fn validate_node_type(
         "If" => validate_if(node_id, node, errors),
         "SetVariable" => {
             validate_set_variable(node_id, node, errors);
+            check_output_count(node_id, node, 1, errors);
+        }
+        "JumpScene" | "CallScene" => {
+            if let Err(message) = scene_param(node) {
+                errors.push(ValidationError::new(
+                    "MISSING_PARAMETER",
+                    &message,
+                    Some(node_id),
+                    Some("Set 'scene' to the graph_id of a scene in the project."),
+                ));
+            }
+            let outputs = if node.node_type == "JumpScene" { 0 } else { 1 };
+            check_output_count(node_id, node, outputs, errors);
+        }
+        "Wait" => {
+            let frames_ok = node
+                .param("frames")
+                .and_then(|f| f.as_u64())
+                .is_some_and(|f| f <= u32::MAX as u64);
+            if !frames_ok {
+                errors.push(ValidationError::new(
+                    "INVALID_PARAMETER",
+                    "Wait needs 'frames': a whole number of frames (60 = one second)",
+                    Some(node_id),
+                    None,
+                ));
+            }
             check_output_count(node_id, node, 1, errors);
         }
         block_type => match registry.block(block_type) {

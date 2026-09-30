@@ -12,7 +12,17 @@ use std::collections::HashMap;
 use crate::pyjson::{json_to_py, py_to_json};
 
 /// Node types handled by the compiler itself; blocks cannot use these names
-pub const BUILTIN_NODES: [&str; 6] = ["entry", "End", "EndScene", "SetVariable", "If", "BranchChoice"];
+pub const BUILTIN_NODES: [&str; 9] = [
+    "entry",
+    "End",
+    "EndScene",
+    "SetVariable",
+    "If",
+    "BranchChoice",
+    "JumpScene",
+    "CallScene",
+    "Wait",
+];
 
 /// Parameter types a block can declare
 pub const PARAM_TYPES: [&str; 10] = [

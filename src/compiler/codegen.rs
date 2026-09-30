@@ -59,7 +59,12 @@ pub enum Opcode {
     JUMP_IF_FALSE { target: usize },
     JUMP { target: usize },
     YIELD { wait_type: String },
+    /// Pause for this many frames (see Machine::frame)
     WAIT { frames: u32 },
+    /// Continue at the start of another scene
+    JUMP_SCENE { scene: String },
+    /// Run another scene; its END returns here
+    CALL_SCENE { scene: String },
     CALL_BLOCK { block_type: String, args: Vec<String> },
     END,
 }
@@ -92,12 +97,26 @@ impl fmt::Display for Opcode {
             Opcode::JUMP { target } => write!(f, "JUMP({})", target),
             Opcode::YIELD { wait_type } => write!(f, "YIELD({})", wait_type),
             Opcode::WAIT { frames } => write!(f, "WAIT({})", frames),
+            Opcode::JUMP_SCENE { scene } => write!(f, "JUMP_SCENE({})", scene),
+            Opcode::CALL_SCENE { scene } => write!(f, "CALL_SCENE({})", scene),
             Opcode::CALL_BLOCK { block_type, args } => {
                 write!(f, "CALL_BLOCK({}, {:?})", block_type, args)
             }
             Opcode::END => write!(f, "END"),
         }
     }
+}
+
+/// Stable 64-bit FNV-1a hash of newline-terminated lines, as hex
+pub fn fnv_hex(lines: impl Iterator<Item = String>) -> String {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for line in lines {
+        for byte in line.bytes().chain(std::iter::once(b'\n')) {
+            hash ^= byte as u64;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("{:016x}", hash)
 }
 
 /// Compiled program with opcodes and metadata
@@ -129,14 +148,7 @@ impl CompiledProgram {
     /// Stable 64-bit FNV-1a hash of the bytecode, as hex. Identifies the
     /// exact program a save state belongs to.
     pub fn fingerprint(&self) -> String {
-        let mut hash: u64 = 0xcbf29ce484222325;
-        for op in &self.opcodes {
-            for byte in op.to_string().bytes().chain(std::iter::once(b'\n')) {
-                hash ^= byte as u64;
-                hash = hash.wrapping_mul(0x100000001b3);
-            }
-        }
-        format!("{:016x}", hash)
+        fnv_hex(self.opcodes.iter().map(|op| op.to_string()))
     }
 
     /// Get opcode count
@@ -203,6 +215,14 @@ pub fn compile_graph(graph: &AstGraph, registry: &PluginRegistry) -> Result<Comp
             .map(|(id, n)| (id.clone(), n.node_type.clone()))
             .collect(),
     })
+}
+
+/// Target scene of a JumpScene / CallScene node
+pub fn scene_param(node: &AstNode) -> Result<String, String> {
+    match node.param("scene") {
+        Some(JsonValue::String(scene)) if !scene.is_empty() => Ok(scene),
+        _ => Err(format!("{} '{}' needs a 'scene' name", node.node_type, node.id)),
+    }
 }
 
 /// Depth-first pre-order from the start node, first successor first.
@@ -344,6 +364,25 @@ impl Codegen {
 
             "EndScene" | "End" => {
                 self.emit(Opcode::END, id);
+            }
+
+            "JumpScene" => {
+                self.emit(Opcode::JUMP_SCENE { scene: scene_param(node)? }, id);
+            }
+
+            "CallScene" => {
+                self.emit(Opcode::CALL_SCENE { scene: scene_param(node)? }, id);
+                self.emit_flow(node, next_emitted);
+            }
+
+            "Wait" => {
+                let frames = node
+                    .param("frames")
+                    .and_then(|f| f.as_u64())
+                    .and_then(|f| u32::try_from(f).ok())
+                    .ok_or_else(|| format!("Wait '{}' needs a whole number of 'frames'", id))?;
+                self.emit(Opcode::WAIT { frames }, id);
+                self.emit_flow(node, next_emitted);
             }
 
             block_type => match registry.block(block_type) {

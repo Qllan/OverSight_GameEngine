@@ -2,7 +2,7 @@
 
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from . import _core
 from .vm import state_to_dict
@@ -38,7 +38,9 @@ class Engine:
     def __init__(self) -> None:
         self._initialized = False
         self._current_graph_id: Optional[str] = None
-        self._compiled_program: Optional["_core.CompiledProgram"] = None
+        self._compiled_program: Optional[
+            Union["_core.CompiledProgram", "_core.CompiledProject"]
+        ] = None
         self._block_handlers: Dict[str, Callable[[Dict[str, Any]], Any]] = {}
 
     def init(self) -> None:
@@ -164,10 +166,45 @@ class Engine:
         """
         self._require_init()
 
-        self._compiled_program = self._compiler.compile_json(json.dumps(graph_data))
-        self._current_graph_id = self._compiled_program.graph_id
-        self._vm.load(self._compiled_program)
-        return self._current_graph_id
+        program = self._compiler.compile_json(json.dumps(graph_data))
+        self._compiled_program = program
+        self._current_graph_id = program.graph_id
+        self._vm.load(program)
+        return program.graph_id
+
+    def load_project(self, project_path: str) -> str:
+        """
+        Load and compile a project: several scenes, a start scene and
+        initial variables. Scene entries may be file paths, relative to
+        the project file, or inline graphs.
+
+        Returns:
+            Project ID string
+        """
+        path = Path(project_path)
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return self.load_project_from_dict(data, base_dir=str(path.parent))
+
+    def load_project_from_dict(
+        self, project_data: Dict[str, Any], base_dir: Optional[str] = None
+    ) -> str:
+        """Load a project from a dict; see load_project()."""
+        self._require_init()
+        base = Path(base_dir) if base_dir is not None else Path.cwd()
+        scenes = []
+        for scene in project_data.get("scenes", []):
+            if isinstance(scene, str):
+                with open(base / scene, "r", encoding="utf-8") as f:
+                    scene = json.load(f)
+            scenes.append(scene)
+        data = {**project_data, "scenes": scenes}
+
+        project = self._compiler.compile_project_json(json.dumps(data))
+        self._compiled_program = project
+        self._current_graph_id = project.start
+        self._vm.load_project(project)
+        return project.project_id
 
     def get_last_errors(self) -> List[str]:
         """Validation errors from the last load attempt."""
@@ -195,6 +232,18 @@ class Engine:
         """
         self._require_init()
         return state_to_dict(self._vm.step())
+
+    def tick(self, max_steps: int = 100_000) -> Optional[Dict[str, Any]]:
+        """
+        Advance one frame; call once per frame of the game loop. Counts
+        down Wait nodes, then runs until the graph waits for the player,
+        waits for frames, or ends.
+
+        Returns:
+            VM state dict, or None once execution has ended
+        """
+        self._require_init()
+        return state_to_dict(self._vm.tick(max_steps))
 
     def run_until_yield(self, max_steps: int = 100_000) -> Optional[Dict[str, Any]]:
         """

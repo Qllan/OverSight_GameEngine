@@ -13,11 +13,11 @@ use std::collections::HashMap;
 pub enum Event {
     GraphStart { graph_id: String },
     GraphEnd { graph_id: String },
-    NodeEnter { node_id: String, node_type: String },
-    BlockCall { node_id: Option<String>, block_type: String, args: JsonValue },
+    NodeEnter { graph_id: String, node_id: String, node_type: String },
+    BlockCall { graph_id: String, node_id: Option<String>, block_type: String, args: JsonValue },
     VariableChanged { name: String, value: JsonValue },
     YieldRequest { reason: String },
-    Error { message: String, node_id: Option<String> },
+    Error { message: String, graph_id: Option<String>, node_id: Option<String> },
 }
 
 impl Event {
@@ -40,15 +40,20 @@ impl Event {
             Event::GraphStart { graph_id } | Event::GraphEnd { graph_id } => {
                 json!({ "graph_id": graph_id })
             }
-            Event::NodeEnter { node_id, node_type } => {
-                json!({ "node_id": node_id, "node_type": node_type })
+            Event::NodeEnter { graph_id, node_id, node_type } => {
+                json!({ "graph_id": graph_id, "node_id": node_id, "node_type": node_type })
             }
-            Event::BlockCall { node_id, block_type, args } => {
-                json!({ "node_id": node_id, "block_type": block_type, "args": args })
-            }
+            Event::BlockCall { graph_id, node_id, block_type, args } => json!({
+                "graph_id": graph_id,
+                "node_id": node_id,
+                "block_type": block_type,
+                "args": args
+            }),
             Event::VariableChanged { name, value } => json!({ "name": name, "value": value }),
             Event::YieldRequest { reason } => json!({ "reason": reason }),
-            Event::Error { message, node_id } => json!({ "message": message, "node_id": node_id }),
+            Event::Error { message, graph_id, node_id } => {
+                json!({ "message": message, "graph_id": graph_id, "node_id": node_id })
+            }
         }
     }
 }

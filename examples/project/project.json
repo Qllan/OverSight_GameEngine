@@ -1,0 +1,6 @@
+{
+  "project_id": "market_day",
+  "start": "town",
+  "variables": {"gold": 10},
+  "scenes": ["scenes/town.json", "scenes/shop.json", "scenes/ending.json"]
+}

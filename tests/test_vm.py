@@ -86,12 +86,14 @@ def test_events_reach_subscribers(engine):
     assert kinds[0] == "GraphStart"
     assert kinds[-1] == "GraphEnd"
     assert ("BlockCall", {
+        "graph_id": "intro_scene",
         "node_id": "show_title",
         "block_type": "ShowText",
         "args": {"text": "Welcome to the Visual Novel!", "speaker": "Narrator"},
     }) in events
     assert ("VariableChanged", {"name": "__branch_result", "value": 1}) in events
-    assert any(k == "NodeEnter" and p == {"node_id": "exit_path", "node_type": "EndScene"}
+    assert any(k == "NodeEnter" and p == {"graph_id": "intro_scene", "node_id": "exit_path",
+                                          "node_type": "EndScene"}
                for k, p in events)
 
 
@@ -180,7 +182,7 @@ def test_save_from_other_graph_is_rejected(engine):
     other = Engine()
     other.init()
     other.load_graph(str(Path(__file__).parents[1] / "examples" / "menu_loop.json"))
-    with pytest.raises(ValueError, match="is for graph"):
+    with pytest.raises(ValueError, match="is for project"):
         other.load_state(state)
     state["fingerprint"] = "0" * 16
     with pytest.raises(ValueError, match="different version"):
@@ -262,3 +264,50 @@ def test_parameter_definition_defaults():
         registry.register_plugin(_core.PluginInfo("p", "1", ""))
         registry.register_block("p", _core.BlockDefinition(
             "X", "X", [], ["next"], [_core.ParameterDefinition("a", "colour")]))
+
+
+EXAMPLES = Path(__file__).parents[1] / "examples"
+
+
+def test_project_with_scene_files():
+    e = Engine()
+    e.init()
+    assert e.load_project(str(EXAMPLES / "project" / "project.json")) == "market_day"
+    e.run()
+    log = []
+    state = e.tick()
+    frames = 0
+    while state is not None:
+        frames += 1
+        if state["is_yielding"]:
+            args = state["last_block_args"]
+            if state["yield_reason"] == "choice":
+                log.append((state["current_graph_id"], args["choices"][0]))
+                e.resume(0)
+            else:
+                log.append((state["current_graph_id"], args["text"]))
+                e.resume()
+        state = e.tick()
+    assert log == [
+        ("town", "Market day! You have 10 gold."),
+        ("shop", "Buy bread (4 gold)"),
+        ("shop", "Thanks for buying!"),
+        ("town", "You leave the shop with 6 gold."),
+        ("ending", "The sun sets. Fin."),
+    ]
+    assert frames >= 30, "the Wait node holds for 30 frames"
+
+
+def test_project_errors_name_the_scene():
+    e = Engine()
+    e.init()
+    project = {
+        "project_id": "p", "start": "a",
+        "scenes": [{"graph_id": "a", "version": "1.0",
+                    "nodes": [{"id": "s", "type": "entry"},
+                              {"id": "go", "type": "JumpScene", "parameters": {"scene": "b"}}],
+                    "edges": [{"from": "s", "to": "go"}]}],
+    }
+    with pytest.raises(ValueError, match="UNKNOWN_SCENE in 'a'"):
+        e.load_project_from_dict(project)
+    assert any("(a/go)" in err for err in e.get_last_errors())

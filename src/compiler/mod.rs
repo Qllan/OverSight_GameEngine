@@ -8,3 +8,4 @@ pub mod graph_parser;
 pub mod validator;
 pub mod codegen;
 pub mod graph_compiler;
+pub mod project;

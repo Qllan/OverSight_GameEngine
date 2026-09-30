@@ -1,8 +1,9 @@
 //! VM State - Execution state for debugging and serialization
 
 use pyo3::prelude::*;
-use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+
+use crate::vm::machine::ExecState;
 
 /// Python-exposed VM state for debugging
 #[derive(Debug, Clone)]
@@ -28,6 +29,15 @@ pub struct PyVMState {
     /// Arguments of the most recent CALL_BLOCK as a JSON object string
     #[pyo3(get)]
     pub last_block_args: Option<String>,
+    /// Scene being executed
+    #[pyo3(get)]
+    pub current_graph_id: String,
+    /// Number of CallScene frames to return through
+    #[pyo3(get)]
+    pub call_depth: usize,
+    /// Frames left in a Wait (0 = not waiting)
+    #[pyo3(get)]
+    pub waiting_frames: u32,
 }
 
 #[pymethods]
@@ -44,6 +54,9 @@ impl PyVMState {
             is_running: false,
             last_block_type: None,
             last_block_args: None,
+            current_graph_id: String::new(),
+            call_depth: 0,
+            waiting_frames: 0,
         }
     }
 
@@ -80,26 +93,25 @@ impl Default for PyVMState {
 }
 
 impl PyVMState {
-    /// Create from internal VM state
-    pub fn from_state(
-        pc: usize,
-        stack: &[JsonValue],
-        variables: &HashMap<String, JsonValue>,
-        current_node_id: Option<&str>,
-        yield_reason: Option<&str>,
-        is_running: bool,
-        last_block: Option<&(String, JsonValue)>,
-    ) -> Self {
+    /// Snapshot of the machine's execution state
+    pub fn from_exec(state: &ExecState) -> Self {
         PyVMState {
-            pc,
-            stack: stack.iter().map(|v| v.to_string()).collect(),
-            variables: variables.iter().map(|(k, v)| (k.clone(), v.to_string())).collect(),
-            current_node_id: current_node_id.map(String::from),
-            is_yielding: yield_reason.is_some(),
-            yield_reason: yield_reason.map(String::from),
-            is_running,
-            last_block_type: last_block.map(|(t, _)| t.clone()),
-            last_block_args: last_block.map(|(_, a)| a.to_string()),
+            pc: state.pc,
+            stack: state.stack.iter().map(|v| v.to_string()).collect(),
+            variables: state
+                .variables
+                .iter()
+                .map(|(k, v)| (k.clone(), v.to_string()))
+                .collect(),
+            current_node_id: state.current_node_id.clone(),
+            is_yielding: state.yield_reason.is_some(),
+            yield_reason: state.yield_reason.clone(),
+            is_running: state.running,
+            last_block_type: state.last_block.as_ref().map(|(t, _)| t.clone()),
+            last_block_args: state.last_block.as_ref().map(|(_, a)| a.to_string()),
+            current_graph_id: state.scene.clone(),
+            call_depth: state.call_stack.len(),
+            waiting_frames: state.wait_frames,
         }
     }
 }

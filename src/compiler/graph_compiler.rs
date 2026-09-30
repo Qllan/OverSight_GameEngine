@@ -7,6 +7,7 @@ use pyo3::prelude::*;
 
 use crate::compiler::codegen::{compile_graph, CompiledProgram};
 use crate::compiler::graph_parser::{parse_json_graph, AstGraph};
+use crate::compiler::project::{compile_project, CompiledProject, ProjectError};
 use crate::compiler::validator::validate_graph;
 use crate::core::plugin_registry::{shared_registry, PluginRegistry};
 
@@ -93,6 +94,53 @@ impl GraphCompiler {
         compile_graph(&ast, &registry).map_err(|e| {
             pyo3::exceptions::PyRuntimeError::new_err(format!("Compile error: {}", e))
         })
+    }
+
+    /// Compile a project whose scenes are inline graphs (see
+    /// compiler::project). Scene errors name the scene they are in.
+    fn compile_project_json(&mut self, py: Python<'_>, json_str: &str) -> PyResult<CompiledProject> {
+        self.last_errors.clear();
+        match compile_project(json_str, &self.registry.bind(py).borrow()) {
+            Ok(project) => Ok(project),
+            Err(ProjectError::Parse(message)) => Err(pyo3::exceptions::PyValueError::new_err(
+                format!("Parse error: {}", message),
+            )),
+            Err(ProjectError::Compile(message)) => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                format!("Compile error: {}", message),
+            )),
+            Err(ProjectError::Invalid(errors)) => {
+                self.last_errors = errors
+                    .iter()
+                    .map(|e| {
+                        let place = match (&e.graph_id, &e.node_id) {
+                            (Some(g), Some(n)) => format!("{}/{}", g, n),
+                            (Some(g), None) => g.clone(),
+                            (None, Some(n)) => n.clone(),
+                            (None, None) => "project".to_string(),
+                        };
+                        format!(
+                            "[{}] {}: {} ({})",
+                            e.error_type,
+                            e.message,
+                            e.hint.as_deref().unwrap_or(""),
+                            place
+                        )
+                    })
+                    .collect();
+                let summary = errors
+                    .iter()
+                    .map(|e| match &e.graph_id {
+                        Some(g) => format!("{} in '{}': {}", e.error_type, g, e.message),
+                        None => format!("{}: {}", e.error_type, e.message),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Validation failed: {}",
+                    summary
+                )))
+            }
+        }
     }
 
     /// Get errors from last validation/compilation
