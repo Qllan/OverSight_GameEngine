@@ -147,7 +147,22 @@ impl VMExecutor {
             .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
-    /// Reset VM state (keeps the loaded program)
+    /// Persistent data (persistent.* variables and seen places) as JSON
+    fn save_persistent(&self) -> PyResult<String> {
+        serde_json::to_string(self.machine.persistent())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Replace the persistent data with JSON from save_persistent()
+    fn load_persistent(&mut self, json_data: &str) -> PyResult<()> {
+        let data = serde_json::from_str(json_data).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Invalid persistent data: {}", e))
+        })?;
+        self.machine.set_persistent(data);
+        Ok(())
+    }
+
+    /// Reset VM state (keeps the loaded program and persistent data)
     fn reset(&mut self) {
         self.machine.reset();
     }

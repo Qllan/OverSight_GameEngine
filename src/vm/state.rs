@@ -38,6 +38,9 @@ pub struct PyVMState {
     /// Frames left in a Wait (0 = not waiting)
     #[pyo3(get)]
     pub waiting_frames: u32,
+    /// The current yield was reached before, in any playthrough (for skip)
+    #[pyo3(get)]
+    pub seen_before: bool,
 }
 
 #[pymethods]
@@ -57,6 +60,7 @@ impl PyVMState {
             current_graph_id: String::new(),
             call_depth: 0,
             waiting_frames: 0,
+            seen_before: false,
         }
     }
 
@@ -112,6 +116,7 @@ impl PyVMState {
             current_graph_id: state.scene.clone(),
             call_depth: state.call_stack.len(),
             waiting_frames: state.wait_frames,
+            seen_before: state.yield_seen,
         }
     }
 }

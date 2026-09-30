@@ -25,6 +25,7 @@ def state_to_dict(state: Optional["_core.PyVMState"]) -> Optional[Dict[str, Any]
         "current_graph_id": state.current_graph_id,
         "call_depth": state.call_depth,
         "waiting_frames": state.waiting_frames,
+        "seen_before": state.seen_before,
     }
 
 

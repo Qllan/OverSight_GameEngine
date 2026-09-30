@@ -312,3 +312,32 @@ def test_project_errors_name_the_scene():
     with pytest.raises(ValueError, match="UNKNOWN_SCENE in 'a'"):
         e.load_project_from_dict(project)
     assert any("(a/go)" in err for err in e.get_last_errors())
+
+
+def test_persistent_data_is_separate_from_saves(tmp_path):
+    graph = {
+        "graph_id": "g", "version": "1.0",
+        "nodes": [{"id": "s", "type": "entry"},
+                  {"id": "unlock", "type": "SetVariable",
+                   "parameters": {"name": "persistent.ending_a", "value": True}},
+                  {"id": "line", "type": "ShowText", "parameters": {"text": "The end."}}],
+        "edges": [{"from": "s", "to": "unlock"}, {"from": "unlock", "to": "line"}],
+    }
+    e = Engine()
+    e.init()
+    e.load_graph_from_dict(graph)
+    e.run()
+    state = e.run_until_yield()
+    assert state["seen_before"] is False
+    e.save_persistent(str(tmp_path / "persistent.json"))
+
+    # A fresh engine (next launch) restores it
+    again = Engine()
+    again.init()
+    again.load_persistent(str(tmp_path / "persistent.json"))
+    again.load_persistent(str(tmp_path / "missing.json"))  # ignored
+    again.load_graph_from_dict(graph)
+    assert again.get_variable("persistent.ending_a") is True
+    again.run()
+    assert again.run_until_yield()["seen_before"] is True
+    assert "persistent.ending_a" not in again.save_state()["state"]["variables"]

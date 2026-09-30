@@ -51,6 +51,22 @@ pub struct ExecState {
     pub current_node_id: Option<String>,
     /// Most recent CALL_BLOCK: (block type, arguments object)
     pub last_block: Option<(String, JsonValue)>,
+    /// Whether the current yield had been reached before (any playthrough)
+    #[serde(default)]
+    pub yield_seen: bool,
+}
+
+/// Prefix of variables kept across playthroughs (not in saves)
+pub const PERSISTENT_PREFIX: &str = "persistent.";
+
+/// Data shared by all playthroughs: `persistent.*` variables and the set
+/// of places the player has already seen. Saves and rollback leave it alone.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PersistentData {
+    /// Keyed by name without the "persistent." prefix
+    pub variables: BTreeMap<String, JsonValue>,
+    /// "scene:node" of every yield the player has reached
+    pub seen: std::collections::BTreeSet<String>,
 }
 
 /// Version of the save-state format
@@ -126,6 +142,7 @@ fn resolve_anchor(program: &CompiledProgram, anchor: &Anchor) -> Option<usize> {
 pub struct Machine {
     project: Option<CompiledProject>,
     pub(crate) exec: ExecState,
+    persistent: PersistentData,
     log: Vec<String>,
     events: Vec<Event>,
 }
@@ -157,12 +174,8 @@ impl Machine {
     pub fn start(&mut self) -> Result<(), String> {
         let project = self.project.as_ref().ok_or("No program loaded")?;
         let start = project.start.clone();
-        for (name, value) in &project.variables {
-            self.exec
-                .variables
-                .entry(name.clone())
-                .or_insert_with(|| value.clone());
-        }
+        let defaults = project.variables.clone();
+        self.apply_defaults(&defaults);
         self.exec.pc = 0;
         self.exec.stack.clear();
         self.exec.call_stack.clear();
@@ -174,6 +187,15 @@ impl Machine {
         self.log_event("VM started");
         self.enter_scene(start);
         Ok(())
+    }
+
+    /// Give variables that are not set yet their initial values
+    fn apply_defaults(&mut self, defaults: &BTreeMap<String, JsonValue>) {
+        for (name, value) in defaults {
+            if self.get_variable(name).is_none() {
+                self.set_variable(name, value.clone());
+            }
+        }
     }
 
     /// Nothing to execute until the player acts, a WAIT runs out, or a restart
@@ -222,6 +244,12 @@ impl Machine {
                 return Err(self.fail(format!("Jump target {} out of range", target)))
             }
             Flow::Yield(reason) => {
+                let place = format!(
+                    "{}:{}",
+                    self.exec.scene,
+                    self.exec.current_node_id.as_deref().unwrap_or_default()
+                );
+                self.exec.yield_seen = !self.persistent.seen.insert(place);
                 self.log_event(&format!("Yielded: {}", reason));
                 self.events.push(Event::YieldRequest { reason: reason.clone() });
                 self.exec.yield_reason = Some(reason);
@@ -336,7 +364,7 @@ impl Machine {
         self.events.push(Event::GraphEnd { graph_id: self.exec.scene.clone() });
     }
 
-    /// Clear execution state (keeps the loaded project)
+    /// Clear execution state (keeps the loaded project and persistent data)
     pub fn reset(&mut self) {
         self.exec = ExecState::default();
         self.log.clear();
@@ -384,7 +412,7 @@ impl Machine {
                 save.project_id, project.project_id
             ));
         }
-        let mut state = if save.fingerprint == project.fingerprint() {
+        let state = if save.fingerprint == project.fingerprint() {
             save.state
         } else {
             Self::migrate(project, save)?
@@ -411,11 +439,9 @@ impl Machine {
         }
 
         // Variables added to the project since the save get their initial values
-        for (name, value) in &project.variables {
-            state.variables.entry(name.clone()).or_insert_with(|| value.clone());
-        }
-
+        let defaults = project.variables.clone();
         self.exec = state;
+        self.apply_defaults(&defaults);
         self.log_event("State loaded");
         Ok(())
     }
@@ -473,12 +499,29 @@ impl Machine {
         &self.exec
     }
 
+    /// Read a variable; `persistent.*` names read the persistent data
     pub fn get_variable(&self, name: &str) -> Option<&JsonValue> {
-        self.exec.variables.get(name)
+        match name.strip_prefix(PERSISTENT_PREFIX) {
+            Some(key) => self.persistent.variables.get(key),
+            None => self.exec.variables.get(name),
+        }
     }
 
+    /// Set a variable; `persistent.*` names write the persistent data
     pub fn set_variable(&mut self, name: &str, value: JsonValue) {
-        self.exec.variables.insert(name.to_string(), value);
+        match name.strip_prefix(PERSISTENT_PREFIX) {
+            Some(key) => self.persistent.variables.insert(key.to_string(), value),
+            None => self.exec.variables.insert(name.to_string(), value),
+        };
+    }
+
+    pub fn persistent(&self) -> &PersistentData {
+        &self.persistent
+    }
+
+    /// Replace the persistent data (e.g. loaded from disk)
+    pub fn set_persistent(&mut self, data: PersistentData) {
+        self.persistent = data;
     }
 
     pub fn log(&self) -> &[String] {
@@ -504,15 +547,13 @@ impl Machine {
                     .pop()
                     .ok_or_else(|| format!("VAR_SET: Stack underflow for variable '{}'", name))?;
                 self.events.push(Event::VariableChanged { name: name.clone(), value: value.clone() });
-                self.exec.variables.insert(name.clone(), value);
+                self.set_variable(name, value);
                 Ok(Flow::Next)
             }
 
             Opcode::VAR_GET { name } => {
                 let value = self
-                    .exec
-                    .variables
-                    .get(name)
+                    .get_variable(name)
                     .cloned()
                     .ok_or_else(|| format!("VAR_GET: Undefined variable '{}'", name))?;
                 self.exec.stack.push(value);
@@ -1134,6 +1175,40 @@ mod tests {
         restored.run_until_blocked(1000).unwrap();
         assert_eq!(restored.exec.last_block.as_ref().unwrap().1["text"], "Back with 6 gold.");
         assert_eq!(restored.get_variable("reputation"), Some(&json!(1)));
+    }
+
+    #[test]
+    fn persistent_data_outlives_playthroughs_and_saves() {
+        let graph = r#"{"graph_id":"g","version":"1.0",
+            "nodes":[{"id":"s","type":"entry"},
+                     {"id":"line","type":"ShowText","parameters":{"text":"Endings seen: {persistent.endings}"}},
+                     {"id":"count","type":"SetVariable","parameters":{"name":"persistent.endings","expression":"persistent.endings + 1"}},
+                     {"id":"e","type":"End"}],
+            "edges":[{"from":"s","to":"line"},{"from":"line","to":"count"},{"from":"count","to":"e"}]}"#;
+        let mut m = machine_for(graph);
+        m.stop();
+        m.set_variable("persistent.endings", json!(0));
+
+        let mut texts = Vec::new();
+        let mut seen = Vec::new();
+        let mut first_save = None;
+        for _ in 0..2 {
+            m.start().unwrap();
+            m.run_until_blocked(100).unwrap();
+            texts.push(m.exec.last_block.as_ref().unwrap().1["text"].clone());
+            seen.push(m.exec.yield_seen);
+            first_save.get_or_insert(m.save_state().unwrap());
+            m.resume(None).unwrap();
+            m.run_until_blocked(100).unwrap();
+        }
+        assert_eq!(texts, vec![json!("Endings seen: 0"), json!("Endings seen: 1")]);
+        assert_eq!(seen, vec![false, true], "second visit is marked as seen");
+
+        // Loading an old save does not roll persistent data back
+        m.load_state(first_save.unwrap()).unwrap();
+        assert_eq!(m.get_variable("persistent.endings"), Some(&json!(2)));
+        assert!(m.persistent().seen.contains("g:line"));
+        assert!(!m.exec.variables.contains_key("persistent.endings"));
     }
 
     #[test]

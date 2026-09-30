@@ -319,6 +319,35 @@ class Engine:
         with open(path, "r", encoding="utf-8") as f:
             self.load_state(json.load(f))
 
+    def persistent_state(self) -> Dict[str, Any]:
+        """
+        Data shared by all playthroughs: ``persistent.*`` variables and the
+        places already seen (for skipping read text). Not part of saves.
+        """
+        self._require_init()
+        data: Dict[str, Any] = json.loads(self._vm.save_persistent())
+        return data
+
+    def load_persistent_state(self, data: Dict[str, Any]) -> None:
+        """Replace the persistent data with a dict from persistent_state()."""
+        self._require_init()
+        self._vm.load_persistent(json.dumps(data))
+
+    def save_persistent(self, path: str) -> None:
+        """Write persistent_state() to a JSON file."""
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(self.persistent_state(), f, indent=2, ensure_ascii=False)
+
+    def load_persistent(self, path: str) -> None:
+        """Load persistent data written by save_persistent(); a missing
+        file (first launch) is ignored."""
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            return
+        self.load_persistent_state(data)
+
     def get_variable(self, name: str) -> Optional[Any]:
         """Get a variable value."""
         self._require_init()
