@@ -1,0 +1,50 @@
+{
+  "graph_id": "intro_scene",
+  "version": "1.0",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "entry",
+      "position": [20, 120],
+      "parameters": {}
+    },
+    {
+      "id": "show_title",
+      "type": "ShowText",
+      "position": [150, 120],
+      "parameters": {
+        "text": "Welcome to the Visual Novel!",
+        "speaker": "Narrator"
+      }
+    },
+    {
+      "id": "player_choice",
+      "type": "BranchChoice",
+      "position": [540, 120],
+      "parameters": {
+        "choices": ["Start Adventure", "Exit"]
+      }
+    },
+    {
+      "id": "adventure_path",
+      "type": "ShowText",
+      "position": [920, 40],
+      "parameters": {
+        "text": "Your adventure begins...",
+        "speaker": "Narrator"
+      }
+    },
+    {
+      "id": "exit_path",
+      "type": "EndScene",
+      "position": [920, 260],
+      "parameters": {}
+    }
+  ],
+  "edges": [
+    {"from": "start", "to": "show_title"},
+    {"from": "show_title", "to": "player_choice"},
+    {"from": "player_choice", "to": "adventure_path", "port": 0},
+    {"from": "player_choice", "to": "exit_path", "port": 1}
+  ]
+}

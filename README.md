@@ -25,52 +25,38 @@
 ## Project Structure
 
 ```
-/workspace
-├── Cargo.toml              # Rust workspace configuration
+.
+├── Cargo.toml              # Rust crate (cdylib + rlib)
 ├── pyproject.toml          # Python project + maturin config
-├── requirements.txt        # Python dependencies
-├── README.md               # Documentation
+├── requirements.txt        # Dev dependencies
 ├── src/
-│   ├── lib.rs              # PyO3 module entry point
+│   ├── lib.rs              # PyO3 module entry point (vn_engine._core)
 │   ├── core/
-│   │   ├── mod.rs          # Core module exports
-│   │   ├── event_bus.rs    # EventBus implementation
-│   │   ├── plugin.rs       # Plugin trait & registry
-│   │   ├── asset_manager.rs# Asset loading stubs
-│   │   └── tick_loop.rs    # Fixed 60 FPS loop
+│   │   ├── event_bus.rs    # Event enum + EventBus (Python callbacks)
+│   │   ├── plugin_registry.rs # Block/plugin registry
+│   │   ├── asset_manager.rs# Asset registration stubs
+│   │   └── tick_loop.rs    # Fixed-timestep loop (60 FPS default)
 │   ├── compiler/
-│   │   ├── mod.rs          # Compiler exports
 │   │   ├── graph_parser.rs # JSON → Graph AST
-│   │   ├── validator.rs    # DAG validation
+│   │   ├── validator.rs    # Structural validation
 │   │   ├── topology.rs     # Topological sort
-│   │   └── codegen.rs      # AST → Opcodes
+│   │   ├── codegen.rs      # AST → Opcodes (labels + resolved jumps)
+│   │   └── graph_compiler.rs # Python-facing compiler
 │   ├── vm/
-│   │   ├── mod.rs          # VM exports
-│   │   ├── opcodes.rs      # Opcode definitions
-│   │   ├── executor.rs     # VM execution loop
-│   │   ├── stack_frame.rs  # Stack & variables
-│   │   └── state.rs        # VMState for debugging
+│   │   ├── machine.rs      # Bytecode interpreter (pure Rust)
+│   │   ├── executor.rs     # VMExecutor: Python wrapper + event dispatch
+│   │   ├── state.rs        # PyVMState snapshot
+│   │   ├── opcodes.rs      # Opcode re-export
+│   │   └── stack_frame.rs  # Call frames (reserved)
 │   └── plugins/
-│       ├── mod.rs          # Plugin system exports
-│       └── novel_plugin.rs # Example: visual novel blocks
-├── python/
-│   ├── __init__.py         # Python package init
+│       └── novel_plugin.rs # Visual novel blocks
+├── python/vn_engine/
+│   ├── __init__.py         # Package init
 │   ├── engine.py           # High-level Engine API
-│   ├── compiler.py         # GraphCompiler Python wrapper
-│   ├── vm.py               # VM executor wrapper
-│   └── editor/
-│       ├── __init__.py     # Editor package init
-│       ├── main.py         # DearPyGui editor entry
-│       ├── canvas.py       # Node canvas implementation
-│       ├── nodes.py        # Block node definitions
-│       └── serializer.py   # JSON export/import
-├── tests/
-│   ├── test_compiler.py    # Compiler tests (valid/broken graphs)
-│   ├── test_vm.py          # VM tests (determinism, yield, errors)
-│   └── fixtures/
-│       ├── valid_graph.json
-│       └── broken_graph.json
-├── assets/                 # Game assets (stubs for Phase 1)
+│   ├── compiler.py         # GraphCompiler wrapper
+│   ├── vm.py               # VMExecutor wrapper
+│   └── editor/main.py      # DearPyGui node editor
+├── tests/                  # pytest suite + fixtures
 └── examples/
     └── simple_novel.json   # Example visual novel graph
 ```
@@ -80,37 +66,27 @@
 ### Rust Core Interfaces
 
 #### `Event`
+Delivered to `EventBus` subscribers as `(payload_json)`; wildcard (`"*"`)
+subscribers receive `(event_type, payload_json)`.
 ```rust
 pub enum Event {
     GraphStart { graph_id: String },
     GraphEnd { graph_id: String },
     NodeEnter { node_id: String, node_type: String },
-    NodeExit { node_id: String },
+    BlockCall { node_id: Option<String>, block_type: String, args: JsonValue },
     VariableChanged { name: String, value: JsonValue },
     YieldRequest { reason: String },
     Error { message: String, node_id: Option<String> },
 }
 ```
 
-#### `Plugin` Trait
-```rust
-pub trait Plugin: Send + Sync {
-    fn name(&self) -> &str;
-    fn version(&self) -> &str;
-    fn register_blocks(&self, registry: &mut BlockRegistry);
-    fn on_event(&self, event: &Event, ctx: &mut PluginContext);
-    fn on_save(&self, state: &mut serde_json::Value) {}
-    fn on_load(&self, state: &serde_json::Value) {}
-}
-```
-
 #### `Opcode`
 ```rust
-#[derive(Debug, Clone)]
 pub enum Opcode {
     PUSH(JsonValue),
     VAR_SET { name: String },
     VAR_GET { name: String },
+    EQ,
     IF_JUMP { target: usize },
     JUMP { target: usize },
     YIELD { wait_type: String },
@@ -120,51 +96,65 @@ pub enum Opcode {
 }
 ```
 
-#### `VMState`
-```rust
-pub struct VMState {
-    pub pc: usize,                    // Program counter
-    pub stack: Vec<JsonValue>,        // Operand stack
-    pub variables: HashMap<String, JsonValue>,
-    pub call_stack: Vec<CallFrame>,
-    pub current_node_id: Option<String>,
-    pub is_yielding: bool,
-    pub yield_reason: Option<String>,
-}
-```
-
 ### Python API Interfaces
 
 #### `Engine`
 ```python
 class Engine:
     def init(self) -> None
-    def register_plugin(self, plugin_path: str) -> None
-    def load_graph(self, json_path: str) -> GraphID
-    def run_graph(self, graph_id: GraphID) -> None
-    def step(self) -> VMState | None  # Single VM step, returns state or None if yielded
+    def register_plugin(self, plugin_name: str) -> None
+    def subscribe(self, event_type: str, callback) -> None   # payload dict; "*" for all
+    def load_graph(self, json_path: str) -> str               # returns graph_id
+    def load_graph_from_dict(self, graph: dict) -> str
+    def run(self) -> None
+    def step(self) -> dict | None            # one opcode; None once ended
+    def run_until_yield(self) -> dict | None # until the player is needed; None once ended
+    def resume(self, choice: int | None = None) -> dict | None
     def stop(self) -> None
+```
+
+A scene is played like this:
+```python
+engine.run()
+state = engine.run_until_yield()
+while state is not None:
+    if state["yield_reason"] == "choice":
+        choices = state["last_block_args"]["choices"]
+        state = engine.resume(ask_player(choices))
+    else:  # "input": ShowText is waiting for a click
+        show(state["last_block_args"])       # {"text": ..., "speaker": ...}
+        state = engine.resume()
+    state = engine.run_until_yield()
 ```
 
 #### `GraphCompiler`
 ```python
 class GraphCompiler:
-    def parse(self, json_data: dict) -> GraphAST
-    def validate(self, ast: GraphAST) -> list[ValidationError]
-    def compile(self, ast: GraphAST) -> list[Opcode]
+    def parse(self, json_data: dict) -> dict
+    def validate(self, json_data: dict) -> list[str]
+    def validate_detailed(self, json_data: dict) -> list[dict]  # error_type, message, node_id, hint
+    def compile(self, json_data: dict) -> dict                  # opcodes + disassembly
 ```
 
-#### `BlockNode` (Editor)
-```python
-@dataclass
-class BlockNode:
-    id: str
-    node_type: str
-    position: tuple[int, int]
-    inputs: list[Port]
-    outputs: list[Port]
-    parameters: dict[str, Any]
-```
+## Compilation
+
+Each node becomes a labelled block of opcodes. Nodes are emitted depth-first
+from the start node (the `entry` node, or the only node without inputs), so a
+node's first successor normally follows it directly; any other transition is
+a `JUMP`, resolved to the target node's first opcode in a second pass. Nodes
+not reachable from the start are skipped.
+
+| Node | Bytecode |
+|------|----------|
+| `entry` | *(nothing)*, then flow to successor |
+| `ShowText` | `PUSH text`, `PUSH speaker`, `CALL_BLOCK ShowText [text, speaker]`, `YIELD input` |
+| `BranchChoice` | `PUSH choices`, `CALL_BLOCK`, `YIELD choice`, `VAR_SET __branch_result`, then per output *i*: `VAR_GET`, `PUSH i`, `EQ`, `IF_JUMP →successor i`; `END` if nothing matched |
+| `SetVariable` | `PUSH value`, `VAR_SET name` |
+| `EndScene` / `End` | `END` |
+| other blocks | `PUSH` each parameter (sorted by name), `CALL_BLOCK type [names]` |
+
+A node with no outputs ends the scene. `BranchChoice` outputs are ordered by the
+edge `port`; edges without a port keep their order in the file.
 
 ## Opcodes Specification
 
@@ -172,13 +162,17 @@ class BlockNode:
 |--------|-------------|--------------|
 | `PUSH(value)` | Push value onto stack | → +1 |
 | `VAR_SET{name}` | Pop and store in variable | -1 → |
-| `VAR_GET{name}` | Push variable value | → +1 |
-| `IF_JUMP{target}` | Pop, jump if truthy | -1 → |
+| `VAR_GET{name}` | Push variable value (error if undefined) | → +1 |
+| `EQ` | Pop b, pop a, push `a == b` (numbers compared by value) | -2 → +1 |
+| `IF_JUMP{target}` | Pop, jump if truthy (non-zero, non-empty, `true`) | -1 → |
 | `JUMP{target}` | Unconditional jump | → |
-| `YIELD{wait_type}` | Pause execution, return control | → |
-| `WAIT{frames}` | Wait N frames (busy wait) | → |
-| `CALL_BLOCK{type, args}` | Execute registered block | -n → |
+| `YIELD{wait_type}` | Pause until `resume()`; a `choice` resume pushes the choice | → (+1 for `choice`) |
+| `WAIT{frames}` | Stay on this opcode for `frames` steps | → |
+| `CALL_BLOCK{type, args}` | Pop `args` (listed in push order) and emit `BlockCall` | -n → |
 | `END` | Terminate execution | → |
+
+Runtime errors (stack underflow, undefined variable) stop the VM, emit an
+`Error` event and raise `RuntimeError` in Python.
 
 ## Example Valid Graph JSON
 
@@ -190,13 +184,13 @@ class BlockNode:
     {
       "id": "start",
       "type": "entry",
-      "position": [100, 100],
+      "position": [20, 120],
       "parameters": {}
     },
     {
       "id": "show_title",
       "type": "ShowText",
-      "position": [300, 100],
+      "position": [150, 120],
       "parameters": {
         "text": "Welcome to the Visual Novel!",
         "speaker": "Narrator"
@@ -205,7 +199,7 @@ class BlockNode:
     {
       "id": "player_choice",
       "type": "BranchChoice",
-      "position": [500, 100],
+      "position": [540, 120],
       "parameters": {
         "choices": ["Start Adventure", "Exit"]
       }
@@ -213,7 +207,7 @@ class BlockNode:
     {
       "id": "adventure_path",
       "type": "ShowText",
-      "position": [700, 50],
+      "position": [920, 40],
       "parameters": {
         "text": "Your adventure begins...",
         "speaker": "Narrator"
@@ -222,7 +216,7 @@ class BlockNode:
     {
       "id": "exit_path",
       "type": "EndScene",
-      "position": [700, 150],
+      "position": [920, 260],
       "parameters": {}
     }
   ],
@@ -240,23 +234,22 @@ class BlockNode:
 ### Prerequisites
 - Python 3.11+
 - Rust 1.70+ (via rustup)
-- maturin: `pip install maturin`
 
 ### Development Setup
 
 ```bash
-# Install maturin
-pip install maturin
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 
-# Build and install Rust extension in development mode
-cd /workspace
-maturin develop
+# Build the Rust extension and install the package in editable mode
+pip install -e .            # or: maturin develop
 
-# Run the editor
-python -m python.editor.main
+# Run the editor (optionally with a graph to open)
+python -m vn_engine.editor.main examples/simple_novel.json
 
 # Run tests
-pytest tests/
+cargo test                  # compiler + VM unit tests
+pytest                      # Python API, VM and editor model tests
 ```
 
 ### Release Build
@@ -268,27 +261,29 @@ maturin build --release
 ## Phase 1 Checklist
 
 - [x] Project structure created
-- [ ] Rust core: EventBus, PluginRegistry, AssetManager stubs
-- [ ] Rust core: FixedTickLoop (60 FPS)
-- [ ] PyO3 bindings for core components
-- [ ] Python Engine API wrapper
-- [ ] DearPyGui editor with node canvas
-- [ ] GraphCompiler: JSON → AST → validation → opcodes
-- [ ] VM: deterministic execution with YIELD support
-- [ ] pytest suite for compiler and VM
-- [ ] Example JSON graph
+- [x] Rust core: EventBus, PluginRegistry, AssetManager stubs
+- [x] Rust core: FixedTickLoop (60 FPS)
+- [x] PyO3 bindings for core components
+- [x] Python Engine API wrapper
+- [x] DearPyGui editor with node canvas
+- [x] GraphCompiler: JSON → AST → validation → opcodes
+- [x] VM: deterministic execution with YIELD support
+- [x] pytest suite for compiler and VM
+- [x] Example JSON graph
 
 ## Risks & Next Steps (Phase 2)
 
 ### Risks
-1. **Space constraints**: Rust toolchain requires ~2GB. Monitor disk space.
-2. **SDL2 dependencies**: pygame-ce may need system libraries (libsdl2-dev).
-3. **PyO3 GIL management**: Ensure proper GIL handling in callbacks.
-4. **Determinism**: Floating point in blocks could break determinism.
+1. **SDL2 dependencies**: pygame-ce may need system libraries (libsdl2-dev).
+2. **Determinism**: Floating point in blocks could break determinism.
+3. **Graphs must be acyclic**: the validator still rejects cycles, although
+   the jump-based codegen could run loops (e.g. "return to menu").
+4. **PyO3 0.20**: upgrading to the Bound API (0.21+) is pending.
 
 ### Phase 2 Planned Features
 - Actual rendering with pygame-ce (sprites, backgrounds, text boxes)
-- Save/Load system integration
+- Save/Load system integration (VM state is pc + stack + variables)
 - Audio playback (BGM, SFX, voice)
 - More block types (animations, transitions, mini-games)
+- Allow cycles in graphs
 - Export to standalone executable (PyInstaller + Rust binary)

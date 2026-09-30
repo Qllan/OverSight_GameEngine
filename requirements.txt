@@ -1,4 +1,4 @@
+maturin>=1.0,<2.0
 dearpygui>=1.0
 pytest>=7.0
 mypy>=1.0
-pydantic>=2.0

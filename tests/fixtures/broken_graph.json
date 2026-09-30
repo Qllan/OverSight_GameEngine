@@ -1,0 +1,16 @@
+{
+  "graph_id": "broken_scene",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "parameters": {}},
+    {"id": "line", "type": "ShowText", "parameters": {"text": "Loop?", "speaker": "Narrator"}},
+    {"id": "choice", "type": "BranchChoice", "parameters": {"choices": ["Again", "Stop", "Maybe"]}},
+    {"id": "stop", "type": "EndScene", "parameters": {}}
+  ],
+  "edges": [
+    {"from": "start", "to": "line"},
+    {"from": "line", "to": "choice"},
+    {"from": "choice", "to": "line", "port": 0},
+    {"from": "choice", "to": "stop", "port": 1}
+  ]
+}
