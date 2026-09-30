@@ -437,7 +437,19 @@ mod tests {
     #[test]
     fn defaults_include_novel_blocks() {
         let registry = PluginRegistry::with_defaults().unwrap();
-        assert_eq!(registry.block_types(), vec!["PlayVoice", "ShowText"]);
+        assert_eq!(
+            registry.block_types(),
+            vec![
+                "HideCharacter",
+                "PlayMusic",
+                "PlaySound",
+                "PlayVoice",
+                "ShowBackground",
+                "ShowCharacter",
+                "ShowText",
+                "StopMusic"
+            ]
+        );
         assert_eq!(
             registry.block("ShowText").unwrap().wait.as_deref(),
             Some("input")

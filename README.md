@@ -240,6 +240,42 @@ The same controls exist in code: `engine.add_breakpoint(scene, node)`,
 `engine.debug_info()`; `vn_engine.editor.debugger.DebugSession` wraps them
 for tools.
 
+## Player
+
+```bash
+python -m vn_engine.player examples/demo/project.json
+```
+
+A pygame-ce window that plays a project: backgrounds, characters, a text box
+with letter-by-letter text, choice buttons, music, sounds and voice. Click,
+Space or Enter continues (the first press completes the text); choices are
+picked with the mouse, 1–9 or arrows + Enter. The canvas keeps its resolution
+and scales to any window size.
+
+The stage is driven by `novel_plugin` blocks:
+
+| Block | Parameters |
+|-------|------------|
+| `ShowBackground` | `image` (asset:image) |
+| `ShowCharacter` | `character`, `image` (asset:image), `position` (`left`, `center`, `right`, `far_left`, `far_right`) |
+| `HideCharacter` | `character` |
+| `PlayMusic` / `StopMusic` | `music` (asset:audio), `volume`, `loop` / `fade_ms` |
+| `PlaySound` | `sound` (asset:audio), `volume` |
+| `PlayVoice` | `voice_id` (asset:audio), `volume` — one voice at a time |
+
+What is on stage is stored as the engine's *host state*
+(`engine.set_host_state()`), so saves and rollback bring back the right
+background, characters and music. Missing images are drawn as labelled
+placeholders, so a story can be played before its art exists. Optional
+settings in `project.json`:
+
+```json
+"player": {"title": "My Game", "resolution": [1280, 720], "text_speed": 45, "font": "fonts/main"}
+```
+
+`examples/demo` is a small playable project with generated art and sounds
+(`examples/demo/make_assets.py` recreates them).
+
 ## Compilation
 
 Each node becomes a labelled block of opcodes, emitted depth-first from the
@@ -377,6 +413,5 @@ maturin build --release
 2. **Determinism**: Floating point in blocks could break determinism.
 
 ### Next: quality of life
-- Rendering with pygame-ce (backgrounds, sprites, text box), audio playback
 - Save slots UI, auto-save, skip/auto modes built on `seen_before`
 - Export to a standalone executable (PyInstaller + Rust binary)

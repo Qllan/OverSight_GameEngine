@@ -1,6 +1,8 @@
 //! Novel Plugin - the standard visual novel blocks
 //!
-//! Provides blocks: ShowText (waits for the player), PlayVoice.
+//! Provides blocks: ShowText (waits for the player), PlayVoice, and the
+//! stage blocks ShowBackground, ShowCharacter, HideCharacter, PlayMusic,
+//! StopMusic, PlaySound (drawn and played by vn_engine.player).
 //! Branching (BranchChoice, If) and variables (SetVariable) are built into
 //! the compiler.
 
@@ -41,7 +43,65 @@ pub fn blocks() -> Vec<BlockDefinition> {
             ],
             None,
         ),
+        action(
+            "ShowBackground",
+            "Show Background",
+            vec![ParameterDefinition::new("image", "asset:image", None)],
+        ),
+        action(
+            "ShowCharacter",
+            "Show Character",
+            vec![
+                ParameterDefinition::new("character", "string", None),
+                ParameterDefinition::new("image", "asset:image", None),
+                // left, center, right, far_left, far_right
+                ParameterDefinition::new("position", "string", Some(json!("center"))),
+            ],
+        ),
+        action(
+            "HideCharacter",
+            "Hide Character",
+            vec![ParameterDefinition::new("character", "string", None)],
+        ),
+        action(
+            "PlayMusic",
+            "Play Music",
+            vec![
+                ParameterDefinition::new("music", "asset:audio", None),
+                ParameterDefinition::new("volume", "number", Some(json!(0.8))),
+                ParameterDefinition::new("loop", "bool", Some(json!(true))),
+            ],
+        ),
+        action(
+            "StopMusic",
+            "Stop Music",
+            vec![ParameterDefinition::new("fade_ms", "int", Some(json!(500)))],
+        ),
+        action(
+            "PlaySound",
+            "Play Sound",
+            vec![
+                ParameterDefinition::new("sound", "asset:audio", None),
+                ParameterDefinition::new("volume", "number", Some(json!(1.0))),
+            ],
+        ),
     ]
+}
+
+/// A block that does something and continues
+fn action(
+    block_type: &str,
+    display_name: &str,
+    parameters: Vec<ParameterDefinition>,
+) -> BlockDefinition {
+    BlockDefinition::new(
+        block_type,
+        display_name,
+        vec!["exec".to_string()],
+        vec!["next".to_string()],
+        parameters,
+        None,
+    )
 }
 
 /// Register the plugin and its blocks

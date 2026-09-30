@@ -1,0 +1,40 @@
+{
+  "graph_id": "park",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "position": [20, 200], "parameters": {}},
+    {"id": "bg", "type": "ShowBackground", "position": [140, 200], "parameters": {"image": "bg/park"}},
+    {"id": "music", "type": "PlayMusic", "position": [420, 200], "parameters": {"music": "audio/theme"}},
+    {"id": "mia", "type": "ShowCharacter", "position": [700, 200],
+     "parameters": {"character": "Mia", "image": "characters/mia_happy", "position": "center"}},
+    {"id": "hello", "type": "ShowText", "position": [980, 200],
+     "parameters": {"text": "Oh, hi {player}! Isn't the weather lovely today?", "speaker": "Mia"}},
+    {"id": "ask", "type": "BranchChoice", "position": [1300, 200],
+     "parameters": {"choices": ["Want to grab a cocoa?", "Sorry, I'm in a hurry."]}},
+    {"id": "chime", "type": "PlaySound", "position": [1620, 60], "parameters": {"sound": "audio/chime"}},
+    {"id": "like", "type": "SetVariable", "position": [1880, 60],
+     "parameters": {"name": "affection", "expression": "affection + 1"}},
+    {"id": "yes", "type": "ShowText", "position": [2140, 60],
+     "parameters": {"text": "I'd love to! I know a cozy place nearby.", "speaker": "Mia"}},
+    {"id": "go_cafe", "type": "JumpScene", "position": [2420, 60], "parameters": {"scene": "cafe"}},
+    {"id": "sad", "type": "ShowCharacter", "position": [1620, 360],
+     "parameters": {"character": "Mia", "image": "characters/mia_sad", "position": "center"}},
+    {"id": "bye", "type": "ShowText", "position": [1880, 360],
+     "parameters": {"text": "Oh... okay. See you around, then.", "speaker": "Mia"}},
+    {"id": "end", "type": "EndScene", "position": [2140, 360], "parameters": {}}
+  ],
+  "edges": [
+    {"from": "start", "to": "bg"},
+    {"from": "bg", "to": "music"},
+    {"from": "music", "to": "mia"},
+    {"from": "mia", "to": "hello"},
+    {"from": "hello", "to": "ask"},
+    {"from": "ask", "to": "chime", "port": 0},
+    {"from": "ask", "to": "sad", "port": 1},
+    {"from": "chime", "to": "like"},
+    {"from": "like", "to": "yes"},
+    {"from": "yes", "to": "go_cafe"},
+    {"from": "sad", "to": "bye"},
+    {"from": "bye", "to": "end"}
+  ]
+}

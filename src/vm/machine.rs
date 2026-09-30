@@ -74,6 +74,10 @@ pub struct ExecState {
     /// What the player has seen, oldest first (at most BACKLOG_LIMIT)
     #[serde(default)]
     pub backlog: Vec<BacklogEntry>,
+    /// State owned by the host (e.g. what is on screen), saved and rolled
+    /// back together with the game
+    #[serde(default)]
+    pub host: JsonValue,
 }
 
 /// Prefix of variables kept across playthroughs (not in saves)
@@ -467,6 +471,24 @@ impl Machine {
 
     pub fn backlog(&self) -> &[BacklogEntry] {
         &self.exec.backlog
+    }
+
+    pub fn host_state(&self) -> &JsonValue {
+        &self.exec.host
+    }
+
+    /// Replace the host state. Events are delivered after the VM has
+    /// stopped at a yield, so a host that updates its state in response
+    /// also updates the rollback snapshot of that yield.
+    pub fn set_host_state(&mut self, value: JsonValue) {
+        if self.exec.yield_reason.is_some() {
+            if let Some(snapshot) = self.history.back_mut() {
+                if snapshot.pc == self.exec.pc && snapshot.scene == self.exec.scene {
+                    snapshot.host = value.clone();
+                }
+            }
+        }
+        self.exec.host = value;
     }
 
     fn enter_scene(&mut self, scene: String) {
@@ -1549,6 +1571,24 @@ mod tests {
         assert!(m.rollback());
         assert_eq!(m.yield_reason(), Some("input"));
         assert_eq!(m.backlog().len(), 1);
+    }
+
+    #[test]
+    fn host_state_follows_saves_and_rollback() {
+        let mut m = machine_for(EXAMPLE);
+        m.run_until_blocked(1000).unwrap();
+        m.set_host_state(json!({"background": "bg/title"}));
+        m.resume(None).unwrap();
+        m.run_until_blocked(1000).unwrap(); // choice
+        m.set_host_state(json!({"background": "bg/forest"}));
+        let saved = m.save_state().unwrap();
+
+        assert!(m.rollback());
+        assert_eq!(m.host_state(), &json!({"background": "bg/title"}));
+
+        let mut restored = machine_for(EXAMPLE);
+        restored.load_state(saved).unwrap();
+        assert_eq!(restored.host_state(), &json!({"background": "bg/forest"}));
     }
 
     #[test]

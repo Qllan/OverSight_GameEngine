@@ -18,6 +18,7 @@ dependencies = []
 
 [project.optional-dependencies]
 editor = ["dearpygui>=1.0"]
+player = ["pygame-ce>=2.4"]
 dev = ["pytest>=7.0", "mypy>=1.0"]
 
 [tool.maturin]

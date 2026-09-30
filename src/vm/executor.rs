@@ -203,6 +203,18 @@ impl VMExecutor {
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
+    /// Host-owned state (JSON), saved and rolled back with the game
+    fn get_host_state(&self) -> String {
+        self.machine.host_state().to_string()
+    }
+
+    fn set_host_state(&mut self, json_value: &str) -> PyResult<()> {
+        let value = serde_json::from_str(json_value)
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid JSON: {}", e)))?;
+        self.machine.set_host_state(value);
+        Ok(())
+    }
+
     /// Persistent data (persistent.* variables and seen places) as JSON
     fn save_persistent(&self) -> PyResult<String> {
         serde_json::to_string(self.machine.persistent())

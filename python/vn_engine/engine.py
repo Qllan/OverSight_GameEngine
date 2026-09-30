@@ -420,6 +420,16 @@ class Engine:
         entries: List[Dict[str, Any]] = json.loads(self._vm.get_backlog())
         return entries
 
+    def host_state(self) -> Any:
+        """State owned by the host (e.g. what is on screen). It is saved
+        and rolled back together with the game."""
+        self._require_init()
+        return json.loads(self._vm.get_host_state())
+
+    def set_host_state(self, value: Any) -> None:
+        self._require_init()
+        self._vm.set_host_state(json.dumps(value))
+
     def persistent_state(self) -> Dict[str, Any]:
         """
         Data shared by all playthroughs: ``persistent.*`` variables and the
