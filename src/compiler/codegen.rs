@@ -56,7 +56,7 @@ impl fmt::Display for Opcode {
 
 /// Compiled program with opcodes and metadata
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct CompiledProgram {
     #[pyo3(get)]
     pub graph_id: String,

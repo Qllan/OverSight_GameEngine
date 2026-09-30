@@ -15,7 +15,7 @@ pub fn topological_sort(graph: &AstGraph) -> Result<Vec<String>, String> {
         in_degree.insert(node_id.clone(), 0);
     }
 
-    for (_, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         for successor in &node.successors {
             *in_degree.get_mut(successor).unwrap() += 1;
         }

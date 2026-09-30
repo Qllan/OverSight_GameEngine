@@ -13,7 +13,7 @@ use std::collections::HashSet;
 
 /// Validation error with human-readable message
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct ValidationError {
     #[pyo3(get)]
     pub error_type: String,

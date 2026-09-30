@@ -56,7 +56,7 @@ impl Event {
 /// EventBus manages pub/sub communication between engine components
 #[pyclass]
 pub struct EventBus {
-    subscribers: HashMap<String, Vec<PyObject>>,
+    subscribers: HashMap<String, Vec<Py<PyAny>>>,
 }
 
 #[pymethods]
@@ -70,7 +70,7 @@ impl EventBus {
 
     /// Subscribe a callable to an event type. Use "*" to receive every event;
     /// wildcard subscribers are called with (event_type, payload).
-    pub fn subscribe(&mut self, event_type: &str, callback: PyObject) {
+    pub fn subscribe(&mut self, event_type: &str, callback: Py<PyAny>) {
         self.subscribers
             .entry(event_type.to_string())
             .or_default()
@@ -80,14 +80,14 @@ impl EventBus {
 
     /// Publish an event to all subscribers. The payload is passed as-is
     /// (the engine always sends a JSON string).
-    pub fn publish(slf: &PyCell<Self>, event_type: &str, payload: &str) -> PyResult<()> {
+    pub fn publish(slf: &Bound<'_, Self>, event_type: &str, payload: &str) -> PyResult<()> {
         log::debug!("Event [{}]: {}", event_type, payload);
         let py = slf.py();
         // Snapshot the callbacks and release the borrow, so a callback may
         // subscribe or publish without a borrow conflict.
-        let (direct, wildcard): (Vec<PyObject>, Vec<PyObject>) = {
+        let (direct, wildcard): (Vec<Py<PyAny>>, Vec<Py<PyAny>>) = {
             let bus = slf.borrow();
-            let get = |key: &str| -> Vec<PyObject> {
+            let get = |key: &str| -> Vec<Py<PyAny>> {
                 bus.subscribers
                     .get(key)
                     .map(|v| v.iter().map(|c| c.clone_ref(py)).collect())
@@ -117,7 +117,7 @@ impl EventBus {
 
 impl EventBus {
     /// Publish a typed engine event
-    pub fn emit(slf: &PyCell<Self>, event: &Event) -> PyResult<()> {
+    pub fn emit(slf: &Bound<'_, Self>, event: &Event) -> PyResult<()> {
         Self::publish(slf, event.event_type(), &event.payload().to_string())
     }
 }

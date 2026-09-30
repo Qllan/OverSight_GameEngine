@@ -43,12 +43,12 @@ impl VMExecutor {
     }
 
     /// Start execution from the beginning. Variables are kept.
-    fn start(slf: &PyCell<Self>) -> PyResult<()> {
+    fn start(slf: &Bound<'_, Self>) -> PyResult<()> {
         Self::with_machine(slf, |m| m.start())
     }
 
     /// Execute one step. Returns the VM state, or None once the VM has stopped.
-    fn step(slf: &PyCell<Self>) -> PyResult<Option<PyVMState>> {
+    fn step(slf: &Bound<'_, Self>) -> PyResult<Option<PyVMState>> {
         Self::with_machine(slf, |m| m.step())?;
         Ok(Self::state_if_running(slf))
     }
@@ -57,7 +57,7 @@ impl VMExecutor {
     /// Does not execute anything by itself; call step()/run_until_yield().
     /// Returns None if the VM was not yielding.
     #[pyo3(signature = (choice = None))]
-    fn resume(slf: &PyCell<Self>, choice: Option<&PyAny>) -> PyResult<Option<PyVMState>> {
+    fn resume(slf: &Bound<'_, Self>, choice: Option<&Bound<'_, PyAny>>) -> PyResult<Option<PyVMState>> {
         let value = choice.map(py_to_json).transpose()?;
         let resumed = Self::with_machine(slf, |m| m.resume(value))?;
         Ok(if resumed { Some(slf.borrow().get_state()) } else { None })
@@ -65,13 +65,13 @@ impl VMExecutor {
 
     /// Step until the VM yields or stops. Returns the state, or None if stopped.
     #[pyo3(signature = (max_steps = DEFAULT_MAX_STEPS))]
-    fn run_until_yield(slf: &PyCell<Self>, max_steps: usize) -> PyResult<Option<PyVMState>> {
+    fn run_until_yield(slf: &Bound<'_, Self>, max_steps: usize) -> PyResult<Option<PyVMState>> {
         Self::with_machine(slf, |m| m.run_until_blocked(max_steps))?;
         Ok(Self::state_if_running(slf))
     }
 
     /// Stop execution
-    fn stop(slf: &PyCell<Self>) -> PyResult<()> {
+    fn stop(slf: &Bound<'_, Self>) -> PyResult<()> {
         Self::with_machine(slf, |m| {
             m.stop();
             Ok(())
@@ -136,7 +136,7 @@ impl VMExecutor {
     /// Run `f` on the machine, then publish the queued events with the
     /// executor borrow released.
     fn with_machine<T>(
-        slf: &PyCell<Self>,
+        slf: &Bound<'_, Self>,
         f: impl FnOnce(&mut Machine) -> Result<T, String>,
     ) -> PyResult<T> {
         let py = slf.py();
@@ -148,7 +148,7 @@ impl VMExecutor {
             (result, events, bus)
         };
         if let Some(bus) = bus {
-            let bus = bus.as_ref(py);
+            let bus = bus.bind(py);
             for event in &events {
                 EventBus::emit(bus, event)?;
             }
@@ -156,14 +156,14 @@ impl VMExecutor {
         result.map_err(pyo3::exceptions::PyRuntimeError::new_err)
     }
 
-    fn state_if_running(slf: &PyCell<Self>) -> Option<PyVMState> {
+    fn state_if_running(slf: &Bound<'_, Self>) -> Option<PyVMState> {
         let this = slf.borrow();
         this.machine.is_running().then(|| this.get_state())
     }
 }
 
 /// Convert a Python value to JSON via the json module
-fn py_to_json(value: &PyAny) -> PyResult<JsonValue> {
+fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
     let py = value.py();
     let text: String = py
         .import("json")?

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 /// Python-exposed VM state for debugging
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct PyVMState {
     #[pyo3(get)]
     pub pc: usize,

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 /// Asset type enumeration
 #[derive(Debug, Clone, PartialEq)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub enum AssetType {
     Image,
     Audio,
@@ -20,7 +20,7 @@ pub enum AssetType {
 
 /// Asset metadata
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct AssetInfo {
     #[pyo3(get)]
     pub id: String,

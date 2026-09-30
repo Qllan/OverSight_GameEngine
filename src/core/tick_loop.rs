@@ -65,7 +65,7 @@ impl FixedTickLoop {
         let target = self.next_frame_time.unwrap_or(now);
 
         if wait && target > now {
-            py.allow_threads(|| std::thread::sleep(target - now));
+            py.detach(|| std::thread::sleep(target - now));
         }
 
         // Schedule the next frame from the previous target to avoid drift.

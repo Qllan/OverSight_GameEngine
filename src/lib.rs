@@ -8,9 +8,6 @@
 //! - GraphCompiler: JSON → AST → Opcodes compilation
 //! - VM: Stack-based bytecode executor
 
-// PyO3 0.20 macros trigger this lint on newer rustc; fixed upstream in 0.21+
-#![allow(non_local_definitions)]
-
 pub mod core;
 pub mod compiler;
 pub mod vm;
@@ -21,7 +18,7 @@ use pyo3::prelude::*;
 /// Python extension module, imported as `vn_engine._core`
 #[pymodule]
 #[pyo3(name = "_core")]
-fn vn_engine_core(_py: Python, m: &PyModule) -> PyResult<()> {
+fn vn_engine_core(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Core modules
     m.add_class::<core::event_bus::EventBus>()?;
     m.add_class::<core::plugin_registry::PluginRegistry>()?;

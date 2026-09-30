@@ -37,7 +37,7 @@ pub struct JsonGraph {
 
 /// AST Node with resolved connections
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct AstNode {
     #[pyo3(get)]
     pub id: String,
@@ -78,7 +78,7 @@ impl AstNode {
 
 /// AST Graph - intermediate representation
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct AstGraph {
     #[pyo3(get)]
     pub graph_id: String,

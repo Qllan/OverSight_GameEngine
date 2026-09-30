@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 /// Block definition for visual scripting
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct BlockDefinition {
     #[pyo3(get)]
     pub block_type: String,
@@ -22,7 +22,7 @@ pub struct BlockDefinition {
     pub parameters: Vec<ParameterDefinition>,
 }
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Debug, Clone)]
 pub struct ParameterDefinition {
     #[pyo3(get)]
@@ -67,7 +67,7 @@ impl BlockDefinition {
 
 /// Plugin metadata and registration info
 #[derive(Debug, Clone)]
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 pub struct PluginInfo {
     #[pyo3(get)]
     pub name: String,

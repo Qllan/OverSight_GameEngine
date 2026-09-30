@@ -26,7 +26,7 @@ impl GraphCompiler {
     /// Parse JSON string into AST graph
     fn parse(&self, json_str: &str) -> PyResult<AstGraph> {
         parse_json_graph(json_str)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+            .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     /// Validate an AST graph, returns list of error messages
@@ -39,7 +39,7 @@ impl GraphCompiler {
     /// Compile AST graph to bytecode
     fn compile(&self, graph: &AstGraph) -> PyResult<CompiledProgram> {
         compile_graph(graph)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)
     }
 
     /// Full compile pipeline: JSON → AST → Validate → Bytecode
