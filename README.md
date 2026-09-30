@@ -26,170 +26,222 @@
 
 ```
 .
-├── Cargo.toml              # Rust crate (cdylib + rlib)
-├── pyproject.toml          # Python project + maturin config
-├── requirements.txt        # Dev dependencies
+├── Cargo.toml / pyproject.toml / requirements.txt
 ├── src/
-│   ├── lib.rs              # PyO3 module entry point (vn_engine._core)
+│   ├── lib.rs                  # PyO3 module entry point (vn_engine._core)
+│   ├── pyjson.rs               # Python <-> JSON conversions
 │   ├── core/
-│   │   ├── event_bus.rs    # Event enum + EventBus (Python callbacks)
-│   │   ├── plugin_registry.rs # Block/plugin registry
-│   │   ├── asset_manager.rs# Asset registration stubs
-│   │   └── tick_loop.rs    # Fixed-timestep loop (60 FPS default)
+│   │   ├── event_bus.rs        # Event enum + EventBus (Python callbacks)
+│   │   ├── plugin_registry.rs  # Block definitions (typed parameters)
+│   │   ├── asset_manager.rs    # Asset registry, folder scan
+│   │   └── tick_loop.rs        # Fixed-timestep loop (60 FPS default)
 │   ├── compiler/
-│   │   ├── graph_parser.rs # JSON → Graph AST
-│   │   ├── validator.rs    # Structural validation
-│   │   ├── codegen.rs      # AST → Opcodes (labels + resolved jumps)
-│   │   └── graph_compiler.rs # Python-facing compiler
+│   │   ├── expr.rs             # Expression language and {text} templates
+│   │   ├── graph_parser.rs     # JSON → Graph AST
+│   │   ├── validator.rs        # Graph checks (blocks, params, loops, assets)
+│   │   ├── codegen.rs          # AST → opcodes
+│   │   ├── project.rs          # Multi-scene projects
+│   │   └── graph_compiler.rs   # Python-facing compiler
 │   ├── vm/
-│   │   ├── machine.rs      # Bytecode interpreter (pure Rust)
-│   │   ├── executor.rs     # VMExecutor: Python wrapper + event dispatch
-│   │   ├── state.rs        # PyVMState snapshot
-│   │   ├── opcodes.rs      # Opcode re-export
-│   │   └── stack_frame.rs  # Call frames (reserved)
+│   │   ├── machine.rs          # Interpreter: scenes, saves, rollback
+│   │   ├── values.rs           # Arithmetic/comparison on JSON values
+│   │   ├── executor.rs         # VMExecutor: Python wrapper + events
+│   │   └── state.rs            # PyVMState snapshot
 │   └── plugins/
-│       └── novel_plugin.rs # Visual novel blocks
+│       └── novel_plugin.rs     # ShowText, PlayVoice
 ├── python/vn_engine/
-│   ├── __init__.py         # Package init
-│   ├── _core.pyi           # Type stubs for the Rust extension
-│   ├── engine.py           # High-level Engine API
-│   ├── compiler.py         # GraphCompiler wrapper
-│   ├── vm.py               # VMExecutor wrapper
-│   └── editor/main.py      # DearPyGui node editor
-├── tests/                  # pytest suite + fixtures
+│   ├── engine.py               # High-level Engine API
+│   ├── compiler.py / vm.py     # Thin wrappers
+│   ├── _core.pyi               # Type stubs for the Rust extension
+│   └── editor/main.py          # DearPyGui node editor
+├── tests/                      # pytest suite + fixtures
 └── examples/
-    ├── simple_novel.json   # Linear scene with one choice
-    └── menu_loop.json      # Menu the player can return to
+    ├── simple_novel.json       # Linear scene with one choice
+    ├── menu_loop.json          # Menu the player can return to
+    ├── affection.json          # Variables, If, {placeholders}
+    └── project/                # Three scenes with CallScene / JumpScene
 ```
 
-## Key Interfaces
+## Writing Scenes
 
-### Rust Core Interfaces
+A scene is a graph: nodes plus edges `{"from", "to", "port"}`. Execution
+starts at the `entry` node and follows the edges.
 
-#### `Event`
-Delivered to `EventBus` subscribers as `(payload_json)`; wildcard (`"*"`)
-subscribers receive `(event_type, payload_json)`.
-```rust
-pub enum Event {
-    GraphStart { graph_id: String },
-    GraphEnd { graph_id: String },
-    NodeEnter { node_id: String, node_type: String },
-    BlockCall { node_id: Option<String>, block_type: String, args: JsonValue },
-    VariableChanged { name: String, value: JsonValue },
-    YieldRequest { reason: String },
-    Error { message: String, node_id: Option<String> },
+### Built-in nodes
+
+| Node | Parameters | Outputs |
+|------|------------|---------|
+| `entry` | – | 1 |
+| `ShowText`, `PlayVoice`, … | see *Blocks* | 0–1 |
+| `BranchChoice` | `choices`: list of labels | one per choice (`port` = index) |
+| `If` | `condition`: expression | 0 = true, 1 = false |
+| `SetVariable` | `name`, and `value` (constant) **or** `expression` | 1 |
+| `Wait` | `frames` (60 = one second at 60 FPS) | 1 |
+| `CallScene` | `scene`: graph_id — runs it, then continues here | 1 |
+| `JumpScene` | `scene`: graph_id — continues there | 0 |
+| `End` / `EndScene` | – ends the scene (returns to the caller, if any) | 0 |
+
+Loops are allowed ("back to the menu") as long as every loop passes through a
+node that waits for the player; otherwise validation reports `BUSY_LOOP`.
+
+### Expressions and text
+
+```text
+affection >= 5 and not met_rival
+score + 10 * bonus
+persistent.endings_seen
+```
+
+Numbers, `"strings"`, `true`/`false`/`null`, variables (dotted names allowed),
+`+ - * / %`, comparisons, `and`/`or`/`not` (also `&& || !`), parentheses.
+Integers stay integers while results are exact (`7 / 2` is `3.5`); `+` joins
+text when either side is a string. `and`/`or` short-circuit.
+
+Text parameters (`ShowText.text`, `speaker`, choice labels) may contain
+`{expression}` placeholders: `"Hi, {player}! You have {gold} gold."` —
+`{{` and `}}` are literal braces.
+
+### Blocks
+
+Every node that is not built in is a *block*: an action the host performs.
+Blocks are declared in the `PluginRegistry`; `novel_plugin` (installed by
+default) provides:
+
+| Block | Parameters | Waits for |
+|-------|------------|-----------|
+| `ShowText` | `text` (text), `speaker` (text, default `""`) | `input` |
+| `PlayVoice` | `voice_id` (asset:audio), `volume` (number, default 1.0) | – |
+
+Games add their own blocks from Python:
+
+```python
+from vn_engine import Engine, _core
+
+engine.register_block(
+    _core.BlockDefinition(
+        "Shake", "Shake Screen", ["exec"], ["next"],
+        [_core.ParameterDefinition("strength", "expression", 1)],
+        wait="animation",           # optional: pause until resume()
+    ),
+    handler=lambda args: screen.shake(args["strength"]),
+)
+```
+
+Parameter types: `string`, `text` (placeholders expanded), `expression`
+(evaluated at runtime), `number`/`float`, `int`, `bool`, `array`, `object`,
+`any`, `asset` / `asset:<image|audio|font|data>`. A parameter without a
+default is required. The validator reports unknown blocks (with a
+"did you mean" hint), missing, unknown or mistyped parameters, and too many
+outputs.
+
+## Projects
+
+A project bundles scenes, the start scene and initial variables:
+
+```json
+{
+  "project_id": "market_day",
+  "start": "town",
+  "variables": {"gold": 10, "persistent.endings": 0},
+  "scenes": ["scenes/town.json", "scenes/shop.json", "scenes/ending.json"]
 }
 ```
 
-#### `Opcode`
-```rust
-pub enum Opcode {
-    PUSH(JsonValue),
-    VAR_SET { name: String },
-    VAR_GET { name: String },
-    EQ,
-    IF_JUMP { target: usize },
-    JUMP { target: usize },
-    YIELD { wait_type: String },
-    WAIT { frames: u32 },
-    CALL_BLOCK { block_type: String, args: Vec<String> },
-    END,
-}
-```
+Scene entries are paths relative to the project file, or inline graphs.
+Links to missing scenes are reported as `UNKNOWN_SCENE`, naming the scene and
+node. A single graph can still be loaded on its own with `load_graph()`.
 
-### Python API Interfaces
+## Playing
 
-#### `Engine`
 ```python
-class Engine:
-    def init(self) -> None
-    def register_plugin(self, plugin_name: str) -> None
-    def subscribe(self, event_type: str, callback) -> None   # payload dict; "*" for all
-    def load_graph(self, json_path: str) -> str               # returns graph_id
-    def load_graph_from_dict(self, graph: dict) -> str
-    def run(self) -> None
-    def step(self) -> dict | None            # one opcode; None once ended
-    def run_until_yield(self) -> dict | None # until the player is needed; None once ended
-    def resume(self, choice: int | None = None) -> dict | None
-    def stop(self) -> None
-    def save_state(self) -> dict             # JSON-compatible snapshot
-    def load_state(self, state: dict) -> None
-    def save_game(self, path: str) -> None
-    def load_game(self, path: str) -> None
-```
-
-A scene is played like this:
-```python
+engine = Engine()
+engine.init()
+engine.load_project("examples/project/project.json")
 engine.run()
-state = engine.run_until_yield()
-while state is not None:
+
+while (state := engine.tick()) is not None:     # once per frame
     if state["yield_reason"] == "choice":
-        choices = state["last_block_args"]["choices"]
-        state = engine.resume(ask_player(choices))
-    else:  # "input": ShowText is waiting for a click
-        show(state["last_block_args"])       # {"text": ..., "speaker": ...}
-        state = engine.resume()
-    state = engine.run_until_yield()
+        state = engine.resume(ask(state["last_block_args"]["choices"]))
+    elif state["yield_reason"] == "input":       # a ShowText line
+        show(state["last_block_args"])           # {"text": ..., "speaker": ...}
+        if clicked or (skipping and state["seen_before"]):
+            engine.resume()
 ```
 
-#### Saving
+`tick()` advances one frame: it counts down `Wait` nodes and runs until the
+game needs the player. `run_until_yield()` does the same without advancing
+frames (tests, tools). Blocks without `wait` (e.g. `PlayVoice`) reach the host
+through events.
 
-`save_state()` captures the program counter, stack, variables and the pending
-yield; take it while the engine waits for the player. A save records the graph
-id and a fingerprint of the compiled bytecode, and `load_state()` raises
-`ValueError` (leaving the current state untouched) if the loaded graph differs,
-because a program counter from another version of the graph is meaningless.
+### Events
 
-#### `GraphCompiler`
-```python
-class GraphCompiler:
-    def parse(self, json_data: dict) -> dict
-    def validate(self, json_data: dict) -> list[str]
-    def validate_detailed(self, json_data: dict) -> list[dict]  # error_type, message, node_id, hint
-    def compile(self, json_data: dict) -> dict                  # opcodes + disassembly
-```
+`engine.subscribe(event_type, callback)` — the callback gets the payload dict;
+`"*"` subscribes to everything with `(event_type, payload)`.
+
+| Event | Payload |
+|-------|---------|
+| `GraphStart` / `GraphEnd` | `graph_id` (a scene is entered / left) |
+| `NodeEnter` | `graph_id`, `node_id`, `node_type` |
+| `BlockCall` | `graph_id`, `node_id`, `block_type`, `args` |
+| `VariableChanged` | `name`, `value` |
+| `YieldRequest` | `reason` |
+| `Error` | `message`, `graph_id`, `node_id` |
+
+### Saves, rollback and persistent data
+
+- `save_game(path)` / `load_game(path)` (or `save_state()` / `load_state()`
+  for dicts) store scene, position, variables, call stack and backlog.
+  Positions are also stored per node, so a save made with an older build
+  still loads after the project is edited; it is refused only if the node it
+  stopped at was removed, and the error names that node. Variables added to
+  the project since get their initial values.
+- `rollback()` returns to the previous line or choice (last 100 by default,
+  `set_rollback_limit()`); `backlog()` lists what was shown, with the picked
+  choices.
+- Variables named `persistent.*` and the "seen" markers behind
+  `state["seen_before"]` are shared by all playthroughs and not affected by
+  loading or rollback. Store them with `save_persistent(path)` /
+  `load_persistent(path)`.
+
+### Assets
+
+`engine.scan_assets("assets")` registers every image, audio, font and data file
+under the folder as `"<relative path without extension>"` (e.g.
+`"voice/mia_001"`) and from then on checks `asset` parameters when graphs are
+loaded (`UNKNOWN_ASSET`, `WRONG_ASSET_TYPE`). `engine.asset_path(id)` returns
+the file path.
 
 ## Compilation
 
-Each node becomes a labelled block of opcodes. Nodes are emitted depth-first
-from the start node (the `entry` node, or the only node without inputs), so a
-node's first successor normally follows it directly; any other transition is
-a `JUMP`, resolved to the target node's first opcode in a second pass. Nodes
-not reachable from the start are skipped.
-
-Graphs may contain loops (e.g. a menu the player returns to), as long as every
-loop passes through a node that waits for the player (`ShowText` or
-`BranchChoice`); otherwise validation fails with `BUSY_LOOP`.
-
-| Node | Bytecode |
-|------|----------|
-| `entry` | *(nothing)*, then flow to successor |
-| `ShowText` | `PUSH text`, `PUSH speaker`, `CALL_BLOCK ShowText [text, speaker]`, `YIELD input` |
-| `BranchChoice` | `PUSH choices`, `CALL_BLOCK`, `YIELD choice`, `VAR_SET __branch_result`, then per output *i*: `VAR_GET`, `PUSH i`, `EQ`, `IF_JUMP →successor i`; `END` if nothing matched |
-| `SetVariable` | `PUSH value`, `VAR_SET name` |
-| `EndScene` / `End` | `END` |
-| other blocks | `PUSH` each parameter (sorted by name), `CALL_BLOCK type [names]` |
-
-A node with no outputs ends the scene. `BranchChoice` outputs are ordered by the
-edge `port`; edges without a port keep their order in the file.
+Each node becomes a labelled block of opcodes, emitted depth-first from the
+start node so a node's first successor usually follows directly; other
+transitions are `JUMP`s resolved in a second pass. Block arguments are pushed
+in the order the block declares them, then `CALL_BLOCK`, then `YIELD` if the
+block waits. `BranchChoice` compiles to a jump table on the picked index,
+`If` to a conditional jump. Unreachable nodes are skipped.
 
 ## Opcodes Specification
 
 | Opcode | Description | Stack Effect |
 |--------|-------------|--------------|
-| `PUSH(value)` | Push value onto stack | → +1 |
-| `VAR_SET{name}` | Pop and store in variable | -1 → |
-| `VAR_GET{name}` | Push variable value (error if undefined) | → +1 |
-| `EQ` | Pop b, pop a, push `a == b` (numbers compared by value) | -2 → +1 |
-| `IF_JUMP{target}` | Pop, jump if truthy (non-zero, non-empty, `true`) | -1 → |
-| `JUMP{target}` | Unconditional jump | → |
-| `YIELD{wait_type}` | Pause until `resume()`; a `choice` resume pushes the choice | → (+1 for `choice`) |
-| `WAIT{frames}` | Stay on this opcode for `frames` steps | → |
-| `CALL_BLOCK{type, args}` | Pop `args` (listed in push order) and emit `BlockCall` | -n → |
-| `END` | Terminate execution | → |
+| `PUSH(value)` / `POP` / `DUP` | Stack manipulation | +1 / -1 / +1 |
+| `VAR_SET{name}` / `VAR_GET{name}` | Store / load a variable | -1 / +1 |
+| `ADD SUB MUL DIV MOD` | Arithmetic (`ADD` also joins text and arrays) | -2 → +1 |
+| `EQ NE LT LE GT GE` | Comparison (numbers or strings) | -2 → +1 |
+| `NEG` / `NOT` | Unary minus / logical not | -1 → +1 |
+| `CONCAT{n}` | Join n values as text | -n → +1 |
+| `MAKE_ARRAY{n}` | Build a list of n values | -n → +1 |
+| `IF_JUMP{t}` / `JUMP_IF_FALSE{t}` | Pop, jump if truthy / falsy | -1 |
+| `JUMP{t}` | Unconditional jump | |
+| `YIELD{reason}` | Wait for `resume()`; a `choice` resume pushes the pick | (+1) |
+| `WAIT{frames}` | Wait for this many `tick()`s | |
+| `CALL_BLOCK{type, args}` | Pop args, emit `BlockCall` | -n |
+| `CALL_SCENE{scene}` / `JUMP_SCENE{scene}` | Run / continue in another scene | |
+| `END` | End the scene: return to the caller, or stop | |
 
-Runtime errors (stack underflow, undefined variable) stop the VM, emit an
-`Error` event and raise `RuntimeError` in Python.
+Runtime errors (undefined variable, division by zero, bad operand types) stop
+the VM, emit an `Error` event naming the scene and node, and raise
+`RuntimeError` in Python.
 
 ## Example Valid Graph JSON
 
@@ -289,15 +341,16 @@ maturin build --release
 - [x] pytest suite for compiler and VM
 - [x] Example JSON graph
 
-## Risks & Next Steps (Phase 2)
+## Risks & Next Steps
 
 ### Risks
 1. **SDL2 dependencies**: pygame-ce may need system libraries (libsdl2-dev).
 2. **Determinism**: Floating point in blocks could break determinism.
 
-### Phase 2 Planned Features
-- Actual rendering with pygame-ce (sprites, backgrounds, text boxes)
-- Save slots UI, and migrating saves across edited graphs
-- Audio playback (BGM, SFX, voice)
-- More block types (animations, transitions, mini-games)
-- Export to standalone executable (PyInstaller + Rust binary)
+### Next: quality of life
+- Editor: block palette and parameter forms generated from the registry,
+  scene/project view, inline validation errors on nodes
+- Debugger: breakpoints and stepping per node, variable inspector
+- Rendering with pygame-ce (backgrounds, sprites, text box), audio playback
+- Save slots UI, auto-save, skip/auto modes built on `seen_before`
+- Export to a standalone executable (PyInstaller + Rust binary)
