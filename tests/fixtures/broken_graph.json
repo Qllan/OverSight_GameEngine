@@ -1,0 +1,20 @@
+{
+  "graph_id": "broken_scene",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "parameters": {}},
+    {"id": "line", "type": "ShowText", "parameters": {"text": "Choose", "speaker": "Narrator"}},
+    {"id": "choice", "type": "BranchChoice", "parameters": {"choices": ["Spin", "Stop", "Maybe"]}},
+    {"id": "spin_a", "type": "SetVariable", "parameters": {"name": "x", "value": 1}},
+    {"id": "spin_b", "type": "SetVariable", "parameters": {"name": "x", "value": 2}},
+    {"id": "stop", "type": "EndScene", "parameters": {}}
+  ],
+  "edges": [
+    {"from": "start", "to": "line"},
+    {"from": "line", "to": "choice"},
+    {"from": "choice", "to": "spin_a", "port": 0},
+    {"from": "choice", "to": "stop", "port": 1},
+    {"from": "spin_a", "to": "spin_b"},
+    {"from": "spin_b", "to": "spin_a"}
+  ]
+}

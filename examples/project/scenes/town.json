@@ -1,0 +1,19 @@
+{
+  "graph_id": "town",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "position": [20, 120], "parameters": {}},
+    {"id": "hello", "type": "ShowText", "position": [150, 120],
+     "parameters": {"text": "Market day! You have {gold} gold.", "speaker": "Narrator"}},
+    {"id": "visit", "type": "CallScene", "position": [540, 120], "parameters": {"scene": "shop"}},
+    {"id": "after", "type": "ShowText", "position": [800, 120],
+     "parameters": {"text": "You leave the shop with {gold} gold.", "speaker": "Narrator"}},
+    {"id": "go_home", "type": "JumpScene", "position": [1180, 120], "parameters": {"scene": "ending"}}
+  ],
+  "edges": [
+    {"from": "start", "to": "hello"},
+    {"from": "hello", "to": "visit"},
+    {"from": "visit", "to": "after"},
+    {"from": "after", "to": "go_home"}
+  ]
+}

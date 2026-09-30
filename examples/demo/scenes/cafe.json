@@ -1,0 +1,30 @@
+{
+  "graph_id": "cafe",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "position": [20, 200], "parameters": {}},
+    {"id": "bg", "type": "ShowBackground", "position": [140, 200], "parameters": {"image": "bg/cafe"}},
+    {"id": "mia", "type": "ShowCharacter", "position": [420, 200],
+     "parameters": {"character": "Mia", "image": "characters/mia_happy", "position": "left"}},
+    {"id": "cocoa", "type": "ShowText", "position": [700, 200],
+     "parameters": {"text": "They make the best cocoa in town here.", "speaker": "Mia"}},
+    {"id": "check", "type": "If", "position": [980, 200], "parameters": {"condition": "affection >= 1"}},
+    {"id": "glad", "type": "ShowText", "position": [1240, 100],
+     "parameters": {"text": "I'm really glad you asked me, {player}.", "speaker": "Mia"}},
+    {"id": "quiet", "type": "ShowText", "position": [1240, 320],
+     "parameters": {"text": "...", "speaker": "Mia"}},
+    {"id": "fade", "type": "StopMusic", "position": [1520, 200], "parameters": {"fade_ms": 1500}},
+    {"id": "end", "type": "EndScene", "position": [1780, 200], "parameters": {}}
+  ],
+  "edges": [
+    {"from": "start", "to": "bg"},
+    {"from": "bg", "to": "mia"},
+    {"from": "mia", "to": "cocoa"},
+    {"from": "cocoa", "to": "check"},
+    {"from": "check", "to": "glad", "port": 0},
+    {"from": "check", "to": "quiet", "port": 1},
+    {"from": "glad", "to": "fade"},
+    {"from": "quiet", "to": "fade"},
+    {"from": "fade", "to": "end"}
+  ]
+}

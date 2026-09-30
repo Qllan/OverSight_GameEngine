@@ -1,0 +1,21 @@
+{
+  "graph_id": "shop",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "position": [20, 120], "parameters": {}},
+    {"id": "offer", "type": "BranchChoice", "position": [150, 120],
+     "parameters": {"choices": ["Buy bread (4 gold)", "Just looking"]}},
+    {"id": "buy", "type": "SetVariable", "position": [540, 20],
+     "parameters": {"name": "gold", "expression": "gold - 4"}},
+    {"id": "thanks", "type": "ShowText", "position": [800, 20],
+     "parameters": {"text": "Thanks for buying!", "speaker": "Baker"}},
+    {"id": "done", "type": "End", "position": [1180, 120], "parameters": {}}
+  ],
+  "edges": [
+    {"from": "start", "to": "offer"},
+    {"from": "offer", "to": "buy", "port": 0},
+    {"from": "offer", "to": "done", "port": 1},
+    {"from": "buy", "to": "thanks"},
+    {"from": "thanks", "to": "done"}
+  ]
+}

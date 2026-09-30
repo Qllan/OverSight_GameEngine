@@ -1,78 +1,167 @@
 //! GraphCompiler - Main compiler interface
 //!
 //! High-level API for compiling JSON graphs to executable bytecode.
+//! Blocks are resolved against a PluginRegistry.
 
 use pyo3::prelude::*;
+
+use crate::compiler::codegen::{compile_graph, CompiledProgram};
 use crate::compiler::graph_parser::{parse_json_graph, AstGraph};
-use crate::compiler::validator::validate_graph;
-use crate::compiler::codegen::compile_graph;
-use crate::compiler::codegen::CompiledProgram;
+use crate::compiler::project::{compile_project_with_assets, CompiledProject, ProjectError};
+use crate::compiler::validator::validate_graph_with_assets;
+use crate::core::asset_manager::AssetManager;
+use crate::core::plugin_registry::{shared_registry, PluginRegistry};
 
 /// Main compiler class exposed to Python
 #[pyclass]
 pub struct GraphCompiler {
+    registry: Py<PluginRegistry>,
+    assets: Option<Py<AssetManager>>,
     last_errors: Vec<String>,
 }
 
 #[pymethods]
 impl GraphCompiler {
+    /// Compile against `registry`, or against the default blocks
+    /// (novel_plugin) when none is given. The registry is shared, so
+    /// blocks registered later are picked up.
     #[new]
-    fn new() -> Self {
-        GraphCompiler {
+    #[pyo3(signature = (registry = None))]
+    fn new(py: Python<'_>, registry: Option<Py<PluginRegistry>>) -> PyResult<Self> {
+        Ok(GraphCompiler {
+            registry: shared_registry(py, registry)?,
+            assets: None,
             last_errors: Vec::new(),
-        }
+        })
+    }
+
+    /// The registry blocks are resolved against
+    #[getter]
+    fn registry(&self, py: Python<'_>) -> Py<PluginRegistry> {
+        self.registry.clone_ref(py)
+    }
+
+    /// Check asset references against `assets` (None turns the check off)
+    #[pyo3(signature = (assets))]
+    fn set_assets(&mut self, assets: Option<Py<AssetManager>>) {
+        self.assets = assets;
     }
 
     /// Parse JSON string into AST graph
     fn parse(&self, json_str: &str) -> PyResult<AstGraph> {
-        parse_json_graph(json_str)
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e))
+        parse_json_graph(json_str).map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     /// Validate an AST graph, returns list of error messages
-    fn validate(&mut self, graph: &AstGraph) -> Vec<String> {
-        let errors = validate_graph(graph);
+    fn validate(&mut self, py: Python<'_>, graph: &AstGraph) -> Vec<String> {
+        let assets = self.assets.as_ref().map(|a| a.bind(py).borrow());
+        let errors =
+            validate_graph_with_assets(graph, &self.registry.bind(py).borrow(), assets.as_deref());
         self.last_errors = errors.iter().map(|e| e.message.clone()).collect();
         self.last_errors.clone()
     }
 
-    /// Compile AST graph to bytecode
-    fn compile(&self, graph: &AstGraph) -> PyResult<CompiledProgram> {
-        compile_graph(graph)
-            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))
+    /// Compile AST graph to bytecode (without validating it)
+    fn compile(&self, py: Python<'_>, graph: &AstGraph) -> PyResult<CompiledProgram> {
+        compile_graph(graph, &self.registry.bind(py).borrow())
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)
     }
 
     /// Full compile pipeline: JSON → AST → Validate → Bytecode
-    fn compile_json(&mut self, json_str: &str) -> PyResult<CompiledProgram> {
-        // Parse
+    fn compile_json(&mut self, py: Python<'_>, json_str: &str) -> PyResult<CompiledProgram> {
+        self.last_errors.clear();
+
         let ast = parse_json_graph(json_str)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Parse error: {}", e)))?;
-        
-        // Validate
-        let errors = validate_graph(&ast);
+
+        let registry = self.registry.bind(py).borrow();
+        let assets = self.assets.as_ref().map(|a| a.bind(py).borrow());
+        let errors = validate_graph_with_assets(&ast, &registry, assets.as_deref());
         if !errors.is_empty() {
-            self.last_errors = errors.iter().map(|e| {
-                format!("[{}] {}: {} (node: {:?})", 
-                    e.error_type,
-                    e.message,
-                    e.hint.as_deref().unwrap_or(""),
-                    e.node_id
-                )
-            }).collect();
-            
-            let error_msg = errors.iter()
+            self.last_errors = errors
+                .iter()
+                .map(|e| {
+                    format!(
+                        "[{}] {}: {} (node: {:?})",
+                        e.error_type,
+                        e.message,
+                        e.hint.as_deref().unwrap_or(""),
+                        e.node_id
+                    )
+                })
+                .collect();
+
+            let error_msg = errors
+                .iter()
                 .map(|e| format!("{}: {}", e.error_type, e.message))
                 .collect::<Vec<_>>()
                 .join("; ");
-            
-            return Err(pyo3::exceptions::PyValueError::new_err(
-                format!("Validation failed: {}", error_msg)
-            ));
+
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Validation failed: {}",
+                error_msg
+            )));
         }
-        
-        // Compile
-        compile_graph(&ast)
+
+        compile_graph(&ast, &registry)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Compile error: {}", e)))
+    }
+
+    /// Compile a project whose scenes are inline graphs (see
+    /// compiler::project). Scene errors name the scene they are in.
+    fn compile_project_json(
+        &mut self,
+        py: Python<'_>,
+        json_str: &str,
+    ) -> PyResult<CompiledProject> {
+        self.last_errors.clear();
+        let assets = self.assets.as_ref().map(|a| a.bind(py).borrow());
+        let result = compile_project_with_assets(
+            json_str,
+            &self.registry.bind(py).borrow(),
+            assets.as_deref(),
+        );
+        match result {
+            Ok(project) => Ok(project),
+            Err(ProjectError::Parse(message)) => Err(pyo3::exceptions::PyValueError::new_err(
+                format!("Parse error: {}", message),
+            )),
+            Err(ProjectError::Compile(message)) => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                format!("Compile error: {}", message),
+            )),
+            Err(ProjectError::Invalid(errors)) => {
+                self.last_errors = errors
+                    .iter()
+                    .map(|e| {
+                        let place = match (&e.graph_id, &e.node_id) {
+                            (Some(g), Some(n)) => format!("{}/{}", g, n),
+                            (Some(g), None) => g.clone(),
+                            (None, Some(n)) => n.clone(),
+                            (None, None) => "project".to_string(),
+                        };
+                        format!(
+                            "[{}] {}: {} ({})",
+                            e.error_type,
+                            e.message,
+                            e.hint.as_deref().unwrap_or(""),
+                            place
+                        )
+                    })
+                    .collect();
+                let summary = errors
+                    .iter()
+                    .map(|e| match &e.graph_id {
+                        Some(g) => format!("{} in '{}': {}", e.error_type, g, e.message),
+                        None => format!("{}: {}", e.error_type, e.message),
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                Err(pyo3::exceptions::PyValueError::new_err(format!(
+                    "Validation failed: {}",
+                    summary
+                )))
+            }
+        }
     }
 
     /// Get errors from last validation/compilation
@@ -88,11 +177,5 @@ impl GraphCompiler {
     /// Clear error state
     fn clear_errors(&mut self) {
         self.last_errors.clear();
-    }
-}
-
-impl Default for GraphCompiler {
-    fn default() -> Self {
-        Self::new()
     }
 }

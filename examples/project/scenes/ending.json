@@ -1,0 +1,16 @@
+{
+  "graph_id": "ending",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "position": [20, 120], "parameters": {}},
+    {"id": "rest", "type": "Wait", "position": [150, 120], "parameters": {"frames": 30}},
+    {"id": "fin", "type": "ShowText", "position": [400, 120],
+     "parameters": {"text": "The sun sets. Fin.", "speaker": "Narrator"}},
+    {"id": "end", "type": "EndScene", "position": [780, 120], "parameters": {}}
+  ],
+  "edges": [
+    {"from": "start", "to": "rest"},
+    {"from": "rest", "to": "fin"},
+    {"from": "fin", "to": "end"}
+  ]
+}
