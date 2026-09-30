@@ -56,6 +56,17 @@ pub struct ExecState {
 /// Version of the save-state format
 pub const SAVE_FORMAT: u32 = 2;
 
+/// A code position described by its node rather than its index, so it
+/// can be found again after the graph is edited: "the n-th opcode of
+/// this kind inside this node"
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Anchor {
+    pub scene: String,
+    pub node_id: String,
+    pub kind: String,
+    pub occurrence: usize,
+}
+
 /// Serializable machine state (see `Machine::save_state`)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveState {
@@ -64,6 +75,51 @@ pub struct SaveState {
     /// `CompiledProject::fingerprint()` of the project that was running
     pub fingerprint: String,
     pub state: ExecState,
+    /// Anchor of `state.pc` (None at the end of a scene)
+    pub position: Option<Anchor>,
+    /// Anchors of the CALL_SCENE opcodes the call stack returns to
+    pub return_positions: Vec<Option<Anchor>>,
+}
+
+/// Opcode identity that survives edits: operands that depend on layout
+/// or content (jump targets, pushed values) are left out
+fn op_kind(op: &Opcode) -> String {
+    match op {
+        Opcode::YIELD { wait_type } => format!("YIELD({})", wait_type),
+        Opcode::CALL_BLOCK { block_type, .. } => format!("CALL_BLOCK({})", block_type),
+        Opcode::CALL_SCENE { scene } => format!("CALL_SCENE({})", scene),
+        Opcode::JUMP_SCENE { scene } => format!("JUMP_SCENE({})", scene),
+        other => {
+            let text = other.to_string();
+            text.split('(').next().unwrap_or_default().to_string()
+        }
+    }
+}
+
+/// Opcode indices that belong to a node (nodes are emitted contiguously)
+fn node_range(program: &CompiledProgram, node_id: &str) -> Option<std::ops::Range<usize>> {
+    let start = program.node_map.iter().position(|n| n == node_id)?;
+    let len = program.node_map[start..].iter().take_while(|n| *n == node_id).count();
+    Some(start..start + len)
+}
+
+fn anchor_for(program: &CompiledProgram, scene: &str, pc: usize) -> Option<Anchor> {
+    let op = program.opcodes.get(pc)?;
+    let node_id = program.node_map.get(pc)?;
+    let range = node_range(program, node_id)?;
+    let kind = op_kind(op);
+    let occurrence = program.opcodes[range.start..pc]
+        .iter()
+        .filter(|o| op_kind(o) == kind)
+        .count();
+    Some(Anchor { scene: scene.to_string(), node_id: node_id.clone(), kind, occurrence })
+}
+
+fn resolve_anchor(program: &CompiledProgram, anchor: &Anchor) -> Option<usize> {
+    let range = node_range(program, &anchor.node_id)?;
+    range
+        .filter(|&i| op_kind(&program.opcodes[i]) == anchor.kind)
+        .nth(anchor.occurrence)
 }
 
 #[derive(Debug, Default)]
@@ -291,17 +347,29 @@ impl Machine {
     /// machine is yielding (waiting for the player).
     pub fn save_state(&self) -> Result<SaveState, String> {
         let project = self.project.as_ref().ok_or("No program loaded")?;
+        let anchor = |scene: &str, pc: usize| {
+            project.scenes.get(scene).and_then(|p| anchor_for(p, scene, pc))
+        };
         Ok(SaveState {
             format: SAVE_FORMAT,
             project_id: project.project_id.clone(),
             fingerprint: project.fingerprint(),
             state: self.exec.clone(),
+            position: anchor(&self.exec.scene, self.exec.pc),
+            return_positions: self
+                .exec
+                .call_stack
+                .iter()
+                .map(|f| anchor(&f.scene, f.return_pc.saturating_sub(1)))
+                .collect(),
         })
     }
 
-    /// Restore a state saved from the same compiled project. The state is
-    /// checked before anything is changed, so a rejected save leaves the
-    /// machine untouched.
+    /// Restore a saved state. If the project was edited since the save,
+    /// positions are moved to the same nodes in the new bytecode (see
+    /// `Anchor`); variables added since get their initial values. The
+    /// save is checked before anything changes, so a rejected save leaves
+    /// the machine untouched.
     pub fn load_state(&mut self, save: SaveState) -> Result<(), String> {
         let project = self.project.as_ref().ok_or("No program loaded")?;
         if save.format != SAVE_FORMAT {
@@ -316,14 +384,12 @@ impl Machine {
                 save.project_id, project.project_id
             ));
         }
-        if save.fingerprint != project.fingerprint() {
-            return Err(format!(
-                "Save was made with a different version of project '{}'",
-                save.project_id
-            ));
-        }
+        let mut state = if save.fingerprint == project.fingerprint() {
+            save.state
+        } else {
+            Self::migrate(project, save)?
+        };
 
-        let state = &save.state;
         let scene_len = |scene: &str| project.scenes.get(scene).map(|p| p.opcodes.len());
         let positions = std::iter::once((state.scene.as_str(), state.pc))
             .chain(state.call_stack.iter().map(|f| (f.scene.as_str(), f.return_pc)));
@@ -344,9 +410,51 @@ impl Machine {
             }
         }
 
-        self.exec = save.state;
+        // Variables added to the project since the save get their initial values
+        for (name, value) in &project.variables {
+            state.variables.entry(name.clone()).or_insert_with(|| value.clone());
+        }
+
+        self.exec = state;
         self.log_event("State loaded");
         Ok(())
+    }
+
+    /// Move a save made with an older version of the project onto the
+    /// current bytecode, using its node anchors
+    fn migrate(project: &CompiledProject, save: SaveState) -> Result<ExecState, String> {
+        let mut state = save.state;
+        if !state.stack.is_empty() {
+            return Err(
+                "Save was made in the middle of a computation and the project has changed since"
+                    .to_string(),
+            );
+        }
+        let relocate = |scene: &str, anchor: &Option<Anchor>, offset: usize| -> Result<usize, String> {
+            let program = project
+                .scenes
+                .get(scene)
+                .ok_or_else(|| format!("Scene '{}' was removed from the project", scene))?;
+            match anchor {
+                // Saved at the very end of the scene
+                None => Ok(program.opcodes.len()),
+                Some(anchor) => resolve_anchor(program, anchor).map(|pc| pc + offset).ok_or_else(|| {
+                    format!(
+                        "Node '{}' in scene '{}' was removed or changed too much to continue this save",
+                        anchor.node_id, scene
+                    )
+                }),
+            }
+        };
+
+        state.pc = relocate(&state.scene, &save.position, 0)?;
+        if save.return_positions.len() != state.call_stack.len() {
+            return Err("Save is damaged: call stack positions are missing".to_string());
+        }
+        for (frame, anchor) in state.call_stack.iter_mut().zip(&save.return_positions) {
+            frame.return_pc = relocate(&frame.scene, anchor, 1)?;
+        }
+        Ok(state)
     }
 
     pub fn is_running(&self) -> bool {
@@ -723,20 +831,66 @@ mod tests {
     }
 
     #[test]
-    fn save_from_another_program_is_rejected() {
+    fn save_from_another_project_is_rejected() {
         let mut m = machine_for(EXAMPLE);
         m.run_until_blocked(1000).unwrap();
-        let mut saved = m.save_state().unwrap();
+        let saved = m.save_state().unwrap();
 
         let mut other = machine_for(include_str!("../../examples/menu_loop.json"));
         let before = other.save_state().unwrap();
-        assert!(other.load_state(saved.clone()).unwrap_err().contains("is for project"));
-
-        // Same graph id, different bytecode
-        saved.fingerprint = "0".repeat(16);
-        let mut same_id = machine_for(EXAMPLE);
-        assert!(same_id.load_state(saved).unwrap_err().contains("different version"));
+        assert!(other.load_state(saved).unwrap_err().contains("is for project"));
         assert_eq!(other.save_state().unwrap(), before, "rejected load changed state");
+    }
+
+    /// The example at its choice, saved, then loaded into an edited version
+    fn load_into_edited(edit: impl Fn(&mut JsonValue)) -> Result<Machine, String> {
+        let mut m = machine_for(EXAMPLE);
+        m.run_until_blocked(1000).unwrap();
+        m.resume(None).unwrap();
+        m.run_until_blocked(1000).unwrap();
+        assert_eq!(m.yield_reason(), Some("choice"));
+        let saved = m.save_state().unwrap();
+
+        let mut graph: JsonValue = serde_json::from_str(EXAMPLE).unwrap();
+        edit(&mut graph);
+        let mut edited = machine_for(&graph.to_string());
+        edited.load_state(saved)?;
+        Ok(edited)
+    }
+
+    #[test]
+    fn save_survives_edits_elsewhere_in_the_graph() {
+        let mut m = load_into_edited(|g| {
+            // Reword a line and insert a node before the choice
+            g["nodes"][1]["parameters"]["text"] = json!("Welcome, {name}!");
+            g["nodes"].as_array_mut().unwrap().push(json!(
+                {"id": "flag", "type": "SetVariable", "parameters": {"name": "name", "value": "Ann"}}
+            ));
+            g["edges"][0] = json!({"from": "start", "to": "flag"});
+            g["edges"].as_array_mut().unwrap().push(json!({"from": "flag", "to": "show_title"}));
+        })
+        .unwrap();
+        assert_eq!(m.yield_reason(), Some("choice"));
+        m.resume(Some(json!(0))).unwrap();
+        m.run_until_blocked(1000).unwrap();
+        assert_eq!(m.exec.current_node_id.as_deref(), Some("adventure_path"));
+    }
+
+    #[test]
+    fn save_at_a_removed_node_is_rejected() {
+        let err = load_into_edited(|g| {
+            g["nodes"][2]["id"] = json!("renamed_choice");
+            for edge in g["edges"].as_array_mut().unwrap() {
+                for end in ["from", "to"] {
+                    if edge[end] == "player_choice" {
+                        edge[end] = json!("renamed_choice");
+                    }
+                }
+            }
+        })
+        .err()
+        .unwrap();
+        assert!(err.contains("Node 'player_choice'"), "{}", err);
     }
 
     #[test]
@@ -949,6 +1103,37 @@ mod tests {
         restored.run_until_blocked(1000).unwrap();
         assert_eq!(restored.exec.scene, "town");
         assert_eq!(restored.exec.last_block.as_ref().unwrap().1["text"], "Back with 6 gold.");
+    }
+
+    #[test]
+    fn call_stack_survives_edits_to_the_caller() {
+        let mut m = project_machine("town", &[TOWN, SHOP, ENDING]);
+        m.run_until_blocked(1000).unwrap();
+        m.resume(None).unwrap();
+        m.run_until_blocked(1000).unwrap();
+        assert_eq!(m.exec.scene, "shop");
+        let saved = m.save_state().unwrap();
+
+        // Town gets a new line before the shop visit, and a new variable
+        let mut town: JsonValue = serde_json::from_str(TOWN).unwrap();
+        town["nodes"].as_array_mut().unwrap().push(
+            json!({"id": "extra", "type": "ShowText", "parameters": {"text": "A new line."}}),
+        );
+        town["edges"][1] = json!({"from": "hello", "to": "extra"});
+        town["edges"].as_array_mut().unwrap().push(json!({"from": "extra", "to": "shop"}));
+        let json = format!(
+            r#"{{"project_id":"p","start":"town","variables":{{"gold":10,"reputation":1}},"scenes":[{},{},{}]}}"#,
+            town, SHOP, ENDING
+        );
+        let project = compile_project(&json, &PluginRegistry::with_defaults().unwrap()).unwrap();
+        let mut restored = Machine::new();
+        restored.load_project(project);
+        restored.load_state(saved).unwrap();
+
+        restored.resume(None).unwrap();
+        restored.run_until_blocked(1000).unwrap();
+        assert_eq!(restored.exec.last_block.as_ref().unwrap().1["text"], "Back with 6 gold.");
+        assert_eq!(restored.get_variable("reputation"), Some(&json!(1)));
     }
 
     #[test]

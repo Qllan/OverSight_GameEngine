@@ -184,9 +184,10 @@ def test_save_from_other_graph_is_rejected(engine):
     other.load_graph(str(Path(__file__).parents[1] / "examples" / "menu_loop.json"))
     with pytest.raises(ValueError, match="is for project"):
         other.load_state(state)
+    # A save from an older build of the same graph is moved onto the new one
     state["fingerprint"] = "0" * 16
-    with pytest.raises(ValueError, match="different version"):
-        engine.load_state(state)
+    engine.load_state(state)
+    assert engine.is_yielding
 
 
 def test_expressions_and_interpolation():

@@ -145,10 +145,15 @@ impl CompiledProgram {
         )
     }
 
-    /// Stable 64-bit FNV-1a hash of the bytecode, as hex. Identifies the
-    /// exact program a save state belongs to.
+    /// Stable 64-bit FNV-1a hash of the bytecode and the node each opcode
+    /// belongs to, as hex. Identifies the exact program a save belongs to.
     pub fn fingerprint(&self) -> String {
-        fnv_hex(self.opcodes.iter().map(|op| op.to_string()))
+        fnv_hex(
+            self.opcodes
+                .iter()
+                .zip(&self.node_map)
+                .map(|(op, node)| format!("{} [{}]", op, node)),
+        )
     }
 
     /// Get opcode count
