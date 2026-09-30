@@ -210,3 +210,55 @@ def test_expressions_and_interpolation():
         ["Missed you, Mia", "Whatever."],
         "She smiles. (affection: 3)",
     ]
+
+
+def test_custom_block_with_python_handler():
+    e = Engine()
+    e.init()
+    calls = []
+    e.register_block(
+        _core.BlockDefinition(
+            "Shake", "Shake Screen", ["exec"], ["next"],
+            [_core.ParameterDefinition("strength", "expression", 1)],
+            wait="animation",
+        ),
+        handler=calls.append,
+    )
+    e.load_graph_from_dict({
+        "graph_id": "g", "version": "1.0",
+        "nodes": [{"id": "s", "type": "entry"},
+                  {"id": "shake", "type": "Shake", "parameters": {"strength": "level * 2"}},
+                  {"id": "end", "type": "End"}],
+        "edges": [{"from": "s", "to": "shake"}, {"from": "shake", "to": "end"}],
+    })
+    e.set_variable("level", 3)
+    e.run()
+    state = e.run_until_yield()
+    assert calls == [{"strength": 6}]
+    assert state["yield_reason"] == "animation"
+    e.resume()
+    assert e.run_until_yield() is None
+
+
+def test_unknown_block_is_reported_with_suggestion():
+    e = Engine()
+    e.init()
+    with pytest.raises(ValueError, match="UNKNOWN_BLOCK"):
+        e.load_graph_from_dict({
+            "graph_id": "g", "version": "1.0",
+            "nodes": [{"id": "s", "type": "entry"},
+                      {"id": "t", "type": "Showtext", "parameters": {"text": "hi"}}],
+            "edges": [{"from": "s", "to": "t"}],
+        })
+    assert any("Did you mean 'ShowText'?" in err for err in e.get_last_errors())
+
+
+def test_parameter_definition_defaults():
+    p = _core.ParameterDefinition("volume", "number", 0.5)
+    assert p.default == 0.5 and not p.is_required()
+    assert _core.ParameterDefinition("text", "text").is_required()
+    with pytest.raises(ValueError, match="unknown type"):
+        registry = _core.PluginRegistry()
+        registry.register_plugin(_core.PluginInfo("p", "1", ""))
+        registry.register_block("p", _core.BlockDefinition(
+            "X", "X", [], ["next"], [_core.ParameterDefinition("a", "colour")]))

@@ -11,6 +11,7 @@
 
 use crate::compiler::expr::{parse_expr, parse_template, BinaryOp, Expr, TemplatePart, UnaryOp};
 use crate::compiler::graph_parser::{AstGraph, AstNode};
+use crate::core::plugin_registry::{BlockDefinition, PluginRegistry};
 use pyo3::prelude::*;
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
@@ -20,8 +21,8 @@ use std::fmt;
 pub const BRANCH_RESULT_VAR: &str = "__branch_result";
 
 /// Whether nodes of this type YIELD to wait for the player
-pub fn node_waits_for_player(node_type: &str) -> bool {
-    matches!(node_type, "ShowText" | "BranchChoice")
+pub fn node_waits_for_player(node_type: &str, registry: &PluginRegistry) -> bool {
+    node_type == "BranchChoice" || registry.block(node_type).is_some_and(|b| b.wait.is_some())
 }
 
 /// Bytecode opcodes for the VM
@@ -167,7 +168,7 @@ impl CompiledProgram {
 }
 
 /// Compile AST graph to bytecode
-pub fn compile_graph(graph: &AstGraph) -> Result<CompiledProgram, String> {
+pub fn compile_graph(graph: &AstGraph, registry: &PluginRegistry) -> Result<CompiledProgram, String> {
     let start = graph
         .start_node()
         .ok_or_else(|| "Cannot determine the start node".to_string())?;
@@ -183,7 +184,7 @@ pub fn compile_graph(graph: &AstGraph) -> Result<CompiledProgram, String> {
     for (i, node_id) in order.iter().enumerate() {
         let node = &graph.nodes[node_id];
         gen.node_start.insert(node_id.clone(), gen.opcodes.len());
-        gen.emit_node(node, order.get(i + 1))?;
+        gen.emit_node(node, order.get(i + 1), registry)?;
     }
 
     if gen.opcodes.is_empty() {
@@ -256,30 +257,17 @@ impl Codegen {
         }
     }
 
-    fn emit_node(&mut self, node: &AstNode, next_emitted: Option<&String>) -> Result<(), String> {
+    fn emit_node(
+        &mut self,
+        node: &AstNode,
+        next_emitted: Option<&String>,
+        registry: &PluginRegistry,
+    ) -> Result<(), String> {
         let id = node.id.as_str();
 
         match node.node_type.as_str() {
             "entry" => {
                 // Entry is just a marker
-                self.emit_flow(node, next_emitted);
-            }
-
-            "ShowText" => {
-                let text = node.param("text").unwrap_or(JsonValue::String(String::new()));
-                let speaker = node.param("speaker").unwrap_or(JsonValue::Null);
-                self.emit_text(&text, id)?;
-                self.emit_text(&speaker, id)?;
-                // Args are listed in push order; the VM pops them in reverse
-                self.emit(
-                    Opcode::CALL_BLOCK {
-                        block_type: "ShowText".to_string(),
-                        args: vec!["text".to_string(), "speaker".to_string()],
-                    },
-                    id,
-                );
-                // Wait for the player to read the line
-                self.emit(Opcode::YIELD { wait_type: "input".to_string() }, id);
                 self.emit_flow(node, next_emitted);
             }
 
@@ -358,23 +346,57 @@ impl Codegen {
                 self.emit(Opcode::END, id);
             }
 
-            _ => {
-                // Generic block: push parameters in name order and call it
-                let mut names: Vec<&String> = node.parameters.keys().collect();
-                names.sort();
-                for name in &names {
-                    let value = node.param(name).unwrap_or(JsonValue::Null);
-                    self.emit(Opcode::PUSH(value), id);
+            block_type => match registry.block(block_type) {
+                Some(definition) => self.emit_block(node, definition, next_emitted)?,
+                None => return Err(format!("Node '{}' has unknown block type '{}'", id, block_type)),
+            },
+        }
+        Ok(())
+    }
+
+    /// A block: push its arguments in declared order, call it, then wait
+    /// for the player if the block says so
+    fn emit_block(
+        &mut self,
+        node: &AstNode,
+        definition: &BlockDefinition,
+        next_emitted: Option<&String>,
+    ) -> Result<(), String> {
+        let id = node.id.as_str();
+        for param in &definition.parameters {
+            let value = node
+                .param(&param.name)
+                .or_else(|| param.default.clone())
+                .ok_or_else(|| {
+                    format!(
+                        "Node '{}' ({}) is missing parameter '{}'",
+                        id, definition.block_type, param.name
+                    )
+                })?;
+            match (param.param_type.as_str(), value) {
+                ("text", value) => self.emit_text(&value, id)?,
+                ("expression", JsonValue::String(source)) => {
+                    let expr = parse_expr(&source)
+                        .map_err(|e| format!("Node '{}' parameter '{}': {}", id, param.name, e))?;
+                    self.emit_expr(&expr, id);
                 }
-                self.emit(
-                    Opcode::CALL_BLOCK {
-                        block_type: node.node_type.clone(),
-                        args: names.into_iter().cloned().collect(),
-                    },
-                    id,
-                );
-                self.emit_flow(node, next_emitted);
+                (_, value) => self.emit(Opcode::PUSH(value), id),
             }
+        }
+        self.emit(
+            Opcode::CALL_BLOCK {
+                block_type: definition.block_type.clone(),
+                args: definition.parameters.iter().map(|p| p.name.clone()).collect(),
+            },
+            id,
+        );
+        if let Some(wait_type) = &definition.wait {
+            self.emit(Opcode::YIELD { wait_type: wait_type.clone() }, id);
+        }
+        if definition.outputs.is_empty() {
+            self.emit(Opcode::END, id);
+        } else {
+            self.emit_flow(node, next_emitted);
         }
         Ok(())
     }
@@ -501,7 +523,7 @@ mod tests {
     use crate::compiler::graph_parser::parse_json_graph;
 
     fn compile(json: &str) -> CompiledProgram {
-        compile_graph(&parse_json_graph(json).unwrap()).unwrap()
+        compile_graph(&parse_json_graph(json).unwrap(), &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).unwrap()
     }
 
     #[test]
@@ -569,14 +591,72 @@ mod tests {
     }
 
     #[test]
-    fn generic_block_bytecode_is_deterministic() {
+    fn block_args_follow_the_definition() {
         let json = r#"{"graph_id":"g","version":"1.0",
-            "nodes":[{"id":"p","type":"PlayVoice","parameters":{"voice_id":"v1","volume":0.5,"a":1,"z":2}}],
+            "nodes":[{"id":"p","type":"PlayVoice","parameters":{"volume":0.5,"voice_id":"v1"}}],
             "edges":[]}"#;
         let first = compile(json).get_opcodes();
         for _ in 0..10 {
             assert_eq!(compile(json).get_opcodes(), first);
         }
-        assert_eq!(first[4], "CALL_BLOCK(PlayVoice, [\"a\", \"voice_id\", \"volume\", \"z\"])");
+        assert_eq!(
+            first,
+            vec!["PUSH(\"v1\")", "PUSH(0.5)", "CALL_BLOCK(PlayVoice, [\"voice_id\", \"volume\"])", "END"]
+        );
+    }
+
+    #[test]
+    fn defaults_fill_missing_parameters() {
+        let program = compile(
+            r#"{"graph_id":"g","version":"1.0",
+                "nodes":[{"id":"p","type":"PlayVoice","parameters":{"voice_id":"v1"}}],"edges":[]}"#,
+        );
+        assert_eq!(program.get_opcodes()[1], "PUSH(1.0)");
+    }
+
+    #[test]
+    fn custom_blocks_follow_their_definition() {
+        use crate::core::plugin_registry::{BlockDefinition, ParameterDefinition, PluginInfo};
+        use serde_json::json;
+
+        let mut registry = PluginRegistry::with_defaults().unwrap();
+        registry.add_plugin(PluginInfo::new("fx", "1", "me")).unwrap();
+        registry
+            .add_block(
+                "fx",
+                BlockDefinition::new(
+                    "Shake",
+                    "Shake Screen",
+                    vec![],
+                    vec![],
+                    vec![
+                        ParameterDefinition::new("strength", "expression", Some(json!(1))),
+                        ParameterDefinition::new("caption", "text", Some(json!(""))),
+                    ],
+                    Some("animation".to_string()),
+                ),
+            )
+            .unwrap();
+        let graph = parse_json_graph(
+            r#"{"graph_id":"g","version":"1.0",
+                "nodes":[{"id":"s","type":"Shake","parameters":{"strength":"level * 2","caption":"Lv {level}"}}],
+                "edges":[]}"#,
+        )
+        .unwrap();
+        let program = compile_graph(&graph, &registry).unwrap();
+        assert_eq!(
+            program.get_opcodes(),
+            vec![
+                "VAR_GET(level)",
+                "PUSH(2)",
+                "MUL",
+                "PUSH(\"Lv \")",
+                "VAR_GET(level)",
+                "CONCAT(2)",
+                "CALL_BLOCK(Shake, [\"strength\", \"caption\"])",
+                "YIELD(animation)",
+                "END"
+            ]
+        );
     }
 }

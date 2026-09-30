@@ -9,6 +9,7 @@ use serde_json::Value as JsonValue;
 
 use crate::compiler::codegen::CompiledProgram;
 use crate::core::event_bus::EventBus;
+use crate::pyjson::py_to_json;
 use crate::vm::machine::Machine;
 use crate::vm::state::PyVMState;
 
@@ -181,15 +182,4 @@ impl VMExecutor {
         let this = slf.borrow();
         this.machine.is_running().then(|| this.get_state())
     }
-}
-
-/// Convert a Python value to JSON via the json module
-fn py_to_json(value: &Bound<'_, PyAny>) -> PyResult<JsonValue> {
-    let py = value.py();
-    let text: String = py
-        .import("json")?
-        .call_method1("dumps", (value,))?
-        .extract()?;
-    serde_json::from_str(&text)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Invalid value: {}", e)))
 }

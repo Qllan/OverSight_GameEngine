@@ -1,7 +1,7 @@
 """Graph Compiler Python wrapper"""
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from . import _core
 
@@ -13,9 +13,10 @@ class GraphCompiler:
     Provides JSON parsing, validation, and compilation to bytecode.
     """
 
-    def __init__(self) -> None:
-        self._compiler = _core.GraphCompiler()
-        self._validator = _core.GraphValidator()
+    def __init__(self, registry: Optional["_core.PluginRegistry"] = None) -> None:
+        """Blocks are resolved against `registry` (default: novel_plugin)."""
+        self._compiler = _core.GraphCompiler(registry)
+        self._validator = _core.GraphValidator(self._compiler.registry)
 
     def parse(self, json_data: Dict[str, Any]) -> Dict[str, Any]:
         """

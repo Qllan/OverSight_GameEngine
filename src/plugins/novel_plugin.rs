@@ -1,11 +1,58 @@
-//! Novel Plugin - Example plugin for visual novel functionality
+//! Novel Plugin - the standard visual novel blocks
 //!
-//! Provides blocks: ShowText, PlayVoice, BranchChoice, SetVariable
+//! Provides blocks: ShowText (waits for the player), PlayVoice.
+//! Branching (BranchChoice, If) and variables (SetVariable) are built into
+//! the compiler.
 
 use pyo3::prelude::*;
-use crate::core::plugin_registry::{BlockDefinition, ParameterDefinition, PluginInfo};
+use serde_json::json;
 
-/// Register the novel plugin with the registry
+use crate::core::plugin_registry::{BlockDefinition, ParameterDefinition, PluginInfo, PluginRegistry};
+
+pub const PLUGIN_NAME: &str = "novel_plugin";
+
+pub fn info() -> PluginInfo {
+    PluginInfo::new(PLUGIN_NAME, "1.1.0", "VN Engine Team")
+}
+
+pub fn blocks() -> Vec<BlockDefinition> {
+    vec![
+        BlockDefinition::new(
+            "ShowText",
+            "Show Text",
+            vec!["exec".to_string()],
+            vec!["next".to_string()],
+            vec![
+                ParameterDefinition::new("text", "text", None),
+                ParameterDefinition::new("speaker", "text", Some(json!(""))),
+            ],
+            Some("input".to_string()),
+        ),
+        BlockDefinition::new(
+            "PlayVoice",
+            "Play Voice",
+            vec!["exec".to_string()],
+            vec!["next".to_string()],
+            vec![
+                ParameterDefinition::new("voice_id", "string", None),
+                ParameterDefinition::new("volume", "number", Some(json!(1.0))),
+            ],
+            None,
+        ),
+    ]
+}
+
+/// Register the plugin and its blocks
+pub fn install(registry: &mut PluginRegistry) -> Result<(), String> {
+    registry.add_plugin(info())?;
+    for block in blocks() {
+        registry.add_block(PLUGIN_NAME, block)?;
+    }
+    log::info!("Registered novel_plugin blocks");
+    Ok(())
+}
+
+/// Python handle for the plugin
 #[pyclass]
 pub struct NovelPlugin;
 
@@ -18,88 +65,17 @@ impl NovelPlugin {
 
     /// Get plugin info
     fn get_info(&self) -> PluginInfo {
-        PluginInfo::new("novel_plugin", "1.0.0", "VN Engine Team")
+        info()
     }
 
     /// Register all novel plugin blocks
-    fn register_blocks(&self, registry: &mut crate::core::plugin_registry::PluginRegistry) -> PyResult<()> {
-        let plugin_info = self.get_info();
-        registry.register_plugin(&plugin_info)?;
-
-        // ShowText block
-        let show_text = BlockDefinition::new(
-            "ShowText",
-            "Show Text",
-            vec!["exec".to_string()],
-            vec!["next".to_string()],
-            vec![
-                ParameterDefinition::new("text", "string", Some("")),
-                ParameterDefinition::new("speaker", "string", Some("")),
-            ],
-        );
-        registry.register_block("novel_plugin", &show_text)?;
-
-        // PlayVoice block
-        let play_voice = BlockDefinition::new(
-            "PlayVoice",
-            "Play Voice",
-            vec!["exec".to_string()],
-            vec!["next".to_string()],
-            vec![
-                ParameterDefinition::new("voice_id", "string", Some("")),
-                ParameterDefinition::new("volume", "float", Some("1.0")),
-            ],
-        );
-        registry.register_block("novel_plugin", &play_voice)?;
-
-        // BranchChoice block
-        let branch_choice = BlockDefinition::new(
-            "BranchChoice",
-            "Branch Choice",
-            vec!["exec".to_string()],
-            vec!["choice_0".to_string(), "choice_1".to_string()],
-            vec![
-                ParameterDefinition::new("choices", "array", Some("[]")),
-            ],
-        );
-        registry.register_block("novel_plugin", &branch_choice)?;
-
-        // SetVariable block
-        let set_var = BlockDefinition::new(
-            "SetVariable",
-            "Set Variable",
-            vec!["exec".to_string()],
-            vec!["next".to_string()],
-            vec![
-                ParameterDefinition::new("name", "string", None),
-                ParameterDefinition::new("value", "any", None),
-            ],
-        );
-        registry.register_block("novel_plugin", &set_var)?;
-
-        // EndScene block
-        let end_scene = BlockDefinition::new(
-            "EndScene",
-            "End Scene",
-            vec!["exec".to_string()],
-            vec![],
-            vec![],
-        );
-        registry.register_block("novel_plugin", &end_scene)?;
-
-        log::info!("Registered novel_plugin blocks");
-        Ok(())
+    fn register_blocks(&self, registry: &mut PluginRegistry) -> PyResult<()> {
+        install(registry).map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
     /// Get list of block types provided by this plugin
     fn get_block_types(&self) -> Vec<String> {
-        vec![
-            "ShowText".to_string(),
-            "PlayVoice".to_string(),
-            "BranchChoice".to_string(),
-            "SetVariable".to_string(),
-            "EndScene".to_string(),
-        ]
+        blocks().into_iter().map(|b| b.block_type).collect()
     }
 }
 

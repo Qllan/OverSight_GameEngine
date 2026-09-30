@@ -481,7 +481,7 @@ mod tests {
     const EXAMPLE: &str = include_str!("../../examples/simple_novel.json");
 
     fn machine_for(json: &str) -> Machine {
-        let program = compile_graph(&parse_json_graph(json).unwrap()).unwrap();
+        let program = compile_graph(&parse_json_graph(json).unwrap(), &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).unwrap();
         let mut m = Machine::new();
         m.load(program);
         m.start().unwrap();
@@ -643,8 +643,8 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable() {
-        let program = compile_graph(&parse_json_graph(EXAMPLE).unwrap()).unwrap();
-        assert_eq!(program.fingerprint(), compile_graph(&parse_json_graph(EXAMPLE).unwrap()).unwrap().fingerprint());
+        let program = compile_graph(&parse_json_graph(EXAMPLE).unwrap(), &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).unwrap();
+        assert_eq!(program.fingerprint(), compile_graph(&parse_json_graph(EXAMPLE).unwrap(), &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).unwrap().fingerprint());
         assert_eq!(program.fingerprint().len(), 16);
     }
 

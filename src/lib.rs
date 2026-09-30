@@ -12,6 +12,7 @@ pub mod core;
 pub mod compiler;
 pub mod vm;
 pub mod plugins;
+pub mod pyjson;
 
 use pyo3::prelude::*;
 

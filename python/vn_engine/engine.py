@@ -39,16 +39,19 @@ class Engine:
         self._initialized = False
         self._current_graph_id: Optional[str] = None
         self._compiled_program: Optional["_core.CompiledProgram"] = None
+        self._block_handlers: Dict[str, Callable[[Dict[str, Any]], Any]] = {}
 
     def init(self) -> None:
-        """Initialize the engine core systems."""
+        """Initialize the engine core systems. The standard blocks
+        (novel_plugin: ShowText, PlayVoice) are registered."""
         self._event_bus = _core.EventBus()
-        self._plugin_registry = _core.PluginRegistry()
+        self._plugin_registry = _core.PluginRegistry(with_defaults=True)
         self._asset_manager = _core.AssetManager()
         self._tick_loop = _core.FixedTickLoop()
-        self._compiler = _core.GraphCompiler()
+        self._compiler = _core.GraphCompiler(self._plugin_registry)
         self._vm = _core.VMExecutor()
         self._vm.set_event_bus(self._event_bus)
+        self._event_bus.subscribe("BlockCall", self._dispatch_block)
 
         self._initialized = True
 
@@ -65,10 +68,38 @@ class Engine:
         """
         self._require_init()
 
-        if plugin_name == "novel_plugin":
-            _core.NovelPlugin().register_blocks(self._plugin_registry)
-        else:
+        if plugin_name != "novel_plugin":
             raise ValueError(f"Unknown plugin: {plugin_name}")
+        if not self._plugin_registry.has_plugin(plugin_name):
+            _core.NovelPlugin().register_blocks(self._plugin_registry)
+
+    def register_block(
+        self,
+        definition: "_core.BlockDefinition",
+        handler: Optional[Callable[[Dict[str, Any]], Any]] = None,
+        plugin: str = "game",
+    ) -> None:
+        """
+        Add a block that graphs can use.
+
+        Args:
+            definition: Parameters, outputs and wait behaviour of the block.
+            handler: Called with the block's arguments (a dict) each time
+                the block runs.
+            plugin: Plugin the block belongs to; created if needed.
+        """
+        self._require_init()
+        if not self._plugin_registry.has_plugin(plugin):
+            self._plugin_registry.register_plugin(_core.PluginInfo(plugin, "0.0.0", ""))
+        self._plugin_registry.register_block(plugin, definition)
+        if handler is not None:
+            self._block_handlers[definition.block_type] = handler
+
+    def _dispatch_block(self, payload: str) -> None:
+        call = json.loads(payload)
+        handler = self._block_handlers.get(call["block_type"])
+        if handler is not None:
+            handler(call["args"])
 
     @property
     def plugin_registry(self) -> "_core.PluginRegistry":
