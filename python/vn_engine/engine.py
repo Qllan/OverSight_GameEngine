@@ -196,7 +196,8 @@ class Engine:
         """
         Load and compile a project: several scenes, a start scene and
         initial variables. Scene entries may be file paths, relative to
-        the project file, or inline graphs.
+        the project file, or inline graphs. An "assets" entry names the
+        asset folder, which is scanned (see scan_assets).
 
         Returns:
             Project ID string
@@ -219,6 +220,11 @@ class Engine:
                     scene = json.load(f)
             scenes.append(scene)
         data = {**project_data, "scenes": scenes}
+
+        # "assets": "<folder>" registers the folder and checks references
+        assets = project_data.get("assets")
+        if isinstance(assets, str) and (base / assets).is_dir():
+            self.scan_assets(str(base / assets))
 
         project = self._compiler.compile_project_json(json.dumps(data))
         self._compiled_program = project

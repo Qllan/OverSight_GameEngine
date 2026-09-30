@@ -211,6 +211,23 @@ under the folder as `"<relative path without extension>"` (e.g.
 loaded (`UNKNOWN_ASSET`, `WRONG_ASSET_TYPE`). `engine.asset_path(id)` returns
 the file path.
 
+## Editor
+
+```bash
+python -m vn_engine.editor.main examples/project/project.json   # or a single graph
+```
+
+- The palette and each node's parameter widgets come from the block registry:
+  numbers get number fields, `bool` a checkbox, `scene` a list of the
+  project's scenes, `asset:*` a list of scanned assets (when the project has
+  an `"assets"` folder). Optional parameters are added with `+ name`.
+- Validation runs after every edit. Problem nodes get a red title and the
+  message inside the node; the panel below lists all problems with hints,
+  and scenes with problems are marked `(!)` in the project list.
+- Projects: switch scenes in the sidebar, add scenes, set the start scene;
+  Save writes `project.json` and every scene file. `Ctrl+S` saves, `Del`
+  deletes the selected nodes.
+
 ## Compilation
 
 Each node becomes a labelled block of opcodes, emitted depth-first from the
@@ -348,8 +365,6 @@ maturin build --release
 2. **Determinism**: Floating point in blocks could break determinism.
 
 ### Next: quality of life
-- Editor: block palette and parameter forms generated from the registry,
-  scene/project view, inline validation errors on nodes
 - Debugger: breakpoints and stepping per node, variable inspector
 - Rendering with pygame-ce (backgrounds, sprites, text box), audio playback
 - Save slots UI, auto-save, skip/auto modes built on `seen_before`
