@@ -227,6 +227,18 @@ python -m vn_engine.editor.main examples/project/project.json   # or a single gr
 - Projects: switch scenes in the sidebar, add scenes, set the start scene;
   Save writes `project.json` and every scene file. `Ctrl+S` saves, `Del`
   deletes the selected nodes.
+- Run panel: **Play (F5)** runs the project (or graph) being edited in the
+  editor: the transcript shows lines and choices, Next / choice buttons
+  answer, the current node is highlighted in green and the editor follows
+  execution into other scenes. **F9** toggles a breakpoint on the selected
+  nodes (`[BP]` in the title); when paused, **Continue (F5)** runs on and
+  **Step node (F10)** stops at the next node. The inspector shows the
+  position, call stack, variables and persistent variables.
+
+The same controls exist in code: `engine.add_breakpoint(scene, node)`,
+`state["paused_at"]`, `engine.step_node()`, `engine.continue_execution()`,
+`engine.debug_info()`; `vn_engine.editor.debugger.DebugSession` wraps them
+for tools.
 
 ## Compilation
 
@@ -365,7 +377,6 @@ maturin build --release
 2. **Determinism**: Floating point in blocks could break determinism.
 
 ### Next: quality of life
-- Debugger: breakpoints and stepping per node, variable inspector
 - Rendering with pygame-ce (backgrounds, sprites, text box), audio playback
 - Save slots UI, auto-save, skip/auto modes built on `seen_before`
 - Export to a standalone executable (PyInstaller + Rust binary)

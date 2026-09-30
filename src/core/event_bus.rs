@@ -35,6 +35,11 @@ pub enum Event {
     YieldRequest {
         reason: String,
     },
+    /// The debugger paused before this node
+    Breakpoint {
+        graph_id: String,
+        node_id: String,
+    },
     Error {
         message: String,
         graph_id: Option<String>,
@@ -52,6 +57,7 @@ impl Event {
             Event::BlockCall { .. } => "BlockCall",
             Event::VariableChanged { .. } => "VariableChanged",
             Event::YieldRequest { .. } => "YieldRequest",
+            Event::Breakpoint { .. } => "Breakpoint",
             Event::Error { .. } => "Error",
         }
     }
@@ -82,6 +88,9 @@ impl Event {
             }),
             Event::VariableChanged { name, value } => json!({ "name": name, "value": value }),
             Event::YieldRequest { reason } => json!({ "reason": reason }),
+            Event::Breakpoint { graph_id, node_id } => {
+                json!({ "graph_id": graph_id, "node_id": node_id })
+            }
             Event::Error {
                 message,
                 graph_id,

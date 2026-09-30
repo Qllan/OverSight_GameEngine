@@ -102,7 +102,7 @@ impl VMExecutor {
 
     /// Get current VM state
     fn get_state(&self) -> PyVMState {
-        PyVMState::from_exec(self.machine.state())
+        PyVMState::from_exec(self.machine.state(), self.machine.paused_at())
     }
 
     /// Get a variable value as a JSON string
@@ -152,6 +152,37 @@ impl VMExecutor {
         self.machine
             .load_state(state)
             .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
+    /// Debugger: pause whenever execution enters this node
+    #[pyo3(signature = (scene, node_id, enabled = true))]
+    fn set_breakpoint(&mut self, scene: &str, node_id: &str, enabled: bool) {
+        self.machine.set_breakpoint(scene, node_id, enabled);
+    }
+
+    fn clear_breakpoints(&mut self) {
+        self.machine.clear_breakpoints();
+    }
+
+    /// Breakpoints as "scene:node"
+    fn get_breakpoints(&self) -> Vec<String> {
+        self.machine.breakpoints()
+    }
+
+    /// Debugger: leave a pause and run on until the next breakpoint
+    fn continue_execution(&mut self) {
+        self.machine.continue_execution();
+    }
+
+    /// Debugger: leave a pause and stop again at the next node
+    fn step_node(&mut self) {
+        self.machine.step_node();
+    }
+
+    /// Persistent variables (without the "persistent." prefix) as JSON
+    fn get_persistent_variables(&self) -> PyResult<String> {
+        serde_json::to_string(&self.machine.persistent().variables)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
     }
 
     /// Go back to the previous point where the game waited for the player.

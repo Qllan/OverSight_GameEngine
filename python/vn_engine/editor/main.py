@@ -10,8 +10,9 @@ marking the nodes that have problems.
 
 import json
 import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+from vn_engine.editor.debugger import DebugSession
 from vn_engine.editor.model import (
     FLOW,
     NodeEditor,
@@ -25,6 +26,7 @@ from vn_engine.editor.model import (
 __all__ = ["EditorApp", "NodeEditor", "ProjectEditor", "parse_param", "run_editor"]
 
 ERROR_COLOR = (255, 110, 110)
+RUN_PANEL_WIDTH = 360
 PARAM_WIDTH = 190
 
 
@@ -51,7 +53,12 @@ class EditorApp:
         self.input_attrs: Dict[int, str] = {}
         self.link_edges: Dict[int, Tuple[str, int]] = {}
         self.node_error_items: Dict[str, int] = {}
+        self.error_nodes: Set[str] = set()
         self.error_theme: Optional[int] = None
+        self.current_theme: Optional[int] = None
+        # Debugger
+        self.session: Optional[DebugSession] = None
+        self.breakpoints: Set[Tuple[str, str]] = set()  # (scene, node_id)
         self._pending_path = path
 
     # --- loading --------------------------------------------------------
@@ -91,6 +98,12 @@ class EditorApp:
                             dpg.mvNodeCol_TitleBarSelected):
                     dpg.add_theme_color(col, (150, 45, 45), category=dpg.mvThemeCat_Nodes)
         self.error_theme = theme
+        with dpg.theme() as theme:
+            with dpg.theme_component(dpg.mvNode):
+                for col in (dpg.mvNodeCol_TitleBar, dpg.mvNodeCol_TitleBarHovered,
+                            dpg.mvNodeCol_TitleBarSelected):
+                    dpg.add_theme_color(col, (40, 130, 60), category=dpg.mvThemeCat_Nodes)
+        self.current_theme = theme
 
         with dpg.file_dialog(show=False, callback=self._on_open_file, tag="open_dialog",
                              width=640, height=420):
@@ -105,6 +118,9 @@ class EditorApp:
         with dpg.handler_registry():
             dpg.add_key_press_handler(dpg.mvKey_Delete, callback=lambda: self._delete_selected())
             dpg.add_key_press_handler(dpg.mvKey_S, callback=self._on_key_s)
+            dpg.add_key_press_handler(dpg.mvKey_F5, callback=lambda: self._play_or_continue())
+            dpg.add_key_press_handler(dpg.mvKey_F9, callback=lambda: self._toggle_breakpoints())
+            dpg.add_key_press_handler(dpg.mvKey_F10, callback=lambda: self._debug_step())
 
         with dpg.window(tag="main"):
             with dpg.group(horizontal=True):
@@ -115,6 +131,10 @@ class EditorApp:
                 dpg.add_button(label="Save As", tag="save_as_button",
                                callback=lambda: dpg.show_item("save_dialog"))
                 dpg.add_button(label="Delete Selected (Del)", callback=lambda: self._delete_selected())
+                dpg.add_spacer(width=12)
+                dpg.add_button(label="Play (F5)", callback=lambda: self._play_or_continue())
+                dpg.add_button(label="Breakpoint (F9)", callback=lambda: self._toggle_breakpoints())
+                dpg.add_spacer(width=12)
                 dpg.add_text("graph_id")
                 dpg.add_input_text(tag="graph_id", width=160, on_enter=True,
                                    callback=lambda s, a: self._rename_graph(a))
@@ -133,10 +153,22 @@ class EditorApp:
                     dpg.add_group(tag="palette")
                 with dpg.group():
                     dpg.add_node_editor(tag="canvas", callback=self._on_link,
-                                        delink_callback=self._on_delink, height=-170)
-                    with dpg.child_window(height=-30, tag="error_panel"):
+                                        delink_callback=self._on_delink, height=-170,
+                                        width=-RUN_PANEL_WIDTH - 10)
+                    with dpg.child_window(height=-30, width=-RUN_PANEL_WIDTH - 10,
+                                          tag="error_panel"):
                         dpg.add_group(tag="error_list")
                     dpg.add_text("", tag="status")
+                with dpg.child_window(width=RUN_PANEL_WIDTH, tag="run_panel"):
+                    dpg.add_text("Run", color=(170, 170, 255))
+                    dpg.add_text("Press Play (F5) to run the current project or graph.",
+                                 tag="run_status", wrap=RUN_PANEL_WIDTH - 20)
+                    dpg.add_group(tag="run_controls", horizontal=False)
+                    dpg.add_separator()
+                    with dpg.child_window(height=260, tag="transcript_window"):
+                        dpg.add_group(tag="transcript")
+                    dpg.add_text("Inspector", color=(170, 170, 255))
+                    dpg.add_group(tag="inspector")
 
         dpg.set_primary_window("main", True)
         if self._pending_path:
@@ -200,6 +232,7 @@ class EditorApp:
         for edge in self.model.edges:
             self._draw_link(edge["from"], edge.get("port", 0), edge["to"])
         dpg.set_value("graph_id", self.model.graph_id)
+        self._decorate_nodes()
 
     def _draw_node(self, node_id: str) -> None:
         dpg = self.dpg
@@ -310,12 +343,13 @@ class EditorApp:
                 by_node.setdefault(error["node_id"], []).append(
                     f"{error['error_type']}: {error['message']}"
                 )
-        for node_id, item in self.node_items.items():
+        self.error_nodes = set(by_node)
+        for node_id in self.node_items:
             messages = by_node.get(node_id, [])
             text_item = self.node_error_items[node_id]
             dpg.set_value(text_item, "\n".join(messages))
             dpg.configure_item(text_item, show=bool(messages))
-            dpg.bind_item_theme(item, self.error_theme if messages else 0)
+        self._decorate_nodes()
 
         dpg.delete_item("error_list", children_only=True)
         if not self.errors:
@@ -330,6 +364,144 @@ class EditorApp:
         if self.project is not None:
             self._build_project_panel()
         return self.errors
+
+    def _decorate_nodes(self) -> None:
+        """Title colour (current node / error) and breakpoint marker"""
+        dpg = self.dpg
+        location = self.session.location if self.session else None
+        for node_id, item in self.node_items.items():
+            node = self.model.nodes[node_id]
+            spec = self.model.spec(node["type"])
+            title = spec.display_name if spec else f"{node['type']} (unknown)"
+            if (self.model.graph_id, node_id) in self.breakpoints:
+                title = "[BP] " + title
+            dpg.set_item_label(item, title)
+            if location == (self.model.graph_id, node_id):
+                dpg.bind_item_theme(item, self.current_theme)
+            elif node_id in self.error_nodes:
+                dpg.bind_item_theme(item, self.error_theme)
+            else:
+                dpg.bind_item_theme(item, 0)
+
+    # --- debugger -------------------------------------------------------
+
+    def _play_or_continue(self) -> None:
+        if self.session is not None and self.session.paused:
+            self.session.continue_()
+            self._after_debug_action()
+        else:
+            self._play()
+
+    def _play(self) -> None:
+        self._sync_positions()
+        self.session = DebugSession(self.model, self.project, self.breakpoints)
+        self.session.start()
+        self._after_debug_action()
+
+    def _stop(self) -> None:
+        if self.session is not None:
+            self.session.stop()
+        self.session = None
+        self._refresh_run_panel()
+        self._decorate_nodes()
+
+    def _debug_step(self) -> None:
+        if self.session is not None:
+            self.session.step_node()
+            self._after_debug_action()
+
+    def _debug_next(self) -> None:
+        if self.session is not None:
+            self.session.next()
+            self._after_debug_action()
+
+    def _debug_choose(self, index: int) -> None:
+        if self.session is not None:
+            self.session.choose(index)
+            self._after_debug_action()
+
+    def _toggle_breakpoints(self) -> None:
+        for item in self.dpg.get_selected_nodes("canvas"):
+            node_id = self.item_nodes.get(item)
+            if node_id is None:
+                continue
+            key = (self.model.graph_id, node_id)
+            if self.session is not None:
+                self.session.toggle_breakpoint(*key)
+            if key in self.breakpoints:
+                self.breakpoints.discard(key)
+            else:
+                self.breakpoints.add(key)
+        self._decorate_nodes()
+
+    def _after_debug_action(self) -> None:
+        """Follow execution into its scene, then redraw the run panel"""
+        location = self.session.location if self.session else None
+        if (location and self.project is not None
+                and location[0] != self.model.graph_id and location[0] in self.project.scenes):
+            self._switch_scene(location[0])
+        self._refresh_run_panel()
+        self._decorate_nodes()
+
+    def _refresh_run_panel(self) -> None:
+        dpg = self.dpg
+        session = self.session
+        dpg.delete_item("run_controls", children_only=True)
+        dpg.delete_item("transcript", children_only=True)
+        dpg.delete_item("inspector", children_only=True)
+        if session is None:
+            dpg.set_value("run_status", "Press Play (F5) to run the current project or graph.")
+            return
+
+        if session.error:
+            status = f"Error: {session.error}"
+        elif session.finished:
+            status = "Finished"
+        elif session.paused:
+            status = f"Paused at {session.state['paused_at'] if session.state else ''}"
+        elif session.waiting_for == "choice":
+            status = "Waiting for a choice"
+        else:
+            status = "Waiting for the player"
+        dpg.set_value("run_status", status)
+
+        with dpg.group(horizontal=True, parent="run_controls"):
+            if session.paused:
+                dpg.add_button(label="Continue (F5)", callback=lambda: self._play_or_continue())
+            if session.paused or session.waiting_for == "input":
+                dpg.add_button(label="Step node (F10)", callback=lambda: self._debug_step())
+            if session.waiting_for == "input":
+                dpg.add_button(label="Next", callback=lambda: self._debug_next())
+            dpg.add_button(label="Restart", callback=lambda: self._play())
+            dpg.add_button(label="Stop", callback=lambda: self._stop())
+        if session.waiting_for == "choice":
+            for index, label in enumerate(session.choices):
+                dpg.add_button(label=f"{index}: {label}", parent="run_controls", width=-1,
+                               callback=lambda s, a, u: self._debug_choose(u), user_data=index)
+
+        for line in session.transcript[-200:]:
+            color = ERROR_COLOR if line.startswith("!!") else (220, 220, 220)
+            dpg.add_text(line, parent="transcript", wrap=RUN_PANEL_WIDTH - 40, color=color)
+        dpg.set_y_scroll("transcript_window", dpg.get_y_scroll_max("transcript_window") + 10_000)
+
+        info = session.inspect()
+        if not info:
+            return
+        where = f"{info['scene']} / {info['node_id']}" if info["node_id"] else info["scene"]
+        dpg.add_text(f"at: {where}", parent="inspector")
+        if info["call_stack"]:
+            dpg.add_text("call stack: " + " > ".join(info["call_stack"]), parent="inspector")
+        with dpg.table(parent="inspector", header_row=True, borders_innerH=True,
+                       policy=dpg.mvTable_SizingStretchProp):
+            dpg.add_table_column(label="variable")
+            dpg.add_table_column(label="value")
+            rows = sorted(info["variables"].items()) + sorted(
+                (f"persistent.{k}", v) for k, v in info["persistent"].items()
+            )
+            for name, value in rows:
+                with dpg.table_row():
+                    dpg.add_text(name)
+                    dpg.add_text(format_param(value))
 
     # --- callbacks ------------------------------------------------------
 

@@ -345,6 +345,54 @@ class Engine:
         with open(path, "r", encoding="utf-8") as f:
             self.load_state(json.load(f))
 
+    # --- debugging -------------------------------------------------------
+
+    def add_breakpoint(self, scene: str, node_id: str) -> None:
+        """Pause whenever execution enters this node (state["paused_at"])."""
+        self._require_init()
+        self._vm.set_breakpoint(scene, node_id, True)
+
+    def remove_breakpoint(self, scene: str, node_id: str) -> None:
+        self._require_init()
+        self._vm.set_breakpoint(scene, node_id, False)
+
+    def clear_breakpoints(self) -> None:
+        self._require_init()
+        self._vm.clear_breakpoints()
+
+    def breakpoints(self) -> List[str]:
+        """Breakpoints as "scene:node"."""
+        self._require_init()
+        return self._vm.get_breakpoints()
+
+    def continue_execution(self) -> None:
+        """Leave a breakpoint pause; the next tick() runs on."""
+        self._require_init()
+        self._vm.continue_execution()
+
+    def step_node(self) -> None:
+        """Leave a pause and stop again when the next node is entered."""
+        self._require_init()
+        self._vm.step_node()
+
+    def debug_info(self) -> Dict[str, Any]:
+        """Everything a variable inspector shows: position, call stack,
+        variables, persistent variables, operand stack, breakpoints."""
+        self._require_init()
+        state = self.get_state()
+        return {
+            "scene": state["current_graph_id"],
+            "node_id": state["current_node_id"],
+            "pc": state["pc"],
+            "paused_at": state["paused_at"],
+            "yield_reason": state["yield_reason"],
+            "call_stack": state["call_stack"],
+            "variables": state["variables"],
+            "persistent": json.loads(self._vm.get_persistent_variables()),
+            "stack": state["stack"],
+            "breakpoints": self.breakpoints(),
+        }
+
     def rollback(self) -> Optional[Dict[str, Any]]:
         """
         Go back to the previous point where the game waited for the player

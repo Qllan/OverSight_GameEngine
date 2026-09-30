@@ -41,6 +41,12 @@ pub struct PyVMState {
     /// The current yield was reached before, in any playthrough (for skip)
     #[pyo3(get)]
     pub seen_before: bool,
+    /// Debugger: "scene:node" where execution is paused
+    #[pyo3(get)]
+    pub paused_at: Option<String>,
+    /// Scenes to return to, innermost last
+    #[pyo3(get)]
+    pub call_stack: Vec<String>,
 }
 
 #[pymethods]
@@ -61,6 +67,8 @@ impl PyVMState {
             call_depth: 0,
             waiting_frames: 0,
             seen_before: false,
+            paused_at: None,
+            call_stack: Vec::new(),
         }
     }
 
@@ -95,7 +103,7 @@ impl Default for PyVMState {
 
 impl PyVMState {
     /// Snapshot of the machine's execution state
-    pub fn from_exec(state: &ExecState) -> Self {
+    pub fn from_exec(state: &ExecState, paused_at: Option<&str>) -> Self {
         PyVMState {
             pc: state.pc,
             stack: state.stack.iter().map(|v| v.to_string()).collect(),
@@ -114,6 +122,8 @@ impl PyVMState {
             call_depth: state.call_stack.len(),
             waiting_frames: state.wait_frames,
             seen_before: state.yield_seen,
+            paused_at: paused_at.map(String::from),
+            call_stack: state.call_stack.iter().map(|f| f.scene.clone()).collect(),
         }
     }
 }

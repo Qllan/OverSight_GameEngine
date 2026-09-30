@@ -174,6 +174,12 @@ pub struct Machine {
     /// State at each recent yield, oldest first, for rollback
     history: std::collections::VecDeque<ExecState>,
     rollback_limit: usize,
+    /// Debugger: "scene:node" keys that pause execution on entry
+    breakpoints: std::collections::BTreeSet<String>,
+    /// Debugger: where execution is paused, if it is
+    paused_at: Option<String>,
+    /// Debugger: pause when the next node is entered
+    pause_on_next_node: bool,
     log: Vec<String>,
     events: Vec<Event>,
 }
@@ -186,6 +192,9 @@ impl Default for Machine {
             persistent: PersistentData::default(),
             history: Default::default(),
             rollback_limit: DEFAULT_ROLLBACK_LIMIT,
+            breakpoints: Default::default(),
+            paused_at: None,
+            pause_on_next_node: false,
             log: Vec::new(),
             events: Vec::new(),
         }
@@ -231,6 +240,7 @@ impl Machine {
         self.exec.backlog.clear();
         self.exec.running = true;
         self.history.clear();
+        self.paused_at = None;
         self.log_event("VM started");
         self.enter_scene(start);
         Ok(())
@@ -247,7 +257,10 @@ impl Machine {
 
     /// Nothing to execute until the player acts, a WAIT runs out, or a restart
     fn is_blocked(&self) -> bool {
-        !self.exec.running || self.exec.yield_reason.is_some() || self.exec.wait_frames > 0
+        !self.exec.running
+            || self.exec.yield_reason.is_some()
+            || self.exec.wait_frames > 0
+            || self.paused_at.is_some()
     }
 
     /// Execute one opcode. Does nothing while stopped, yielding or waiting.
@@ -268,7 +281,8 @@ impl Machine {
 
         // Track which node we are in
         let node_id = program.node_map.get(self.exec.pc).cloned();
-        if node_id.is_some() && node_id != self.exec.current_node_id {
+        let entered = node_id.is_some() && node_id != self.exec.current_node_id;
+        if entered {
             let id = node_id.clone().unwrap_or_default();
             let node_type = program.node_types.get(&id).cloned().unwrap_or_default();
             self.events.push(Event::NodeEnter {
@@ -278,6 +292,21 @@ impl Machine {
             });
         }
         self.exec.current_node_id = node_id;
+
+        // Debugger: stop before the first opcode of the node
+        if entered {
+            let key = self.location();
+            if self.pause_on_next_node || self.breakpoints.contains(&key) {
+                self.pause_on_next_node = false;
+                self.log_event(&format!("Paused at {}", key));
+                self.events.push(Event::Breakpoint {
+                    graph_id: self.exec.scene.clone(),
+                    node_id: self.exec.current_node_id.clone().unwrap_or_default(),
+                });
+                self.paused_at = Some(key);
+                return Ok(());
+            }
+        }
 
         let flow = match self.execute(&opcode) {
             Ok(flow) => flow,
@@ -383,6 +412,51 @@ impl Machine {
         true
     }
 
+    /// "scene:node" of the current position
+    pub fn location(&self) -> String {
+        format!(
+            "{}:{}",
+            self.exec.scene,
+            self.exec.current_node_id.as_deref().unwrap_or_default()
+        )
+    }
+
+    /// Debugger: pause whenever execution enters this node
+    pub fn set_breakpoint(&mut self, scene: &str, node_id: &str, enabled: bool) {
+        let key = format!("{}:{}", scene, node_id);
+        if enabled {
+            self.breakpoints.insert(key);
+        } else {
+            self.breakpoints.remove(&key);
+        }
+    }
+
+    pub fn clear_breakpoints(&mut self) {
+        self.breakpoints.clear();
+    }
+
+    /// Breakpoints as "scene:node", sorted
+    pub fn breakpoints(&self) -> Vec<String> {
+        self.breakpoints.iter().cloned().collect()
+    }
+
+    /// Debugger: "scene:node" where execution is paused
+    pub fn paused_at(&self) -> Option<&str> {
+        self.paused_at.as_deref()
+    }
+
+    /// Debugger: leave a pause and run on (until the next breakpoint)
+    pub fn continue_execution(&mut self) {
+        self.paused_at = None;
+        self.pause_on_next_node = false;
+    }
+
+    /// Debugger: leave a pause and stop again when the next node is entered
+    pub fn step_node(&mut self) {
+        self.paused_at = None;
+        self.pause_on_next_node = true;
+    }
+
     /// How many yields are kept for rollback (0 disables it)
     pub fn set_rollback_limit(&mut self, limit: usize) {
         self.rollback_limit = limit;
@@ -475,6 +549,8 @@ impl Machine {
         self.exec.yield_reason = None;
         self.exec.wait_frames = 0;
         self.exec.call_stack.clear();
+        self.paused_at = None;
+        self.pause_on_next_node = false;
         self.log_event("VM stopped");
         self.events.push(Event::GraphEnd {
             graph_id: self.exec.scene.clone(),
@@ -571,6 +647,7 @@ impl Machine {
         // Variables added to the project since the save get their initial values
         let defaults = project.variables.clone();
         self.exec = state;
+        self.paused_at = None;
         self.apply_defaults(&defaults);
         // Rollback starts over from the loaded point
         self.history.clear();
@@ -1490,6 +1567,41 @@ mod tests {
         }
         assert!(m.rollback());
         assert!(!m.rollback(), "only two yields are kept");
+    }
+
+    #[test]
+    fn breakpoints_pause_before_the_node() {
+        let mut m = machine_for(AFFECTION);
+        m.set_variable("player", json!("Alex"));
+        m.set_variable("speaker_name", json!("Mia"));
+        m.set_breakpoint("affection", "check", true);
+        m.run_until_blocked(1000).unwrap();
+        m.resume(None).unwrap();
+        m.run_until_blocked(1000).unwrap();
+        m.resume(Some(json!(0))).unwrap();
+        m.run_until_blocked(1000).unwrap();
+
+        // Stopped on entering "check", before its condition ran
+        assert_eq!(m.paused_at(), Some("affection:check"));
+        assert!(m.is_running() && !m.is_yielding());
+        assert_eq!(m.get_variable("affection"), Some(&json!(3)));
+        assert!(m
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, Event::Breakpoint { node_id, .. } if node_id == "check")));
+        m.run_until_blocked(1000).unwrap();
+        assert_eq!(m.paused_at(), Some("affection:check"), "stays paused");
+
+        // Step node by node: check -> smile
+        m.step_node();
+        m.run_until_blocked(1000).unwrap();
+        assert_eq!(m.paused_at(), Some("affection:smile"));
+
+        m.continue_execution();
+        m.run_until_blocked(1000).unwrap();
+        assert_eq!(m.paused_at(), None);
+        assert_eq!(m.yield_reason(), Some("input"));
+        assert_eq!(m.breakpoints(), vec!["affection:check"]);
     }
 
     #[test]
