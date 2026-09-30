@@ -120,6 +120,27 @@ impl VMExecutor {
         self.machine.is_yielding()
     }
 
+    /// Serialize the execution state to a JSON string
+    fn save_state(&self) -> PyResult<String> {
+        let state = self
+            .machine
+            .save_state()
+            .map_err(pyo3::exceptions::PyRuntimeError::new_err)?;
+        serde_json::to_string(&state)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
+    /// Restore a state from `save_state()`. Raises ValueError if it was
+    /// saved from a different graph or graph version.
+    fn load_state(&mut self, json_state: &str) -> PyResult<()> {
+        let state = serde_json::from_str(json_state).map_err(|e| {
+            pyo3::exceptions::PyValueError::new_err(format!("Invalid save state: {}", e))
+        })?;
+        self.machine
+            .load_state(state)
+            .map_err(pyo3::exceptions::PyValueError::new_err)
+    }
+
     /// Reset VM state (keeps the loaded program)
     fn reset(&mut self) {
         self.machine.reset();

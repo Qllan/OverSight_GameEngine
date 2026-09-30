@@ -109,6 +109,14 @@ class VMExecutor:
         """Check if yielding."""
         return self._vm.is_yielding()
 
+    def save_state(self) -> Dict[str, Any]:
+        """Execution state as a JSON-compatible dict."""
+        return json.loads(self._vm.save_state())
+
+    def load_state(self, state: Dict[str, Any]) -> None:
+        """Restore a state from save_state() of the same compiled graph."""
+        self._vm.load_state(json.dumps(state))
+
     def reset(self) -> None:
         """Reset VM state."""
         self._vm.reset()

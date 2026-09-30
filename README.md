@@ -111,6 +111,10 @@ class Engine:
     def run_until_yield(self) -> dict | None # until the player is needed; None once ended
     def resume(self, choice: int | None = None) -> dict | None
     def stop(self) -> None
+    def save_state(self) -> dict             # JSON-compatible snapshot
+    def load_state(self, state: dict) -> None
+    def save_game(self, path: str) -> None
+    def load_game(self, path: str) -> None
 ```
 
 A scene is played like this:
@@ -126,6 +130,14 @@ while state is not None:
         state = engine.resume()
     state = engine.run_until_yield()
 ```
+
+#### Saving
+
+`save_state()` captures the program counter, stack, variables and the pending
+yield; take it while the engine waits for the player. A save records the graph
+id and a fingerprint of the compiled bytecode, and `load_state()` raises
+`ValueError` (leaving the current state untouched) if the loaded graph differs,
+because a program counter from another version of the graph is meaningless.
 
 #### `GraphCompiler`
 ```python
@@ -283,7 +295,7 @@ maturin build --release
 
 ### Phase 2 Planned Features
 - Actual rendering with pygame-ce (sprites, backgrounds, text boxes)
-- Save/Load system integration (VM state is pc + stack + variables)
+- Save slots UI, and migrating saves across edited graphs
 - Audio playback (BGM, SFX, voice)
 - More block types (animations, transitions, mini-games)
 - Export to standalone executable (PyInstaller + Rust binary)

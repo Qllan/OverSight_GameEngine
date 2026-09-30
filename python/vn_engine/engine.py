@@ -204,6 +204,38 @@ class Engine:
         self._require_init()
         self._vm.stop()
 
+    def save_state(self) -> Dict[str, Any]:
+        """
+        Capture the game state as a JSON-compatible dict.
+
+        Take it while the engine waits for the player (after
+        run_until_yield()); loading it continues from the same point.
+        """
+        self._require_init()
+        return json.loads(self._vm.save_state())
+
+    def load_state(self, state: Dict[str, Any]) -> None:
+        """
+        Restore a state from save_state(). The same graph must be loaded;
+        a save from a different graph or an edited version of it raises
+        ValueError and leaves the current state unchanged.
+        """
+        self._require_init()
+        if self._compiled_program is None:
+            raise RuntimeError("No graph loaded. Call load_graph() first.")
+        self._vm.load_state(json.dumps(state))
+
+    def save_game(self, path: str) -> None:
+        """Write save_state() to a JSON file."""
+        state = self.save_state()
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2, ensure_ascii=False)
+
+    def load_game(self, path: str) -> None:
+        """Restore a state written by save_game()."""
+        with open(path, "r", encoding="utf-8") as f:
+            self.load_state(json.load(f))
+
     def get_variable(self, name: str) -> Optional[Any]:
         """Get a variable value."""
         self._require_init()

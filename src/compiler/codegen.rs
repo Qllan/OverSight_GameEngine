@@ -85,6 +85,19 @@ impl CompiledProgram {
         )
     }
 
+    /// Stable 64-bit FNV-1a hash of the bytecode, as hex. Identifies the
+    /// exact program a save state belongs to.
+    pub fn fingerprint(&self) -> String {
+        let mut hash: u64 = 0xcbf29ce484222325;
+        for op in &self.opcodes {
+            for byte in op.to_string().bytes().chain(std::iter::once(b'\n')) {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(0x100000001b3);
+            }
+        }
+        format!("{:016x}", hash)
+    }
+
     /// Get opcode count
     pub fn opcode_count(&self) -> usize {
         self.opcodes.len()

@@ -5,8 +5,9 @@
 //! selected index is passed to `resume()` and pushed onto the stack.
 //! Engine events are queued and drained with `take_events()`.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::compiler::codegen::{CompiledProgram, Opcode};
 use crate::core::event_bus::Event;
@@ -18,6 +19,26 @@ enum Flow {
     Stay,
     Yield(String),
     End,
+}
+
+/// Version of the save-state format
+pub const SAVE_FORMAT: u32 = 1;
+
+/// Serializable machine state (see `Machine::save_state`)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SaveState {
+    pub format: u32,
+    pub graph_id: String,
+    /// `CompiledProgram::fingerprint()` of the program that was running
+    pub fingerprint: String,
+    pub pc: usize,
+    pub stack: Vec<JsonValue>,
+    pub variables: BTreeMap<String, JsonValue>,
+    pub running: bool,
+    pub yield_reason: Option<String>,
+    pub wait_remaining: Option<u32>,
+    pub current_node_id: Option<String>,
+    pub last_block: Option<(String, JsonValue)>,
 }
 
 #[derive(Debug, Default)]
@@ -170,6 +191,73 @@ impl Machine {
         self.last_block = None;
         self.log.clear();
         self.events.clear();
+    }
+
+    /// Capture the execution state. Saves are normally taken while the
+    /// machine is yielding (waiting for the player).
+    pub fn save_state(&self) -> Result<SaveState, String> {
+        let program = self.program.as_ref().ok_or("No program loaded")?;
+        Ok(SaveState {
+            format: SAVE_FORMAT,
+            graph_id: program.graph_id.clone(),
+            fingerprint: program.fingerprint(),
+            pc: self.pc,
+            stack: self.stack.clone(),
+            variables: self.variables.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+            running: self.running,
+            yield_reason: self.yield_reason.clone(),
+            wait_remaining: self.wait_remaining,
+            current_node_id: self.current_node_id.clone(),
+            last_block: self.last_block.clone(),
+        })
+    }
+
+    /// Restore a state saved from the same compiled program. The state is
+    /// checked before anything is changed, so a rejected save leaves the
+    /// machine untouched.
+    pub fn load_state(&mut self, state: SaveState) -> Result<(), String> {
+        let program = self.program.as_ref().ok_or("No program loaded")?;
+        if state.format != SAVE_FORMAT {
+            return Err(format!(
+                "Unsupported save format {} (expected {})",
+                state.format, SAVE_FORMAT
+            ));
+        }
+        if state.graph_id != program.graph_id {
+            return Err(format!(
+                "Save is for graph '{}', but '{}' is loaded",
+                state.graph_id, program.graph_id
+            ));
+        }
+        if state.fingerprint != program.fingerprint() {
+            return Err(format!(
+                "Save was made with a different version of graph '{}'",
+                state.graph_id
+            ));
+        }
+        if state.pc > program.opcodes.len() {
+            return Err(format!("Saved pc {} is out of range", state.pc));
+        }
+        if let Some(reason) = &state.yield_reason {
+            let at_yield = matches!(
+                program.opcodes.get(state.pc),
+                Some(Opcode::YIELD { wait_type }) if wait_type == reason
+            );
+            if !at_yield || !state.running {
+                return Err("Saved yield does not match the program".to_string());
+            }
+        }
+
+        self.pc = state.pc;
+        self.stack = state.stack;
+        self.variables = state.variables.into_iter().collect();
+        self.running = state.running;
+        self.yield_reason = state.yield_reason;
+        self.wait_remaining = state.wait_remaining;
+        self.current_node_id = state.current_node_id;
+        self.last_block = state.last_block;
+        self.log_event("State loaded");
+        Ok(())
     }
 
     pub fn is_running(&self) -> bool {
@@ -448,6 +536,55 @@ mod tests {
         );
         assert_eq!(m.get_variable("left_room"), Some(&json!(true)));
         assert!(m.stack.is_empty());
+    }
+
+    #[test]
+    fn save_and_load_resume_at_the_same_point() {
+        let mut m = machine_for(EXAMPLE);
+        m.set_variable("score", json!(3));
+        m.run_until_blocked(1000).unwrap();
+        m.resume(None).unwrap();
+        m.run_until_blocked(1000).unwrap();
+        assert_eq!(m.yield_reason(), Some("choice"));
+
+        // Round-trip through JSON, as a save file would
+        let saved = serde_json::to_string(&m.save_state().unwrap()).unwrap();
+
+        let mut restored = machine_for(EXAMPLE);
+        restored.load_state(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(restored.save_state().unwrap(), m.save_state().unwrap());
+
+        for vm in [&mut m, &mut restored] {
+            vm.resume(Some(json!(0))).unwrap();
+            vm.run_until_blocked(1000).unwrap();
+        }
+        assert_eq!(restored.current_node_id.as_deref(), Some("adventure_path"));
+        assert_eq!(restored.get_variable("score"), Some(&json!(3)));
+        assert_eq!(restored.save_state().unwrap(), m.save_state().unwrap());
+    }
+
+    #[test]
+    fn save_from_another_program_is_rejected() {
+        let mut m = machine_for(EXAMPLE);
+        m.run_until_blocked(1000).unwrap();
+        let mut saved = m.save_state().unwrap();
+
+        let mut other = machine_for(include_str!("../../examples/menu_loop.json"));
+        let before = other.save_state().unwrap();
+        assert!(other.load_state(saved.clone()).unwrap_err().contains("is for graph"));
+
+        // Same graph id, different bytecode
+        saved.fingerprint = "0".repeat(16);
+        let mut same_id = machine_for(EXAMPLE);
+        assert!(same_id.load_state(saved).unwrap_err().contains("different version"));
+        assert_eq!(other.save_state().unwrap(), before, "rejected load changed state");
+    }
+
+    #[test]
+    fn fingerprint_is_stable() {
+        let program = compile_graph(&parse_json_graph(EXAMPLE).unwrap()).unwrap();
+        assert_eq!(program.fingerprint(), compile_graph(&parse_json_graph(EXAMPLE).unwrap()).unwrap().fingerprint());
+        assert_eq!(program.fingerprint().len(), 16);
     }
 
     #[test]

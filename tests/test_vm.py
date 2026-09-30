@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from vn_engine import Engine, VMExecutor, _core
@@ -151,3 +153,35 @@ def test_tick_loop_counts_frames():
         assert loop.tick(False) is True
     assert loop.get_frame_count() == 3
     assert loop.fixed_delta() == pytest.approx(1 / 60)
+
+
+def test_save_and_load_game(engine, valid_graph_path, tmp_path):
+    engine.set_variable("affection", 5)
+    engine.run_until_yield()
+    engine.resume()
+    assert engine.run_until_yield()["yield_reason"] == "choice"
+    save = tmp_path / "slot1.json"
+    engine.save_game(str(save))
+
+    # A fresh engine picks up at the choice
+    other = Engine()
+    other.init()
+    other.load_graph(valid_graph_path)
+    other.load_game(str(save))
+    assert other.is_yielding
+    assert other.get_variable("affection") == 5
+    assert other.get_state()["last_block_args"] == {"choices": ["Start Adventure", "Exit"]}
+    assert play(other, [0]) == ["Your adventure begins..."]
+
+
+def test_save_from_other_graph_is_rejected(engine):
+    engine.run_until_yield()
+    state = engine.save_state()
+    other = Engine()
+    other.init()
+    other.load_graph(str(Path(__file__).parents[1] / "examples" / "menu_loop.json"))
+    with pytest.raises(ValueError, match="is for graph"):
+        other.load_state(state)
+    state["fingerprint"] = "0" * 16
+    with pytest.raises(ValueError, match="different version"):
+        engine.load_state(state)
