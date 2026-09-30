@@ -364,3 +364,26 @@ def test_rollback_and_backlog(engine):
     engine.run()
     engine.run_until_yield()
     assert engine.rollback() is None
+
+
+def test_scanned_assets_are_validated(tmp_path):
+    (tmp_path / "voice").mkdir()
+    (tmp_path / "voice" / "mia_001.ogg").write_bytes(b"")
+    (tmp_path / "bg.png").write_bytes(b"")
+    e = Engine()
+    e.init()
+    assert e.scan_assets(str(tmp_path)) == 2
+    assert e.asset_path("voice/mia_001") == str(tmp_path / "voice" / "mia_001.ogg")
+
+    def graph(voice):
+        return {"graph_id": "g", "version": "1.0",
+                "nodes": [{"id": "s", "type": "entry"},
+                          {"id": "v", "type": "PlayVoice", "parameters": {"voice_id": voice}}],
+                "edges": [{"from": "s", "to": "v"}]}
+
+    e.load_graph_from_dict(graph("voice/mia_001"))
+    with pytest.raises(ValueError, match="UNKNOWN_ASSET"):
+        e.load_graph_from_dict(graph("voice/mia_01"))
+    assert any("Did you mean 'voice/mia_001'?" in err for err in e.get_last_errors())
+    with pytest.raises(ValueError, match="WRONG_ASSET_TYPE"):
+        e.load_graph_from_dict(graph("bg"))

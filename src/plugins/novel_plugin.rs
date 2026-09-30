@@ -34,7 +34,7 @@ pub fn blocks() -> Vec<BlockDefinition> {
             vec!["exec".to_string()],
             vec!["next".to_string()],
             vec![
-                ParameterDefinition::new("voice_id", "string", None),
+                ParameterDefinition::new("voice_id", "asset:audio", None),
                 ParameterDefinition::new("volume", "number", Some(json!(1.0))),
             ],
             None,

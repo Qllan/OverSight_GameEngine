@@ -7,14 +7,16 @@ use pyo3::prelude::*;
 
 use crate::compiler::codegen::{compile_graph, CompiledProgram};
 use crate::compiler::graph_parser::{parse_json_graph, AstGraph};
-use crate::compiler::project::{compile_project, CompiledProject, ProjectError};
-use crate::compiler::validator::validate_graph;
+use crate::compiler::project::{compile_project_with_assets, CompiledProject, ProjectError};
+use crate::compiler::validator::validate_graph_with_assets;
+use crate::core::asset_manager::AssetManager;
 use crate::core::plugin_registry::{shared_registry, PluginRegistry};
 
 /// Main compiler class exposed to Python
 #[pyclass]
 pub struct GraphCompiler {
     registry: Py<PluginRegistry>,
+    assets: Option<Py<AssetManager>>,
     last_errors: Vec<String>,
 }
 
@@ -28,6 +30,7 @@ impl GraphCompiler {
     fn new(py: Python<'_>, registry: Option<Py<PluginRegistry>>) -> PyResult<Self> {
         Ok(GraphCompiler {
             registry: shared_registry(py, registry)?,
+            assets: None,
             last_errors: Vec::new(),
         })
     }
@@ -38,6 +41,12 @@ impl GraphCompiler {
         self.registry.clone_ref(py)
     }
 
+    /// Check asset references against `assets` (None turns the check off)
+    #[pyo3(signature = (assets))]
+    fn set_assets(&mut self, assets: Option<Py<AssetManager>>) {
+        self.assets = assets;
+    }
+
     /// Parse JSON string into AST graph
     fn parse(&self, json_str: &str) -> PyResult<AstGraph> {
         parse_json_graph(json_str).map_err(pyo3::exceptions::PyValueError::new_err)
@@ -45,7 +54,9 @@ impl GraphCompiler {
 
     /// Validate an AST graph, returns list of error messages
     fn validate(&mut self, py: Python<'_>, graph: &AstGraph) -> Vec<String> {
-        let errors = validate_graph(graph, &self.registry.bind(py).borrow());
+        let assets = self.assets.as_ref().map(|a| a.bind(py).borrow());
+        let errors =
+            validate_graph_with_assets(graph, &self.registry.bind(py).borrow(), assets.as_deref());
         self.last_errors = errors.iter().map(|e| e.message.clone()).collect();
         self.last_errors.clone()
     }
@@ -64,7 +75,8 @@ impl GraphCompiler {
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Parse error: {}", e)))?;
 
         let registry = self.registry.bind(py).borrow();
-        let errors = validate_graph(&ast, &registry);
+        let assets = self.assets.as_ref().map(|a| a.bind(py).borrow());
+        let errors = validate_graph_with_assets(&ast, &registry, assets.as_deref());
         if !errors.is_empty() {
             self.last_errors = errors
                 .iter()
@@ -100,7 +112,10 @@ impl GraphCompiler {
     /// compiler::project). Scene errors name the scene they are in.
     fn compile_project_json(&mut self, py: Python<'_>, json_str: &str) -> PyResult<CompiledProject> {
         self.last_errors.clear();
-        match compile_project(json_str, &self.registry.bind(py).borrow()) {
+        let assets = self.assets.as_ref().map(|a| a.bind(py).borrow());
+        let result =
+            compile_project_with_assets(json_str, &self.registry.bind(py).borrow(), assets.as_deref());
+        match result {
             Ok(project) => Ok(project),
             Err(ProjectError::Parse(message)) => Err(pyo3::exceptions::PyValueError::new_err(
                 format!("Parse error: {}", message),

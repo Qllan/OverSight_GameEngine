@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 
 use crate::compiler::codegen::{compile_graph, fnv_hex, scene_param, CompiledProgram};
 use crate::compiler::graph_parser::{parse_json_graph, AstGraph};
-use crate::compiler::validator::{validate_graph, ValidationError};
+use crate::compiler::validator::{validate_graph_with_assets, ValidationError};
+use crate::core::asset_manager::AssetManager;
 use crate::core::plugin_registry::PluginRegistry;
 use crate::pyjson::json_to_py;
 
@@ -112,6 +113,15 @@ fn error(kind: &str, message: String, graph: Option<&str>, node: Option<&str>, h
 
 /// Parse, validate and compile a project with inline scenes
 pub fn compile_project(json: &str, registry: &PluginRegistry) -> Result<CompiledProject, ProjectError> {
+    compile_project_with_assets(json, registry, None)
+}
+
+/// Like `compile_project`, also checking asset references
+pub fn compile_project_with_assets(
+    json: &str,
+    registry: &PluginRegistry,
+    assets: Option<&AssetManager>,
+) -> Result<CompiledProject, ProjectError> {
     let project: JsonProject =
         serde_json::from_str(json).map_err(|e| ProjectError::Parse(format!("Project: {}", e)))?;
 
@@ -131,7 +141,7 @@ pub fn compile_project(json: &str, registry: &PluginRegistry) -> Result<Compiled
             ));
             continue;
         }
-        for mut e in validate_graph(&graph, registry) {
+        for mut e in validate_graph_with_assets(&graph, registry, assets) {
             e.graph_id = Some(graph.graph_id.clone());
             errors.push(e);
         }

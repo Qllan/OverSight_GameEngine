@@ -10,6 +10,7 @@
 use crate::compiler::codegen::{node_waits_for_player, scene_param};
 use crate::compiler::expr::{parse_expr, parse_template};
 use crate::compiler::graph_parser::{AstGraph, AstNode};
+use crate::core::asset_manager::AssetManager;
 use crate::core::plugin_registry::{
     shared_registry, BlockDefinition, ParameterDefinition, PluginRegistry, BUILTIN_NODES,
 };
@@ -78,6 +79,16 @@ impl ValidationError {
 
 /// Validate the AST graph. Errors are returned in a deterministic order.
 pub fn validate_graph(graph: &AstGraph, registry: &PluginRegistry) -> Vec<ValidationError> {
+    validate_graph_with_assets(graph, registry, None)
+}
+
+/// Like `validate_graph`, and also checks asset references (parameters of
+/// type asset / asset:<kind>) against the registered assets
+pub fn validate_graph_with_assets(
+    graph: &AstGraph,
+    registry: &PluginRegistry,
+    assets: Option<&AssetManager>,
+) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
     // Check 1: Loops are allowed ("back to the menu"), but each must wait
@@ -171,7 +182,7 @@ pub fn validate_graph(graph: &AstGraph, registry: &PluginRegistry) -> Vec<Valida
             }
         }
 
-        validate_node_type(&node_id, node, registry, &mut errors);
+        validate_node_type(&node_id, node, registry, assets, &mut errors);
     }
 
     errors
@@ -182,6 +193,7 @@ fn validate_node_type(
     node_id: &str,
     node: &AstNode,
     registry: &PluginRegistry,
+    assets: Option<&AssetManager>,
     errors: &mut Vec<ValidationError>,
 ) {
     match node.node_type.as_str() {
@@ -245,7 +257,7 @@ fn validate_node_type(
             check_output_count(node_id, node, 1, errors);
         }
         block_type => match registry.block(block_type) {
-            Some(definition) => validate_block(node_id, node, definition, errors),
+            Some(definition) => validate_block(node_id, node, definition, assets, errors),
             None => {
                 let hint = match closest_name(block_type, registry) {
                     Some(name) => format!("Did you mean '{}'?", name),
@@ -298,11 +310,17 @@ fn validate_block(
     node_id: &str,
     node: &AstNode,
     definition: &BlockDefinition,
+    assets: Option<&AssetManager>,
     errors: &mut Vec<ValidationError>,
 ) {
     for param in &definition.parameters {
         match node.param(&param.name) {
-            Some(value) => check_param_type(node_id, param, &value, errors),
+            Some(value) => {
+                check_param_type(node_id, param, &value, errors);
+                if let (Some(assets), JsonValue::String(id)) = (assets, &value) {
+                    check_asset(node_id, param, id, assets, errors);
+                }
+            }
             None if param.default.is_none() => errors.push(ValidationError::new(
                 "MISSING_PARAMETER",
                 &format!("{} requires '{}' ({})", definition.block_type, param.name, param.param_type),
@@ -370,15 +388,61 @@ fn check_param_type(
     }
 }
 
-/// Closest known node type, for "did you mean" hints
-fn closest_name<'a>(name: &str, registry: &'a PluginRegistry) -> Option<&'a str> {
-    let candidates = BUILTIN_NODES.iter().copied().chain(registry.block_types());
+/// Asset parameters must name a registered asset of the right kind
+fn check_asset(
+    node_id: &str,
+    param: &ParameterDefinition,
+    id: &str,
+    assets: &AssetManager,
+    errors: &mut Vec<ValidationError>,
+) {
+    let Some(kind) = param.param_type.strip_prefix("asset") else {
+        return;
+    };
+    let kind = kind.trim_start_matches(':');
+    match assets.asset(id) {
+        None => {
+            let hint = closest(id, assets.ids())
+                .map(|c| format!("Did you mean '{}'?", c))
+                .unwrap_or_else(|| format!("Add the file under {}", assets.base_path()));
+            errors.push(ValidationError::new(
+                "UNKNOWN_ASSET",
+                &format!("'{}' refers to unknown asset '{}'", param.name, id),
+                Some(node_id),
+                Some(&hint),
+            ));
+        }
+        Some(info) if !kind.is_empty() && info.asset_type.kind() != kind => {
+            errors.push(ValidationError::new(
+                "WRONG_ASSET_TYPE",
+                &format!(
+                    "'{}' needs an {} asset, but '{}' is {}",
+                    param.name,
+                    kind,
+                    id,
+                    info.asset_type.kind()
+                ),
+                Some(node_id),
+                None,
+            ));
+        }
+        Some(_) => {}
+    }
+}
+
+/// Closest candidate by edit distance, for "did you mean" hints
+fn closest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<&'a str> {
     let lower = name.to_lowercase();
     candidates
         .map(|c| (edit_distance(&lower, &c.to_lowercase()), c))
         .filter(|(d, c)| *d <= (c.len() / 3).max(2))
         .min_by_key(|(d, _)| *d)
         .map(|(_, c)| c)
+}
+
+/// Closest known node type, for "did you mean" hints
+fn closest_name<'a>(name: &str, registry: &'a PluginRegistry) -> Option<&'a str> {
+    closest(name, BUILTIN_NODES.iter().copied().chain(registry.block_types()))
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -554,20 +618,27 @@ fn validate_branch(node_id: &str, node: &AstNode, errors: &mut Vec<ValidationErr
 #[pyclass]
 pub struct GraphValidator {
     registry: Py<PluginRegistry>,
+    assets: Option<Py<AssetManager>>,
 }
 
 #[pymethods]
 impl GraphValidator {
-    /// Validate against `registry`, or the default blocks when none is given
+    /// Validate against `registry` (default blocks when None); asset
+    /// references are checked when `assets` is given
     #[new]
-    #[pyo3(signature = (registry = None))]
-    fn new(py: Python<'_>, registry: Option<Py<PluginRegistry>>) -> PyResult<Self> {
-        Ok(GraphValidator { registry: shared_registry(py, registry)? })
+    #[pyo3(signature = (registry = None, assets = None))]
+    fn new(
+        py: Python<'_>,
+        registry: Option<Py<PluginRegistry>>,
+        assets: Option<Py<AssetManager>>,
+    ) -> PyResult<Self> {
+        Ok(GraphValidator { registry: shared_registry(py, registry)?, assets })
     }
 
     /// Validate a graph and return list of errors
     fn validate(&self, py: Python<'_>, graph: &AstGraph) -> Vec<ValidationError> {
-        validate_graph(graph, &self.registry.bind(py).borrow())
+        let assets = self.assets.as_ref().map(|a| a.bind(py).borrow());
+        validate_graph_with_assets(graph, &self.registry.bind(py).borrow(), assets.as_deref())
     }
 
     /// Check if graph is valid (no errors)
@@ -731,5 +802,37 @@ mod tests {
         assert_eq!(closest_name("SetVar", &registry), None);
         assert_eq!(closest_name("Iff", &registry), Some("If"));
         assert_eq!(edit_distance("kitten", "sitting"), 3);
+    }
+
+    #[test]
+    fn asset_references_are_checked_when_assets_are_known() {
+        use crate::core::asset_manager::{AssetManager, AssetType};
+        let graph = parse_json_graph(
+            r#"{"graph_id":"g","version":"1.0",
+                "nodes":[{"id":"s","type":"entry"},
+                         {"id":"typo","type":"PlayVoice","parameters":{"voice_id":"voice/mai"}},
+                         {"id":"wrong","type":"PlayVoice","parameters":{"voice_id":"bg/park"}},
+                         {"id":"ok","type":"PlayVoice","parameters":{"voice_id":"voice/mia"}}],
+                "edges":[{"from":"s","to":"typo"},{"from":"typo","to":"wrong"},{"from":"wrong","to":"ok"}]}"#,
+        )
+        .unwrap();
+        let registry = crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap();
+        assert!(validate_graph(&graph, &registry).is_empty(), "no asset checks without assets");
+
+        let mut assets = AssetManager::new();
+        assets.register_asset("voice/mia", &AssetType::Audio, "voice/mia.ogg").unwrap();
+        assets.register_asset("bg/park", &AssetType::Image, "bg/park.png").unwrap();
+        let found: Vec<(String, String, Option<String>)> =
+            validate_graph_with_assets(&graph, &registry, Some(&assets))
+                .into_iter()
+                .map(|e| (e.error_type, e.node_id.unwrap_or_default(), e.hint))
+                .collect();
+        assert_eq!(
+            found,
+            vec![
+                ("UNKNOWN_ASSET".to_string(), "typo".to_string(), Some("Did you mean 'voice/mia'?".to_string())),
+                ("WRONG_ASSET_TYPE".to_string(), "wrong".to_string(), None),
+            ]
+        );
     }
 }

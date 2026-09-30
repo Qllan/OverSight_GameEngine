@@ -113,6 +113,26 @@ class Engine:
         self._require_init()
         return self._asset_manager
 
+    def scan_assets(self, directory: str) -> int:
+        """
+        Register every asset file under `directory` (ids are relative
+        paths without extension, e.g. "voice/mia_001") and from now on
+        check asset references when graphs are loaded.
+
+        Returns:
+            Number of assets found
+        """
+        self._require_init()
+        self._asset_manager.set_base_path(directory)
+        count = self._asset_manager.scan()
+        self._compiler.set_assets(self._asset_manager)
+        return count
+
+    def asset_path(self, asset_id: str) -> Optional[str]:
+        """Full path of a registered asset, or None if it is unknown."""
+        self._require_init()
+        return self._asset_manager.resolve_path(asset_id)
+
     @property
     def tick_loop(self) -> "_core.FixedTickLoop":
         self._require_init()
