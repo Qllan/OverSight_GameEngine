@@ -157,7 +157,9 @@ fn tokenize(src: &str) -> Result<Vec<(Token, usize)>, String> {
                             Some('n') => '\n',
                             Some('t') => '\t',
                             Some(&other) => other,
-                            None => return Err(format!("unterminated string starting at {}", start)),
+                            None => {
+                                return Err(format!("unterminated string starting at {}", start))
+                            }
                         };
                         text.push(escaped);
                         i += 2;
@@ -174,7 +176,9 @@ fn tokenize(src: &str) -> Result<Vec<(Token, usize)>, String> {
                 && (chars[i].is_alphanumeric()
                     || chars[i] == '_'
                     || (chars[i] == '.'
-                        && chars.get(i + 1).is_some_and(|n| n.is_alphabetic() || *n == '_')))
+                        && chars
+                            .get(i + 1)
+                            .is_some_and(|n| n.is_alphabetic() || *n == '_')))
             {
                 i += 1;
             }
@@ -277,16 +281,21 @@ impl Parser {
                 "true" => Ok(Expr::Literal(JsonValue::Bool(true))),
                 "false" => Ok(Expr::Literal(JsonValue::Bool(false))),
                 "null" => Ok(Expr::Literal(JsonValue::Null)),
-                "not" => Ok(Expr::Unary(UnaryOp::Not, Box::new(self.expression(PREC_NOT)?))),
+                "not" => Ok(Expr::Unary(
+                    UnaryOp::Not,
+                    Box::new(self.expression(PREC_NOT)?),
+                )),
                 "and" | "or" => Err(format!("unexpected '{}' at {}", word, at)),
                 _ => Ok(Expr::Var(word)),
             },
-            Some(Token::Op("!")) => {
-                Ok(Expr::Unary(UnaryOp::Not, Box::new(self.expression(PREC_NOT)?)))
-            }
-            Some(Token::Op("-")) => {
-                Ok(Expr::Unary(UnaryOp::Neg, Box::new(self.expression(PREC_UNARY)?)))
-            }
+            Some(Token::Op("!")) => Ok(Expr::Unary(
+                UnaryOp::Not,
+                Box::new(self.expression(PREC_NOT)?),
+            )),
+            Some(Token::Op("-")) => Ok(Expr::Unary(
+                UnaryOp::Neg,
+                Box::new(self.expression(PREC_UNARY)?),
+            )),
             Some(Token::LParen) => {
                 let inner = self.expression(0)?;
                 match self.next() {
@@ -323,7 +332,11 @@ pub fn parse_expr(src: &str) -> Result<Expr, String> {
     if tokens.is_empty() {
         return Err("empty expression".to_string());
     }
-    let mut parser = Parser { tokens, pos: 0, len: src.chars().count() };
+    let mut parser = Parser {
+        tokens,
+        pos: 0,
+        len: src.chars().count(),
+    };
     let expr = parser.expression(0)?;
     if parser.pos < parser.tokens.len() {
         return Err(format!("unexpected input at {}", parser.position()));
@@ -432,10 +445,22 @@ mod tests {
     #[test]
     fn literals_and_aliases() {
         assert_eq!(parse_expr("1.5").unwrap(), Expr::Literal(json!(1.5)));
-        assert_eq!(parse_expr("'it\\'s'").unwrap(), Expr::Literal(json!("it's")));
-        assert_eq!(parse_expr("a && !b").unwrap(), parse_expr("a and not b").unwrap());
-        assert_eq!(parse_expr("persistent.ending").unwrap(), Expr::Var("persistent.ending".into()));
-        assert_eq!(parse_expr("-(x)").unwrap(), Expr::Unary(UnaryOp::Neg, var("x")));
+        assert_eq!(
+            parse_expr("'it\\'s'").unwrap(),
+            Expr::Literal(json!("it's"))
+        );
+        assert_eq!(
+            parse_expr("a && !b").unwrap(),
+            parse_expr("a and not b").unwrap()
+        );
+        assert_eq!(
+            parse_expr("persistent.ending").unwrap(),
+            Expr::Var("persistent.ending".into())
+        );
+        assert_eq!(
+            parse_expr("-(x)").unwrap(),
+            Expr::Unary(UnaryOp::Neg, var("x"))
+        );
     }
 
     #[test]
@@ -443,7 +468,9 @@ mod tests {
         assert!(parse_expr("a = 1").unwrap_err().contains("'=='"));
         assert!(parse_expr("(a + 1").unwrap_err().contains("missing ')'"));
         assert!(parse_expr("a +").unwrap_err().contains("end of expression"));
-        assert!(parse_expr("a b").unwrap_err().contains("unexpected input at 2"));
+        assert!(parse_expr("a b")
+            .unwrap_err()
+            .contains("unexpected input at 2"));
         assert!(parse_expr("").is_err());
         assert!(parse_expr("\"open").unwrap_err().contains("unterminated"));
     }
@@ -455,8 +482,14 @@ mod tests {
 
     #[test]
     fn templates() {
-        assert_eq!(parse_template("plain").unwrap(), vec![TemplatePart::Text("plain".into())]);
-        assert_eq!(parse_template("").unwrap(), vec![TemplatePart::Text("".into())]);
+        assert_eq!(
+            parse_template("plain").unwrap(),
+            vec![TemplatePart::Text("plain".into())]
+        );
+        assert_eq!(
+            parse_template("").unwrap(),
+            vec![TemplatePart::Text("".into())]
+        );
         assert_eq!(
             parse_template("Hi, {name}! {{x}}").unwrap(),
             vec![

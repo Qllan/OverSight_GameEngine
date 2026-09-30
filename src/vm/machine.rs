@@ -135,7 +135,10 @@ fn op_kind(op: &Opcode) -> String {
 /// Opcode indices that belong to a node (nodes are emitted contiguously)
 fn node_range(program: &CompiledProgram, node_id: &str) -> Option<std::ops::Range<usize>> {
     let start = program.node_map.iter().position(|n| n == node_id)?;
-    let len = program.node_map[start..].iter().take_while(|n| *n == node_id).count();
+    let len = program.node_map[start..]
+        .iter()
+        .take_while(|n| *n == node_id)
+        .count();
     Some(start..start + len)
 }
 
@@ -148,7 +151,12 @@ fn anchor_for(program: &CompiledProgram, scene: &str, pc: usize) -> Option<Ancho
         .iter()
         .filter(|o| op_kind(o) == kind)
         .count();
-    Some(Anchor { scene: scene.to_string(), node_id: node_id.clone(), kind, occurrence })
+    Some(Anchor {
+        scene: scene.to_string(),
+        node_id: node_id.clone(),
+        kind,
+        occurrence,
+    })
 }
 
 fn resolve_anchor(program: &CompiledProgram, anchor: &Anchor) -> Option<usize> {
@@ -290,7 +298,9 @@ impl Machine {
                 );
                 self.exec.yield_seen = !self.persistent.seen.insert(place);
                 self.log_event(&format!("Yielded: {}", reason));
-                self.events.push(Event::YieldRequest { reason: reason.clone() });
+                self.events.push(Event::YieldRequest {
+                    reason: reason.clone(),
+                });
                 self.exec.yield_reason = Some(reason);
                 self.record_yield();
             }
@@ -319,7 +329,9 @@ impl Machine {
                         return_pc: self.exec.pc + 1,
                     });
                 } else {
-                    self.events.push(Event::GraphEnd { graph_id: self.exec.scene.clone() });
+                    self.events.push(Event::GraphEnd {
+                        graph_id: self.exec.scene.clone(),
+                    });
                 }
                 self.enter_scene(scene);
             }
@@ -396,7 +408,9 @@ impl Machine {
             self.stop();
             return;
         };
-        self.events.push(Event::GraphEnd { graph_id: self.exec.scene.clone() });
+        self.events.push(Event::GraphEnd {
+            graph_id: self.exec.scene.clone(),
+        });
         self.exec.scene = frame.scene;
         self.exec.pc = frame.return_pc;
         // Back inside the CallScene node; don't report entering it again
@@ -462,7 +476,9 @@ impl Machine {
         self.exec.wait_frames = 0;
         self.exec.call_stack.clear();
         self.log_event("VM stopped");
-        self.events.push(Event::GraphEnd { graph_id: self.exec.scene.clone() });
+        self.events.push(Event::GraphEnd {
+            graph_id: self.exec.scene.clone(),
+        });
     }
 
     /// Clear execution state (keeps the loaded project and persistent data)
@@ -478,7 +494,10 @@ impl Machine {
     pub fn save_state(&self) -> Result<SaveState, String> {
         let project = self.project.as_ref().ok_or("No program loaded")?;
         let anchor = |scene: &str, pc: usize| {
-            project.scenes.get(scene).and_then(|p| anchor_for(p, scene, pc))
+            project
+                .scenes
+                .get(scene)
+                .and_then(|p| anchor_for(p, scene, pc))
         };
         Ok(SaveState {
             format: SAVE_FORMAT,
@@ -521,12 +540,21 @@ impl Machine {
         };
 
         let scene_len = |scene: &str| project.scenes.get(scene).map(|p| p.opcodes.len());
-        let positions = std::iter::once((state.scene.as_str(), state.pc))
-            .chain(state.call_stack.iter().map(|f| (f.scene.as_str(), f.return_pc)));
+        let positions = std::iter::once((state.scene.as_str(), state.pc)).chain(
+            state
+                .call_stack
+                .iter()
+                .map(|f| (f.scene.as_str(), f.return_pc)),
+        );
         for (scene, pc) in positions {
             match scene_len(scene) {
                 Some(len) if pc <= len => {}
-                Some(_) => return Err(format!("Saved position {} in '{}' is out of range", pc, scene)),
+                Some(_) => {
+                    return Err(format!(
+                        "Saved position {} in '{}' is out of range",
+                        pc, scene
+                    ))
+                }
                 None => return Err(format!("Saved scene '{}' is not in the project", scene)),
             }
         }
@@ -563,7 +591,10 @@ impl Machine {
                     .to_string(),
             );
         }
-        let relocate = |scene: &str, anchor: &Option<Anchor>, offset: usize| -> Result<usize, String> {
+        let relocate = |scene: &str,
+                        anchor: &Option<Anchor>,
+                        offset: usize|
+         -> Result<usize, String> {
             let program = project
                 .scenes
                 .get(scene)
@@ -648,12 +679,14 @@ impl Machine {
             }
 
             Opcode::VAR_SET { name } => {
-                let value = self
-                    .exec
-                    .stack
-                    .pop()
-                    .ok_or_else(|| format!("VAR_SET: Stack underflow for variable '{}'", name))?;
-                self.events.push(Event::VariableChanged { name: name.clone(), value: value.clone() });
+                let value =
+                    self.exec.stack.pop().ok_or_else(|| {
+                        format!("VAR_SET: Stack underflow for variable '{}'", name)
+                    })?;
+                self.events.push(Event::VariableChanged {
+                    name: name.clone(),
+                    value: value.clone(),
+                });
                 self.set_variable(name, value);
                 Ok(Flow::Next)
             }
@@ -673,7 +706,12 @@ impl Machine {
             }
 
             Opcode::DUP => {
-                let top = self.exec.stack.last().cloned().ok_or("DUP: Stack underflow")?;
+                let top = self
+                    .exec
+                    .stack
+                    .last()
+                    .cloned()
+                    .ok_or("DUP: Stack underflow")?;
                 self.exec.stack.push(top);
                 Ok(Flow::Next)
             }
@@ -716,7 +754,9 @@ impl Machine {
 
             Opcode::NOT => {
                 let value = self.pop(opcode)?;
-                self.exec.stack.push(JsonValue::Bool(!values::truthy(&value)));
+                self.exec
+                    .stack
+                    .push(JsonValue::Bool(!values::truthy(&value)));
                 Ok(Flow::Next)
             }
 
@@ -735,12 +775,20 @@ impl Machine {
 
             Opcode::IF_JUMP { target } => {
                 let condition = self.pop(opcode)?;
-                Ok(if values::truthy(&condition) { Flow::Jump(*target) } else { Flow::Next })
+                Ok(if values::truthy(&condition) {
+                    Flow::Jump(*target)
+                } else {
+                    Flow::Next
+                })
             }
 
             Opcode::JUMP_IF_FALSE { target } => {
                 let condition = self.pop(opcode)?;
-                Ok(if values::truthy(&condition) { Flow::Next } else { Flow::Jump(*target) })
+                Ok(if values::truthy(&condition) {
+                    Flow::Next
+                } else {
+                    Flow::Jump(*target)
+                })
             }
 
             Opcode::JUMP { target } => Ok(Flow::Jump(*target)),
@@ -749,13 +797,15 @@ impl Machine {
 
             Opcode::WAIT { frames } => Ok(Flow::Wait(*frames)),
 
-            Opcode::JUMP_SCENE { scene } => {
-                Ok(Flow::EnterScene { scene: scene.clone(), call: false })
-            }
+            Opcode::JUMP_SCENE { scene } => Ok(Flow::EnterScene {
+                scene: scene.clone(),
+                call: false,
+            }),
 
-            Opcode::CALL_SCENE { scene } => {
-                Ok(Flow::EnterScene { scene: scene.clone(), call: true })
-            }
+            Opcode::CALL_SCENE { scene } => Ok(Flow::EnterScene {
+                scene: scene.clone(),
+                call: true,
+            }),
 
             Opcode::CALL_BLOCK { block_type, args } => {
                 if self.exec.stack.len() < args.len() {
@@ -835,7 +885,11 @@ mod tests {
     const EXAMPLE: &str = include_str!("../../examples/simple_novel.json");
 
     fn machine_for(json: &str) -> Machine {
-        let program = compile_graph(&parse_json_graph(json).unwrap(), &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).unwrap();
+        let program = compile_graph(
+            &parse_json_graph(json).unwrap(),
+            &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap(),
+        )
+        .unwrap();
         let mut m = Machine::new();
         m.load(program);
         m.start().unwrap();
@@ -846,7 +900,9 @@ mod tests {
         events
             .iter()
             .filter_map(|e| match e {
-                Event::BlockCall { block_type, args, .. } => Some((block_type.clone(), args.clone())),
+                Event::BlockCall {
+                    block_type, args, ..
+                } => Some((block_type.clone(), args.clone())),
                 _ => None,
             })
             .collect()
@@ -859,7 +915,10 @@ mod tests {
         assert_eq!(m.yield_reason(), Some("input"));
         assert_eq!(
             m.exec.last_block,
-            Some(("ShowText".into(), json!({"text": "Welcome to the Visual Novel!", "speaker": "Narrator"})))
+            Some((
+                "ShowText".into(),
+                json!({"text": "Welcome to the Visual Novel!", "speaker": "Narrator"})
+            ))
         );
 
         m.resume(None).unwrap();
@@ -870,7 +929,10 @@ mod tests {
         m.run_until_blocked(1000).unwrap();
         assert_eq!(m.yield_reason(), Some("input"));
         assert_eq!(m.exec.current_node_id.as_deref(), Some("adventure_path"));
-        assert_eq!(m.exec.last_block.as_ref().unwrap().1["text"], "Your adventure begins...");
+        assert_eq!(
+            m.exec.last_block.as_ref().unwrap().1["text"],
+            "Your adventure begins..."
+        );
 
         m.resume(None).unwrap();
         m.run_until_blocked(1000).unwrap();
@@ -901,7 +963,10 @@ mod tests {
     fn choice_resume_requires_value() {
         let mut m = machine_for(EXAMPLE);
         m.run_until_blocked(1000).unwrap();
-        assert!(m.resume(Some(json!(0))).is_err(), "input yield takes no value");
+        assert!(
+            m.resume(Some(json!(0))).is_err(),
+            "input yield takes no value"
+        );
         m.resume(None).unwrap();
         m.run_until_blocked(1000).unwrap();
         assert!(m.resume(None).is_err());
@@ -966,14 +1031,19 @@ mod tests {
         let saved = serde_json::to_string(&m.save_state().unwrap()).unwrap();
 
         let mut restored = machine_for(EXAMPLE);
-        restored.load_state(serde_json::from_str(&saved).unwrap()).unwrap();
+        restored
+            .load_state(serde_json::from_str(&saved).unwrap())
+            .unwrap();
         assert_eq!(restored.save_state().unwrap(), m.save_state().unwrap());
 
         for vm in [&mut m, &mut restored] {
             vm.resume(Some(json!(0))).unwrap();
             vm.run_until_blocked(1000).unwrap();
         }
-        assert_eq!(restored.exec.current_node_id.as_deref(), Some("adventure_path"));
+        assert_eq!(
+            restored.exec.current_node_id.as_deref(),
+            Some("adventure_path")
+        );
         assert_eq!(restored.get_variable("score"), Some(&json!(3)));
         assert_eq!(restored.save_state().unwrap(), m.save_state().unwrap());
     }
@@ -986,8 +1056,15 @@ mod tests {
 
         let mut other = machine_for(include_str!("../../examples/menu_loop.json"));
         let before = other.save_state().unwrap();
-        assert!(other.load_state(saved).unwrap_err().contains("is for project"));
-        assert_eq!(other.save_state().unwrap(), before, "rejected load changed state");
+        assert!(other
+            .load_state(saved)
+            .unwrap_err()
+            .contains("is for project"));
+        assert_eq!(
+            other.save_state().unwrap(),
+            before,
+            "rejected load changed state"
+        );
     }
 
     /// The example at its choice, saved, then loaded into an edited version
@@ -1043,8 +1120,20 @@ mod tests {
 
     #[test]
     fn fingerprint_is_stable() {
-        let program = compile_graph(&parse_json_graph(EXAMPLE).unwrap(), &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).unwrap();
-        assert_eq!(program.fingerprint(), compile_graph(&parse_json_graph(EXAMPLE).unwrap(), &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).unwrap().fingerprint());
+        let program = compile_graph(
+            &parse_json_graph(EXAMPLE).unwrap(),
+            &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            program.fingerprint(),
+            compile_graph(
+                &parse_json_graph(EXAMPLE).unwrap(),
+                &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()
+            )
+            .unwrap()
+            .fingerprint()
+        );
         assert_eq!(program.fingerprint().len(), 16);
     }
 
@@ -1165,7 +1254,11 @@ mod tests {
         m.run_until_blocked(1000).unwrap();
         assert_eq!(m.exec.wait_frames, 3);
         m.step().unwrap();
-        assert_eq!((m.exec.pc, m.exec.wait_frames), (1, 3), "step() must not advance a wait");
+        assert_eq!(
+            (m.exec.pc, m.exec.wait_frames),
+            (1, 3),
+            "step() must not advance a wait"
+        );
         m.frame(1000).unwrap();
         m.frame(1000).unwrap();
         assert!(m.is_running());
@@ -1233,7 +1326,10 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(scenes, vec!["+town", "+shop", "-shop", "-town", "+ending", "-ending"]);
+        assert_eq!(
+            scenes,
+            vec!["+town", "+shop", "-shop", "-town", "+ending", "-ending"]
+        );
     }
 
     #[test]
@@ -1242,7 +1338,10 @@ mod tests {
         m.run_until_blocked(1000).unwrap();
         m.resume(None).unwrap();
         m.run_until_blocked(1000).unwrap();
-        assert_eq!((m.exec.scene.as_str(), m.exec.call_stack.len()), ("shop", 1));
+        assert_eq!(
+            (m.exec.scene.as_str(), m.exec.call_stack.len()),
+            ("shop", 1)
+        );
 
         let saved = m.save_state().unwrap();
         let mut restored = project_machine("town", &[TOWN, SHOP, ENDING]);
@@ -1250,7 +1349,10 @@ mod tests {
         restored.resume(None).unwrap();
         restored.run_until_blocked(1000).unwrap();
         assert_eq!(restored.exec.scene, "town");
-        assert_eq!(restored.exec.last_block.as_ref().unwrap().1["text"], "Back with 6 gold.");
+        assert_eq!(
+            restored.exec.last_block.as_ref().unwrap().1["text"],
+            "Back with 6 gold."
+        );
     }
 
     #[test]
@@ -1268,7 +1370,10 @@ mod tests {
             json!({"id": "extra", "type": "ShowText", "parameters": {"text": "A new line."}}),
         );
         town["edges"][1] = json!({"from": "hello", "to": "extra"});
-        town["edges"].as_array_mut().unwrap().push(json!({"from": "extra", "to": "shop"}));
+        town["edges"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"from": "extra", "to": "shop"}));
         let json = format!(
             r#"{{"project_id":"p","start":"town","variables":{{"gold":10,"reputation":1}},"scenes":[{},{},{}]}}"#,
             town, SHOP, ENDING
@@ -1280,7 +1385,10 @@ mod tests {
 
         restored.resume(None).unwrap();
         restored.run_until_blocked(1000).unwrap();
-        assert_eq!(restored.exec.last_block.as_ref().unwrap().1["text"], "Back with 6 gold.");
+        assert_eq!(
+            restored.exec.last_block.as_ref().unwrap().1["text"],
+            "Back with 6 gold."
+        );
         assert_eq!(restored.get_variable("reputation"), Some(&json!(1)));
     }
 
@@ -1308,7 +1416,10 @@ mod tests {
             m.resume(None).unwrap();
             m.run_until_blocked(100).unwrap();
         }
-        assert_eq!(texts, vec![json!("Endings seen: 0"), json!("Endings seen: 1")]);
+        assert_eq!(
+            texts,
+            vec![json!("Endings seen: 0"), json!("Endings seen: 1")]
+        );
         assert_eq!(seen, vec![false, true], "second visit is marked as seen");
 
         // Loading an old save does not roll persistent data back
@@ -1343,7 +1454,10 @@ mod tests {
         // Choose differently this time
         m.resume(Some(json!(0))).unwrap();
         m.run_until_blocked(1000).unwrap();
-        assert_eq!(m.exec.last_block.as_ref().unwrap().1["text"], "She smiles. (affection: 3)");
+        assert_eq!(
+            m.exec.last_block.as_ref().unwrap().1["text"],
+            "She smiles. (affection: 3)"
+        );
 
         // smile -> choice -> greeting
         assert!(m.rollback());
@@ -1366,8 +1480,12 @@ mod tests {
         m.set_rollback_limit(2);
         m.run_until_blocked(1000).unwrap();
         for _ in 0..5 {
-            m.resume(if m.yield_reason() == Some("choice") { Some(json!(0)) } else { None })
-                .unwrap();
+            m.resume(if m.yield_reason() == Some("choice") {
+                Some(json!(0))
+            } else {
+                None
+            })
+            .unwrap();
             m.run_until_blocked(1000).unwrap();
         }
         assert!(m.rollback());
@@ -1400,13 +1518,21 @@ mod tests {
         let mut m = Machine::new();
         m.load(CompiledProgram {
             graph_id: "e".into(),
-            opcodes: vec![Opcode::VAR_GET { name: "missing".into() }, Opcode::END],
+            opcodes: vec![
+                Opcode::VAR_GET {
+                    name: "missing".into(),
+                },
+                Opcode::END,
+            ],
             node_map: vec!["n".into(), "n".into()],
             node_types: HashMap::new(),
         });
         m.start().unwrap();
         assert!(m.step().is_err());
         assert!(!m.is_running());
-        assert!(m.take_events().iter().any(|e| matches!(e, Event::Error { .. })));
+        assert!(m
+            .take_events()
+            .iter()
+            .any(|e| matches!(e, Event::Error { .. })));
     }
 }

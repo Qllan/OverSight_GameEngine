@@ -64,10 +64,17 @@ impl VMExecutor {
     /// Does not execute anything by itself; call step()/run_until_yield().
     /// Returns None if the VM was not yielding.
     #[pyo3(signature = (choice = None))]
-    fn resume(slf: &Bound<'_, Self>, choice: Option<&Bound<'_, PyAny>>) -> PyResult<Option<PyVMState>> {
+    fn resume(
+        slf: &Bound<'_, Self>,
+        choice: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Option<PyVMState>> {
         let value = choice.map(py_to_json).transpose()?;
         let resumed = Self::with_machine(slf, |m| m.resume(value))?;
-        Ok(if resumed { Some(slf.borrow().get_state()) } else { None })
+        Ok(if resumed {
+            Some(slf.borrow().get_state())
+        } else {
+            None
+        })
     }
 
     /// Step until the VM yields or stops. Returns the state, or None if stopped.

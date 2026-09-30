@@ -1,5 +1,5 @@
 //! Visual Novel Engine - Rust Core
-//! 
+//!
 //! This crate provides the core functionality for the VN Engine:
 //! - EventBus: Publish/subscribe event system
 //! - PluginRegistry: Runtime plugin discovery and management
@@ -8,11 +8,11 @@
 //! - GraphCompiler: JSON → AST → Opcodes compilation
 //! - VM: Stack-based bytecode executor
 
-pub mod core;
 pub mod compiler;
-pub mod vm;
+pub mod core;
 pub mod plugins;
 pub mod pyjson;
+pub mod vm;
 
 use pyo3::prelude::*;
 

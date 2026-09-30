@@ -275,7 +275,12 @@ fn validate_node_type(
 }
 
 /// A block may have as many outputs as its definition declares (0 or 1)
-fn check_output_count(node_id: &str, node: &AstNode, allowed: usize, errors: &mut Vec<ValidationError>) {
+fn check_output_count(
+    node_id: &str,
+    node: &AstNode,
+    allowed: usize,
+    errors: &mut Vec<ValidationError>,
+) {
     let found = node.successors.len();
     if found <= allowed {
         if found == 0 && allowed > 0 {
@@ -287,7 +292,10 @@ fn check_output_count(node_id: &str, node: &AstNode, allowed: usize, errors: &mu
     let (kind, message) = if allowed == 0 {
         (
             "TOO_MANY_OUTPUTS",
-            format!("'{}' ends the flow and cannot have outputs, found {}", node.node_type, found),
+            format!(
+                "'{}' ends the flow and cannot have outputs, found {}",
+                node.node_type, found
+            ),
         )
     } else {
         (
@@ -323,7 +331,10 @@ fn validate_block(
             }
             None if param.default.is_none() => errors.push(ValidationError::new(
                 "MISSING_PARAMETER",
-                &format!("{} requires '{}' ({})", definition.block_type, param.name, param.param_type),
+                &format!(
+                    "{} requires '{}' ({})",
+                    definition.block_type, param.name, param.param_type
+                ),
                 Some(node_id),
                 Some("Set the parameter on the node."),
             )),
@@ -338,7 +349,11 @@ fn validate_block(
         .collect();
     unknown.sort();
     for name in unknown {
-        let known: Vec<&str> = definition.parameters.iter().map(|p| p.name.as_str()).collect();
+        let known: Vec<&str> = definition
+            .parameters
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
         errors.push(ValidationError::new(
             "UNKNOWN_PARAMETER",
             &format!("{} has no parameter '{}'", definition.block_type, name),
@@ -373,7 +388,10 @@ fn check_param_type(
     if !type_matches(&param.param_type, value) {
         errors.push(ValidationError::new(
             "INVALID_PARAMETER",
-            &format!("'{}' must be {}, got {}", param.name, param.param_type, value),
+            &format!(
+                "'{}' must be {}, got {}",
+                param.name, param.param_type, value
+            ),
             Some(node_id),
             None,
         ));
@@ -442,7 +460,10 @@ fn closest<'a>(name: &str, candidates: impl Iterator<Item = &'a str>) -> Option<
 
 /// Closest known node type, for "did you mean" hints
 fn closest_name<'a>(name: &str, registry: &'a PluginRegistry) -> Option<&'a str> {
-    closest(name, BUILTIN_NODES.iter().copied().chain(registry.block_types()))
+    closest(
+        name,
+        BUILTIN_NODES.iter().copied().chain(registry.block_types()),
+    )
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -547,7 +568,10 @@ fn validate_if(node_id: &str, node: &AstNode, errors: &mut Vec<ValidationError>)
     {
         errors.push(ValidationError::new(
             "INVALID_PORT",
-            &format!("If output ports must be 0 and 1, found {:?}", node.successor_ports),
+            &format!(
+                "If output ports must be 0 and 1, found {:?}",
+                node.successor_ports
+            ),
             Some(node_id),
             Some("Connect output 0 for true and output 1 for false."),
         ));
@@ -632,7 +656,10 @@ impl GraphValidator {
         registry: Option<Py<PluginRegistry>>,
         assets: Option<Py<AssetManager>>,
     ) -> PyResult<Self> {
-        Ok(GraphValidator { registry: shared_registry(py, registry)?, assets })
+        Ok(GraphValidator {
+            registry: shared_registry(py, registry)?,
+            assets,
+        })
     }
 
     /// Validate a graph and return list of errors
@@ -654,7 +681,13 @@ mod tests {
 
     fn error_types(json: &str) -> Vec<String> {
         let graph = parse_json_graph(json).unwrap();
-        validate_graph(&graph, &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).into_iter().map(|e| e.error_type).collect()
+        validate_graph(
+            &graph,
+            &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap(),
+        )
+        .into_iter()
+        .map(|e| e.error_type)
+        .collect()
     }
 
     #[test]
@@ -711,10 +744,16 @@ mod tests {
                 "edges":[{"from":"s","to":"a"},{"from":"a","to":"b"},{"from":"b","to":"a"}]}"#,
         )
         .unwrap();
-        let errors = validate_graph(&graph, &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap());
+        let errors = validate_graph(
+            &graph,
+            &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap(),
+        );
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].error_type, "BUSY_LOOP");
-        assert_eq!(errors[0].message, "Loop never waits for the player: a -> b -> a");
+        assert_eq!(
+            errors[0].message,
+            "Loop never waits for the player: a -> b -> a"
+        );
     }
 
     #[test]
@@ -735,10 +774,13 @@ mod tests {
                 "edges":[{"from":"s","to":"t"},{"from":"t","to":"i"},{"from":"i","to":"x"},{"from":"v","to":"x"}]}"#,
         )
         .unwrap();
-        let errors: Vec<(String, String)> = validate_graph(&graph, &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap())
-            .into_iter()
-            .map(|e| (e.error_type, e.node_id.unwrap_or_default()))
-            .collect();
+        let errors: Vec<(String, String)> = validate_graph(
+            &graph,
+            &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap(),
+        )
+        .into_iter()
+        .map(|e| (e.error_type, e.node_id.unwrap_or_default()))
+        .collect();
         let expected = [
             ("INVALID_EXPRESSION", "i"),
             ("INVALID_IF", "i"),
@@ -777,7 +819,10 @@ mod tests {
                 "edges":[{"from":"s","to":"typo"},{"from":"typo","to":"voice"},{"from":"voice","to":"line"}]}"#,
         )
         .unwrap();
-        let errors = validate_graph(&graph, &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap());
+        let errors = validate_graph(
+            &graph,
+            &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap(),
+        );
         let found: Vec<(&str, &str, &str)> = errors
             .iter()
             .map(|e| {
@@ -788,11 +833,23 @@ mod tests {
                 )
             })
             .collect();
-        assert!(found.contains(&("UNKNOWN_BLOCK", "typo", "Did you mean 'ShowText'?")), "{:?}", found);
-        assert!(found.iter().any(|f| f.0 == "MISSING_PARAMETER" && f.1 == "voice"));
-        assert!(found.iter().any(|f| f.0 == "INVALID_PARAMETER" && f.1 == "voice"));
-        assert!(found.iter().any(|f| f.0 == "UNKNOWN_PARAMETER" && f.1 == "voice"));
-        assert!(found.iter().any(|f| f.0 == "MISSING_PARAMETER" && f.1 == "line"));
+        assert!(
+            found.contains(&("UNKNOWN_BLOCK", "typo", "Did you mean 'ShowText'?")),
+            "{:?}",
+            found
+        );
+        assert!(found
+            .iter()
+            .any(|f| f.0 == "MISSING_PARAMETER" && f.1 == "voice"));
+        assert!(found
+            .iter()
+            .any(|f| f.0 == "INVALID_PARAMETER" && f.1 == "voice"));
+        assert!(found
+            .iter()
+            .any(|f| f.0 == "UNKNOWN_PARAMETER" && f.1 == "voice"));
+        assert!(found
+            .iter()
+            .any(|f| f.0 == "MISSING_PARAMETER" && f.1 == "line"));
     }
 
     #[test]
@@ -817,11 +874,18 @@ mod tests {
         )
         .unwrap();
         let registry = crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap();
-        assert!(validate_graph(&graph, &registry).is_empty(), "no asset checks without assets");
+        assert!(
+            validate_graph(&graph, &registry).is_empty(),
+            "no asset checks without assets"
+        );
 
         let mut assets = AssetManager::new();
-        assets.register_asset("voice/mia", &AssetType::Audio, "voice/mia.ogg").unwrap();
-        assets.register_asset("bg/park", &AssetType::Image, "bg/park.png").unwrap();
+        assets
+            .register_asset("voice/mia", &AssetType::Audio, "voice/mia.ogg")
+            .unwrap();
+        assets
+            .register_asset("bg/park", &AssetType::Image, "bg/park.png")
+            .unwrap();
         let found: Vec<(String, String, Option<String>)> =
             validate_graph_with_assets(&graph, &registry, Some(&assets))
                 .into_iter()
@@ -830,7 +894,11 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                ("UNKNOWN_ASSET".to_string(), "typo".to_string(), Some("Did you mean 'voice/mia'?".to_string())),
+                (
+                    "UNKNOWN_ASSET".to_string(),
+                    "typo".to_string(),
+                    Some("Did you mean 'voice/mia'?".to_string())
+                ),
                 ("WRONG_ASSET_TYPE".to_string(), "wrong".to_string(), None),
             ]
         );

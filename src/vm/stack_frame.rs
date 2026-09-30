@@ -30,7 +30,11 @@ pub struct VariableSnapshot {
 }
 
 impl VariableSnapshot {
-    pub fn new(variables: HashMap<String, JsonValue>, stack_size: usize, call_depth: usize) -> Self {
+    pub fn new(
+        variables: HashMap<String, JsonValue>,
+        stack_size: usize,
+        call_depth: usize,
+    ) -> Self {
         VariableSnapshot {
             variables,
             stack_size,

@@ -70,7 +70,10 @@ impl ParameterDefinition {
 
     fn __repr__(&self) -> String {
         match &self.default {
-            Some(d) => format!("ParameterDefinition({}: {} = {})", self.name, self.param_type, d),
+            Some(d) => format!(
+                "ParameterDefinition({}: {} = {})",
+                self.name, self.param_type, d
+            ),
             None => format!("ParameterDefinition({}: {})", self.name, self.param_type),
         }
     }
@@ -248,7 +251,8 @@ impl PluginRegistry {
 
     /// Register a block definition from a plugin
     pub fn register_block(&mut self, plugin_name: &str, block: &BlockDefinition) -> PyResult<()> {
-        self.add_block(plugin_name, block.clone()).map_err(value_error)
+        self.add_block(plugin_name, block.clone())
+            .map_err(value_error)
     }
 
     /// Get a block definition by type
@@ -342,10 +346,17 @@ impl PluginRegistry {
             return Err(format!("Plugin '{}' not found", plugin_name));
         }
         if self.blocks.contains_key(&block.block_type) {
-            return Err(format!("Block type '{}' already registered", block.block_type));
+            return Err(format!(
+                "Block type '{}' already registered",
+                block.block_type
+            ));
         }
         block.check()?;
-        log::debug!("Registered block '{}' from plugin '{}'", block.block_type, plugin_name);
+        log::debug!(
+            "Registered block '{}' from plugin '{}'",
+            block.block_type,
+            plugin_name
+        );
         self.block_owners
             .insert(block.block_type.clone(), plugin_name.to_string());
         self.blocks.insert(block.block_type.clone(), block);
@@ -358,7 +369,12 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn block(name: &str, outputs: usize, wait: Option<&str>, params: Vec<ParameterDefinition>) -> BlockDefinition {
+    fn block(
+        name: &str,
+        outputs: usize,
+        wait: Option<&str>,
+        params: Vec<ParameterDefinition>,
+    ) -> BlockDefinition {
         BlockDefinition::new(
             name,
             name,
@@ -372,13 +388,20 @@ mod tests {
     #[test]
     fn invalid_definitions_are_rejected() {
         let mut registry = PluginRegistry::default();
-        registry.add_plugin(PluginInfo::new("p", "1", "me")).unwrap();
+        registry
+            .add_plugin(PluginInfo::new("p", "1", "me"))
+            .unwrap();
         let cases = [
             (block("If", 1, None, vec![]), "built-in"),
             (block("Fork", 2, None, vec![]), "at most one"),
             (block("Ask", 1, Some("choice"), vec![]), "reserved"),
             (
-                block("Bad", 1, None, vec![ParameterDefinition::new("x", "colour", None)]),
+                block(
+                    "Bad",
+                    1,
+                    None,
+                    vec![ParameterDefinition::new("x", "colour", None)],
+                ),
                 "unknown type",
             ),
             (
@@ -399,7 +422,15 @@ mod tests {
             assert!(err.contains(message), "{}", err);
         }
         registry
-            .add_block("p", block("Shake", 1, None, vec![ParameterDefinition::new("s", "asset:image", None)]))
+            .add_block(
+                "p",
+                block(
+                    "Shake",
+                    1,
+                    None,
+                    vec![ParameterDefinition::new("s", "asset:image", None)],
+                ),
+            )
             .unwrap();
     }
 
@@ -407,6 +438,9 @@ mod tests {
     fn defaults_include_novel_blocks() {
         let registry = PluginRegistry::with_defaults().unwrap();
         assert_eq!(registry.block_types(), vec!["PlayVoice", "ShowText"]);
-        assert_eq!(registry.block("ShowText").unwrap().wait.as_deref(), Some("input"));
+        assert_eq!(
+            registry.block("ShowText").unwrap().wait.as_deref(),
+            Some("input")
+        );
     }
 }

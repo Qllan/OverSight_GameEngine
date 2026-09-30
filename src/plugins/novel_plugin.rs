@@ -7,7 +7,9 @@
 use pyo3::prelude::*;
 use serde_json::json;
 
-use crate::core::plugin_registry::{BlockDefinition, ParameterDefinition, PluginInfo, PluginRegistry};
+use crate::core::plugin_registry::{
+    BlockDefinition, ParameterDefinition, PluginInfo, PluginRegistry,
+};
 
 pub const PLUGIN_NAME: &str = "novel_plugin";
 

@@ -71,7 +71,11 @@ impl FixedTickLoop {
         // Schedule the next frame from the previous target to avoid drift.
         // If we fell more than a frame behind, resync instead of bursting.
         let next = target + step;
-        self.next_frame_time = Some(if next < Instant::now() { Instant::now() + step } else { next });
+        self.next_frame_time = Some(if next < Instant::now() {
+            Instant::now() + step
+        } else {
+            next
+        });
         self.frame_count += 1;
 
         true

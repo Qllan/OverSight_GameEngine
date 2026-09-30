@@ -65,14 +65,21 @@ impl CompiledProject {
     /// Initial variable values
     #[getter]
     fn variables(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        let object: serde_json::Map<String, JsonValue> =
-            self.variables.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let object: serde_json::Map<String, JsonValue> = self
+            .variables
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         json_to_py(py, &JsonValue::Object(object))
     }
 
     /// Hash of all scenes' bytecode
     pub fn fingerprint(&self) -> String {
-        fnv_hex(self.scenes.iter().map(|(id, p)| format!("{}:{}", id, p.fingerprint())))
+        fnv_hex(
+            self.scenes
+                .iter()
+                .map(|(id, p)| format!("{}:{}", id, p.fingerprint())),
+        )
     }
 
     /// Disassembly of every scene
@@ -105,14 +112,23 @@ pub enum ProjectError {
     Compile(String),
 }
 
-fn error(kind: &str, message: String, graph: Option<&str>, node: Option<&str>, hint: &str) -> ValidationError {
+fn error(
+    kind: &str,
+    message: String,
+    graph: Option<&str>,
+    node: Option<&str>,
+    hint: &str,
+) -> ValidationError {
     let mut e = ValidationError::new(kind, &message, node, Some(hint));
     e.graph_id = graph.map(String::from);
     e
 }
 
 /// Parse, validate and compile a project with inline scenes
-pub fn compile_project(json: &str, registry: &PluginRegistry) -> Result<CompiledProject, ProjectError> {
+pub fn compile_project(
+    json: &str,
+    registry: &PluginRegistry,
+) -> Result<CompiledProject, ProjectError> {
     compile_project_with_assets(json, registry, None)
 }
 
@@ -230,8 +246,10 @@ mod tests {
         else {
             panic!("expected validation errors");
         };
-        let kinds: Vec<(&str, Option<&str>)> =
-            errors.iter().map(|e| (e.error_type.as_str(), e.node_id.as_deref())).collect();
+        let kinds: Vec<(&str, Option<&str>)> = errors
+            .iter()
+            .map(|e| (e.error_type.as_str(), e.node_id.as_deref()))
+            .collect();
         assert_eq!(
             kinds,
             vec![
@@ -255,7 +273,10 @@ mod tests {
         let compiled = compile_project(&project("intro", &[intro, end]), &registry).unwrap();
         assert_eq!(compiled.scene_ids(), vec!["end", "intro"]);
         assert_eq!(compiled.variables["gold"], serde_json::json!(10));
-        assert_eq!(compiled.scenes["intro"].get_opcodes(), vec!["JUMP_SCENE(end)"]);
+        assert_eq!(
+            compiled.scenes["intro"].get_opcodes(),
+            vec!["JUMP_SCENE(end)"]
+        );
         assert_eq!(compiled.fingerprint().len(), 16);
     }
 }

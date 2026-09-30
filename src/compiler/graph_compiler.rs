@@ -103,18 +103,24 @@ impl GraphCompiler {
             )));
         }
 
-        compile_graph(&ast, &registry).map_err(|e| {
-            pyo3::exceptions::PyRuntimeError::new_err(format!("Compile error: {}", e))
-        })
+        compile_graph(&ast, &registry)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(format!("Compile error: {}", e)))
     }
 
     /// Compile a project whose scenes are inline graphs (see
     /// compiler::project). Scene errors name the scene they are in.
-    fn compile_project_json(&mut self, py: Python<'_>, json_str: &str) -> PyResult<CompiledProject> {
+    fn compile_project_json(
+        &mut self,
+        py: Python<'_>,
+        json_str: &str,
+    ) -> PyResult<CompiledProject> {
         self.last_errors.clear();
         let assets = self.assets.as_ref().map(|a| a.bind(py).borrow());
-        let result =
-            compile_project_with_assets(json_str, &self.registry.bind(py).borrow(), assets.as_deref());
+        let result = compile_project_with_assets(
+            json_str,
+            &self.registry.bind(py).borrow(),
+            assets.as_deref(),
+        );
         match result {
             Ok(project) => Ok(project),
             Err(ProjectError::Parse(message)) => Err(pyo3::exceptions::PyValueError::new_err(

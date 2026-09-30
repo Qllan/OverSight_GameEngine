@@ -32,8 +32,12 @@ pub enum Opcode {
     PUSH(JsonValue),
     POP,
     DUP,
-    VAR_SET { name: String },
-    VAR_GET { name: String },
+    VAR_SET {
+        name: String,
+    },
+    VAR_GET {
+        name: String,
+    },
     // Binary operators pop b, pop a and push (a op b)
     ADD,
     SUB,
@@ -50,22 +54,43 @@ pub enum Opcode {
     NEG,
     NOT,
     /// Pop `count` values, push their text joined in push order
-    CONCAT { count: usize },
+    CONCAT {
+        count: usize,
+    },
     /// Pop `count` values, push them as an array in push order
-    MAKE_ARRAY { count: usize },
+    MAKE_ARRAY {
+        count: usize,
+    },
     /// Pop condition, jump if truthy
-    IF_JUMP { target: usize },
+    IF_JUMP {
+        target: usize,
+    },
     /// Pop condition, jump if falsy
-    JUMP_IF_FALSE { target: usize },
-    JUMP { target: usize },
-    YIELD { wait_type: String },
+    JUMP_IF_FALSE {
+        target: usize,
+    },
+    JUMP {
+        target: usize,
+    },
+    YIELD {
+        wait_type: String,
+    },
     /// Pause for this many frames (see Machine::frame)
-    WAIT { frames: u32 },
+    WAIT {
+        frames: u32,
+    },
     /// Continue at the start of another scene
-    JUMP_SCENE { scene: String },
+    JUMP_SCENE {
+        scene: String,
+    },
     /// Run another scene; its END returns here
-    CALL_SCENE { scene: String },
-    CALL_BLOCK { block_type: String, args: Vec<String> },
+    CALL_SCENE {
+        scene: String,
+    },
+    CALL_BLOCK {
+        block_type: String,
+        args: Vec<String>,
+    },
     END,
 }
 
@@ -185,7 +210,10 @@ impl CompiledProgram {
 }
 
 /// Compile AST graph to bytecode
-pub fn compile_graph(graph: &AstGraph, registry: &PluginRegistry) -> Result<CompiledProgram, String> {
+pub fn compile_graph(
+    graph: &AstGraph,
+    registry: &PluginRegistry,
+) -> Result<CompiledProgram, String> {
     let start = graph
         .start_node()
         .ok_or_else(|| "Cannot determine the start node".to_string())?;
@@ -193,7 +221,11 @@ pub fn compile_graph(graph: &AstGraph, registry: &PluginRegistry) -> Result<Comp
 
     for id in graph.get_node_ids() {
         if !order.contains(&id) {
-            log::warn!("Node '{}' is unreachable from '{}' and was skipped", id, start);
+            log::warn!(
+                "Node '{}' is unreachable from '{}' and was skipped",
+                id,
+                start
+            );
         }
     }
 
@@ -226,7 +258,10 @@ pub fn compile_graph(graph: &AstGraph, registry: &PluginRegistry) -> Result<Comp
 pub fn scene_param(node: &AstNode) -> Result<String, String> {
     match node.param("scene") {
         Some(JsonValue::String(scene)) if !scene.is_empty() => Ok(scene),
-        _ => Err(format!("{} '{}' needs a 'scene' name", node.node_type, node.id)),
+        _ => Err(format!(
+            "{} '{}' needs a 'scene' name",
+            node.node_type, node.id
+        )),
     }
 }
 
@@ -269,7 +304,8 @@ impl Codegen {
     }
 
     fn emit_jump(&mut self, opcode: Opcode, target_node: &str, node_id: &str) {
-        self.patches.push((self.opcodes.len(), target_node.to_string()));
+        self.patches
+            .push((self.opcodes.len(), target_node.to_string()));
         self.emit(opcode, node_id);
     }
 
@@ -297,7 +333,9 @@ impl Codegen {
             }
 
             "BranchChoice" => {
-                let choices = node.param("choices").unwrap_or(JsonValue::Array(Vec::new()));
+                let choices = node
+                    .param("choices")
+                    .unwrap_or(JsonValue::Array(Vec::new()));
                 self.emit_choices(&choices, id)?;
                 self.emit(
                     Opcode::CALL_BLOCK {
@@ -307,12 +345,27 @@ impl Codegen {
                     id,
                 );
                 // resume(choice) pushes the selected index
-                self.emit(Opcode::YIELD { wait_type: "choice".to_string() }, id);
-                self.emit(Opcode::VAR_SET { name: BRANCH_RESULT_VAR.to_string() }, id);
+                self.emit(
+                    Opcode::YIELD {
+                        wait_type: "choice".to_string(),
+                    },
+                    id,
+                );
+                self.emit(
+                    Opcode::VAR_SET {
+                        name: BRANCH_RESULT_VAR.to_string(),
+                    },
+                    id,
+                );
 
                 // Jump table: if __branch_result == i goto successor i
                 for (i, succ) in node.successors.iter().enumerate() {
-                    self.emit(Opcode::VAR_GET { name: BRANCH_RESULT_VAR.to_string() }, id);
+                    self.emit(
+                        Opcode::VAR_GET {
+                            name: BRANCH_RESULT_VAR.to_string(),
+                        },
+                        id,
+                    );
                     self.emit(Opcode::PUSH(JsonValue::from(i)), id);
                     self.emit(Opcode::EQ, id);
                     self.emit_jump(Opcode::IF_JUMP { target: 0 }, succ, id);
@@ -372,11 +425,21 @@ impl Codegen {
             }
 
             "JumpScene" => {
-                self.emit(Opcode::JUMP_SCENE { scene: scene_param(node)? }, id);
+                self.emit(
+                    Opcode::JUMP_SCENE {
+                        scene: scene_param(node)?,
+                    },
+                    id,
+                );
             }
 
             "CallScene" => {
-                self.emit(Opcode::CALL_SCENE { scene: scene_param(node)? }, id);
+                self.emit(
+                    Opcode::CALL_SCENE {
+                        scene: scene_param(node)?,
+                    },
+                    id,
+                );
                 self.emit_flow(node, next_emitted);
             }
 
@@ -392,7 +455,12 @@ impl Codegen {
 
             block_type => match registry.block(block_type) {
                 Some(definition) => self.emit_block(node, definition, next_emitted)?,
-                None => return Err(format!("Node '{}' has unknown block type '{}'", id, block_type)),
+                None => {
+                    return Err(format!(
+                        "Node '{}' has unknown block type '{}'",
+                        id, block_type
+                    ))
+                }
             },
         }
         Ok(())
@@ -430,12 +498,21 @@ impl Codegen {
         self.emit(
             Opcode::CALL_BLOCK {
                 block_type: definition.block_type.clone(),
-                args: definition.parameters.iter().map(|p| p.name.clone()).collect(),
+                args: definition
+                    .parameters
+                    .iter()
+                    .map(|p| p.name.clone())
+                    .collect(),
             },
             id,
         );
         if let Some(wait_type) = &definition.wait {
-            self.emit(Opcode::YIELD { wait_type: wait_type.clone() }, id);
+            self.emit(
+                Opcode::YIELD {
+                    wait_type: wait_type.clone(),
+                },
+                id,
+            );
         }
         if definition.outputs.is_empty() {
             self.emit(Opcode::END, id);
@@ -567,7 +644,11 @@ mod tests {
     use crate::compiler::graph_parser::parse_json_graph;
 
     fn compile(json: &str) -> CompiledProgram {
-        compile_graph(&parse_json_graph(json).unwrap(), &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap()).unwrap()
+        compile_graph(
+            &parse_json_graph(json).unwrap(),
+            &crate::core::plugin_registry::PluginRegistry::with_defaults().unwrap(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -645,7 +726,12 @@ mod tests {
         }
         assert_eq!(
             first,
-            vec!["PUSH(\"v1\")", "PUSH(0.5)", "CALL_BLOCK(PlayVoice, [\"voice_id\", \"volume\"])", "END"]
+            vec![
+                "PUSH(\"v1\")",
+                "PUSH(0.5)",
+                "CALL_BLOCK(PlayVoice, [\"voice_id\", \"volume\"])",
+                "END"
+            ]
         );
     }
 
@@ -664,7 +750,9 @@ mod tests {
         use serde_json::json;
 
         let mut registry = PluginRegistry::with_defaults().unwrap();
-        registry.add_plugin(PluginInfo::new("fx", "1", "me")).unwrap();
+        registry
+            .add_plugin(PluginInfo::new("fx", "1", "me"))
+            .unwrap();
         registry
             .add_block(
                 "fx",

@@ -104,7 +104,13 @@ fn arithmetic(op: BinaryOp, x: &Number, y: &Number) -> Result<JsonValue, String>
             Div => None,
             Mod if b == 0 => return Err("modulo by zero".to_string()),
             // Result takes the sign of the divisor, as in Python
-            Mod => a.checked_rem(b).map(|r| if r != 0 && (r < 0) != (b < 0) { r + b } else { r }),
+            Mod => a.checked_rem(b).map(|r| {
+                if r != 0 && (r < 0) != (b < 0) {
+                    r + b
+                } else {
+                    r
+                }
+            }),
             _ => None,
         };
         if let Some(value) = exact {
@@ -132,7 +138,11 @@ fn compare(a: &JsonValue, b: &JsonValue) -> Result<Ordering, String> {
             .partial_cmp(&y.as_f64())
             .ok_or_else(|| "cannot compare numbers".to_string()),
         (JsonValue::String(x), JsonValue::String(y)) => Ok(x.cmp(y)),
-        _ => Err(format!("cannot compare {} and {}", type_name(a), type_name(b))),
+        _ => Err(format!(
+            "cannot compare {} and {}",
+            type_name(a),
+            type_name(b)
+        )),
     }
 }
 
@@ -172,10 +182,17 @@ mod tests {
 
     #[test]
     fn errors() {
-        assert!(binary(Div, &json!(1), &json!(0)).unwrap_err().contains("zero"));
-        assert!(binary(Sub, &json!("a"), &json!(1)).unwrap_err().contains("string and number"));
+        assert!(binary(Div, &json!(1), &json!(0))
+            .unwrap_err()
+            .contains("zero"));
+        assert!(binary(Sub, &json!("a"), &json!(1))
+            .unwrap_err()
+            .contains("string and number"));
         assert!(binary(Lt, &json!(1), &json!("2")).is_err());
-        assert!(binary(Add, &json!(i64::MAX), &json!(1)).is_ok(), "overflow falls back to float");
+        assert!(
+            binary(Add, &json!(i64::MAX), &json!(1)).is_ok(),
+            "overflow falls back to float"
+        );
     }
 
     #[test]

@@ -11,13 +11,35 @@ use std::collections::HashMap;
 /// Event types emitted by the engine
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
-    GraphStart { graph_id: String },
-    GraphEnd { graph_id: String },
-    NodeEnter { graph_id: String, node_id: String, node_type: String },
-    BlockCall { graph_id: String, node_id: Option<String>, block_type: String, args: JsonValue },
-    VariableChanged { name: String, value: JsonValue },
-    YieldRequest { reason: String },
-    Error { message: String, graph_id: Option<String>, node_id: Option<String> },
+    GraphStart {
+        graph_id: String,
+    },
+    GraphEnd {
+        graph_id: String,
+    },
+    NodeEnter {
+        graph_id: String,
+        node_id: String,
+        node_type: String,
+    },
+    BlockCall {
+        graph_id: String,
+        node_id: Option<String>,
+        block_type: String,
+        args: JsonValue,
+    },
+    VariableChanged {
+        name: String,
+        value: JsonValue,
+    },
+    YieldRequest {
+        reason: String,
+    },
+    Error {
+        message: String,
+        graph_id: Option<String>,
+        node_id: Option<String>,
+    },
 }
 
 impl Event {
@@ -40,10 +62,19 @@ impl Event {
             Event::GraphStart { graph_id } | Event::GraphEnd { graph_id } => {
                 json!({ "graph_id": graph_id })
             }
-            Event::NodeEnter { graph_id, node_id, node_type } => {
+            Event::NodeEnter {
+                graph_id,
+                node_id,
+                node_type,
+            } => {
                 json!({ "graph_id": graph_id, "node_id": node_id, "node_type": node_type })
             }
-            Event::BlockCall { graph_id, node_id, block_type, args } => json!({
+            Event::BlockCall {
+                graph_id,
+                node_id,
+                block_type,
+                args,
+            } => json!({
                 "graph_id": graph_id,
                 "node_id": node_id,
                 "block_type": block_type,
@@ -51,7 +82,11 @@ impl Event {
             }),
             Event::VariableChanged { name, value } => json!({ "name": name, "value": value }),
             Event::YieldRequest { reason } => json!({ "reason": reason }),
-            Event::Error { message, graph_id, node_id } => {
+            Event::Error {
+                message,
+                graph_id,
+                node_id,
+            } => {
                 json!({ "message": message, "graph_id": graph_id, "node_id": node_id })
             }
         }
@@ -116,7 +151,10 @@ impl EventBus {
 
     /// Get subscriber count for an event type
     pub fn subscriber_count(&self, event_type: &str) -> usize {
-        self.subscribers.get(event_type).map(|v| v.len()).unwrap_or(0)
+        self.subscribers
+            .get(event_type)
+            .map(|v| v.len())
+            .unwrap_or(0)
     }
 }
 

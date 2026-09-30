@@ -110,9 +110,12 @@ impl AssetManager {
 
     /// Get the full path for an asset
     pub fn resolve_path(&self, asset_id: &str) -> Option<String> {
-        self.assets
-            .get(asset_id)
-            .map(|info| self.base_path.join(&info.path).to_string_lossy().to_string())
+        self.assets.get(asset_id).map(|info| {
+            self.base_path
+                .join(&info.path)
+                .to_string_lossy()
+                .to_string()
+        })
     }
 
     /// Register an asset by id; `path` is relative to the base path
@@ -123,8 +126,14 @@ impl AssetManager {
                 id
             )));
         }
-        log::debug!("Registered asset: {} ({}) -> {}", id, asset_type.kind(), path);
-        self.assets.insert(id.to_string(), AssetInfo::new(id, asset_type, path));
+        log::debug!(
+            "Registered asset: {} ({}) -> {}",
+            id,
+            asset_type.kind(),
+            path
+        );
+        self.assets
+            .insert(id.to_string(), AssetInfo::new(id, asset_type, path));
         Ok(())
     }
 
@@ -144,7 +153,9 @@ impl AssetManager {
 
         let mut added = 0;
         for file in files {
-            let Ok(relative) = file.strip_prefix(&self.base_path) else { continue };
+            let Ok(relative) = file.strip_prefix(&self.base_path) else {
+                continue;
+            };
             let asset_type = relative
                 .extension()
                 .map(|e| AssetType::from_extension(&e.to_string_lossy()))
@@ -158,7 +169,8 @@ impl AssetManager {
                 log::warn!("Asset id '{}' is taken; skipping {}", id, path);
                 continue;
             }
-            self.assets.insert(id.clone(), AssetInfo::new(&id, &asset_type, &path));
+            self.assets
+                .insert(id.clone(), AssetInfo::new(&id, &asset_type, &path));
             added += 1;
         }
         log::info!("Scanned {}: {} assets", self.base_path.display(), added);
@@ -243,7 +255,13 @@ mod tests {
     fn scan_registers_known_files_by_relative_id() {
         let dir = std::env::temp_dir().join(format!("vn_assets_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        for file in ["bg/park.png", "voice/mia_001.ogg", "notes.md", ".hidden.png", "font/Main.TTF"] {
+        for file in [
+            "bg/park.png",
+            "voice/mia_001.ogg",
+            "notes.md",
+            ".hidden.png",
+            "font/Main.TTF",
+        ] {
             let path = dir.join(file);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(path, b"x").unwrap();
@@ -252,8 +270,14 @@ mod tests {
         let mut assets = AssetManager::new();
         assets.set_base_path(&dir.to_string_lossy());
         assert_eq!(assets.scan().unwrap(), 3);
-        assert_eq!(assets.ids().collect::<Vec<_>>(), vec!["bg/park", "font/Main", "voice/mia_001"]);
-        assert_eq!(assets.asset("voice/mia_001").unwrap().asset_type, AssetType::Audio);
+        assert_eq!(
+            assets.ids().collect::<Vec<_>>(),
+            vec!["bg/park", "font/Main", "voice/mia_001"]
+        );
+        assert_eq!(
+            assets.asset("voice/mia_001").unwrap().asset_type,
+            AssetType::Audio
+        );
         assert_eq!(assets.asset("font/Main").unwrap().path, "font/Main.TTF");
         assert_eq!(assets.scan().unwrap(), 0, "rescanning adds nothing new");
         std::fs::remove_dir_all(&dir).unwrap();

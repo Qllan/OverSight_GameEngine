@@ -3,8 +3,8 @@
 //! Parses the JSON graph format into an intermediate AST representation
 //! for validation and code generation.
 
-use serde::{Deserialize, Serialize};
 use pyo3::prelude::*;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Raw JSON node structure
@@ -191,8 +191,8 @@ impl AstGraph {
 
 /// Parse JSON graph into AST
 pub fn parse_json_graph(json_str: &str) -> Result<AstGraph, String> {
-    let json_graph: JsonGraph = serde_json::from_str(json_str)
-        .map_err(|e| format!("JSON parse error: {}", e))?;
+    let json_graph: JsonGraph =
+        serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
 
     // Build node map
     let mut nodes: HashMap<String, AstNode> = HashMap::new();
@@ -311,7 +311,10 @@ mod tests {
         )
         .unwrap();
         assert!(!graph.is_dag());
-        assert_eq!(graph.find_cycle(|_| true).unwrap(), vec!["a", "b", "c", "a"]);
+        assert_eq!(
+            graph.find_cycle(|_| true).unwrap(),
+            vec!["a", "b", "c", "a"]
+        );
         assert_eq!(graph.find_cycle(|n| n.id != "b"), None);
     }
 

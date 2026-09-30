@@ -67,10 +67,7 @@ impl PyVMState {
     fn __repr__(&self) -> String {
         format!(
             "PyVMState(pc={}, yielding={}, node={:?}, running={})",
-            self.pc,
-            self.is_yielding,
-            self.current_node_id,
-            self.is_running
+            self.pc, self.is_yielding, self.current_node_id, self.is_running
         )
     }
 
