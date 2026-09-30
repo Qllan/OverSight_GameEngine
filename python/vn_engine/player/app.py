@@ -1,26 +1,37 @@
 """pygame-ce window that plays a VN Engine project.
 
-Controls: click / Space / Enter to continue (the first press finishes the
-text animation), 1-9 or arrows + Enter to pick a choice, Esc to quit.
+Controls
+    Click / Space / Enter   continue (the first press completes the text)
+    1-9, arrows + Enter     pick a choice
+    Esc / right click       menu (save, load, backlog, skip, auto, quit)
+    F5 / F9                 quick save / quick load
+    Ctrl (hold) / Tab       skip text already read
+    A                       auto-advance
+    L                       backlog
+    Mouse wheel up / PgUp   roll back to the previous line
 
 Settings come from an optional "player" section in project.json:
 
     "player": {"title": "My Game", "resolution": [1280, 720],
-               "text_speed": 45, "font": "fonts/main"}
+               "text_speed": 45, "font": "fonts/main",
+               "title_background": "bg/title"}
 
+Saves go to the user's data folder (see vn_engine.player.saves).
 Missing image assets are drawn as labelled placeholders, so a game can be
 played before its art exists.
 """
 
+import functools
 import json
 import logging
 import zlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pygame
 
 from vn_engine.engine import Engine
+from vn_engine.player.saves import AUTO, NUMBERED_SLOTS, QUICK, SaveManager
 from vn_engine.player.stage import POSITIONS, AudioEffect, Stage
 
 log = logging.getLogger(__name__)
@@ -30,13 +41,26 @@ MARGIN = 40
 CHOICE_WIDTH = 640
 CHOICE_HEIGHT = 58
 CHOICE_GAP = 16
+MENU_WIDTH = 420
+MENU_HEIGHT = 54
+SLOT_SIZE = (360, 164)
+SLOT_THUMB = (160, 90)
+THUMB_SIZE = (256, 144)
 FONT_NAMES = "dejavusans,notosans,liberationsans,arial"
 
 BOX_COLOR = (12, 14, 24, 200)
+SHADE_COLOR = (0, 0, 0, 170)
 NAME_COLOR = (255, 214, 120)
 TEXT_COLOR = (240, 240, 240)
+DIM_COLOR = (150, 150, 165)
 CHOICE_COLOR = (30, 34, 56, 225)
 CHOICE_HOVER = (70, 80, 140, 240)
+
+#: Seconds an auto-advanced line stays: base + per character
+AUTO_BASE_DELAY = 1.2
+AUTO_CHAR_DELAY = 0.035
+
+Button = Tuple[str, Callable[[], None]]
 
 
 def wrap_text(font: "pygame.font.Font", text: str, width: int) -> List[str]:
@@ -69,7 +93,12 @@ def placeholder_color(name: str) -> Tuple[int, int, int]:
 
 
 class Player:
-    def __init__(self, project_path: str, window_size: Optional[Tuple[int, int]] = None) -> None:
+    def __init__(
+        self,
+        project_path: str,
+        window_size: Optional[Tuple[int, int]] = None,
+        save_root: Optional[Path] = None,
+    ) -> None:
         self.project_path = Path(project_path)
         with open(self.project_path, "r", encoding="utf-8") as f:
             self.project_data: Dict[str, Any] = json.load(f)
@@ -77,28 +106,44 @@ class Player:
         width, height = self.settings.get("resolution", [1280, 720])
         self.size: Tuple[int, int] = (int(width), int(height))
         self.text_speed = float(self.settings.get("text_speed", 45))
+        self.title = str(self.settings.get("title", self.project_data.get("project_id", "")))
 
         pygame.init()
         self.audio = self._init_audio()
-        title = self.settings.get("title", self.project_data.get("project_id", "VN Engine"))
-        pygame.display.set_caption(str(title))
+        pygame.display.set_caption(self.title or "VN Engine")
         self.window = pygame.display.set_mode(window_size or self.size, pygame.RESIZABLE)
         self.canvas = pygame.Surface(self.size)
+        #: The game without menus, for save thumbnails
+        self.game_frame = pygame.Surface(self.size)
         self.clock = pygame.time.Clock()
 
         self.engine = Engine()
         self.engine.init()
         self.engine.subscribe("BlockCall", self._on_block)
         self.engine.load_project(str(self.project_path))
+        self.saves = SaveManager(str(self.project_data.get("project_id", "game")), save_root)
+        self.engine.load_persistent(str(self.saves.persistent_path))
 
         self.stage = Stage()
         self.stage_changed = False
         self.state: Optional[Dict[str, Any]] = None
+        self.started = False
         self.finished = False
         self.running = True
         self.shown_chars = 0.0
         self.selected_choice = 0
         self.frame_count = 0
+        # Screens and modes
+        self.screen: Optional[str] = None  # title, menu, save, load, backlog
+        self.skip = False
+        self.auto = False
+        self.auto_timer = 0.0
+        self.backlog_scroll = 0
+        self.toast = ""
+        self.toast_timer = 0.0
+        self._autosaved_at: Optional[Tuple[Any, ...]] = None
+        self._buttons: List[Tuple["pygame.Rect", Callable[[], None]]] = []
+
         self._images: Dict[str, Optional["pygame.Surface"]] = {}
         self._scaled: Dict[Tuple[str, int, int], "pygame.Surface"] = {}
         self._sounds: Dict[str, Optional["pygame.mixer.Sound"]] = {}
@@ -131,12 +176,23 @@ class Player:
         self.name_font = make(30, bold=True)
         self.choice_font = make(28)
         self.small_font = make(20)
+        self.title_font = make(56, bold=True)
 
-    # --- engine ---------------------------------------------------------
+    # --- game flow ------------------------------------------------------
 
     def start(self) -> None:
+        """Begin a new game"""
+        self.stage = Stage()
+        self.stage_changed = True
+        self.finished = False
+        self.screen = None
+        self.started = True
+        self._play(("stop_music", {"fade_ms": 0}))
         self.engine.run()
         self._tick()
+
+    def show_title(self) -> None:
+        self.screen = "title"
 
     def _tick(self) -> None:
         """Advance the game by one frame and sync the stage"""
@@ -144,17 +200,22 @@ class Player:
             self.state = self.engine.tick()
         except RuntimeError as e:
             log.error("Game stopped: %s", e)
+            self.notify(f"Error: {e}")
             self.state = None
         if self.stage_changed:
             self.engine.set_host_state(self.stage.to_json())
             self.stage_changed = False
         if self.state is None:
             self.finished = True
+            self.skip = self.auto = False
+        elif self.waiting_for == "choice":
+            self._autosave_at_choice()
 
     def _on_block(self, call: Dict[str, Any]) -> None:
         block_type, args = call["block_type"], call["args"]
         if block_type == "ShowText":
             self.shown_chars = 0.0
+            self.auto_timer = 0.0
         if block_type == "BranchChoice":
             self.selected_choice = 0
         effect = self.stage.apply(block_type, args)
@@ -175,6 +236,7 @@ class Player:
             self.stage.choices = [str(c) for c in args.get("choices", [])]
         self.shown_chars = float(len(self.stage.text))
         self.finished = not self.state["is_running"]
+        self.started = True
         if self.stage.music:
             self._play(("music", self.stage.music))
         else:
@@ -191,6 +253,11 @@ class Player:
     @property
     def text_complete(self) -> bool:
         return self.shown_chars >= len(self.stage.text)
+
+    @property
+    def skipping(self) -> bool:
+        held = bool(pygame.key.get_mods() & pygame.KMOD_CTRL) if pygame.display.get_init() else False
+        return self.skip or held
 
     def advance(self) -> None:
         """Click / Space: finish the text animation, or continue"""
@@ -209,32 +276,124 @@ class Player:
             self.engine.resume(index)
             self._tick()
 
+    def rollback(self) -> None:
+        if self.started and self.engine.rollback() is not None:
+            self.restore_stage()
+            self.skip = self.auto = False
+
+    def notify(self, text: str) -> None:
+        self.toast = text
+        self.toast_timer = 2.5
+
+    # --- saving ---------------------------------------------------------
+
+    def save_slot(self, slot: str) -> bool:
+        if not self.started or self.finished:
+            self.notify("Nothing to save")
+            return False
+        meta = {
+            "scene": self.state["current_graph_id"] if self.state else "",
+            "speaker": self.stage.speaker,
+            "text": self.stage.text[:90],
+        }
+        thumbnail = self.saves.save(slot, self.engine.save_state(), meta)
+        pygame.image.save(pygame.transform.smoothscale(self.game_frame, THUMB_SIZE), str(thumbnail))
+        self._save_persistent()
+        if slot != AUTO:
+            self.notify(f"Saved ({'quick save' if slot == QUICK else 'slot ' + slot})")
+        return True
+
+    def load_slot(self, slot: str) -> bool:
+        if not self.saves.exists(slot):
+            self.notify("That slot is empty")
+            return False
+        try:
+            self.engine.load_state(self.saves.load(slot))
+        except (ValueError, OSError) as e:
+            self.notify(f"Cannot load: {e}")
+            return False
+        self.restore_stage()
+        self.screen = None
+        self.skip = self.auto = False
+        self.notify("Loaded")
+        return True
+
+    def _autosave_at_choice(self) -> None:
+        state = self.state or {}
+        key = (state.get("current_graph_id"), state.get("pc"), len(self.engine.backlog()))
+        if key != self._autosaved_at:
+            self._autosaved_at = key
+            self.draw_game()
+            self.save_slot(AUTO)
+
+    def _save_persistent(self) -> None:
+        self.saves.folder.mkdir(parents=True, exist_ok=True)
+        self.engine.save_persistent(str(self.saves.persistent_path))
+
     # --- loop -----------------------------------------------------------
 
     def update(self, dt: float) -> None:
-        if self.finished:
+        if self.toast_timer > 0:
+            self.toast_timer -= dt
+        if self.screen is not None or not self.started or self.finished:
             return
-        if self.waiting_for is None:
+        waiting = self.waiting_for
+        if waiting is None:
             self._tick()
-        elif self.waiting_for == "input" and not self.text_complete:
+            return
+        if waiting != "input":
+            return
+        if self.skipping and self.state and self.state["seen_before"]:
+            self.shown_chars = float(len(self.stage.text))
+            self.advance()
+            return
+        if not self.text_complete:
             speed = self.text_speed if self.text_speed > 0 else 1e9
             self.shown_chars = min(len(self.stage.text), self.shown_chars + speed * dt)
+        elif self.auto:
+            self.auto_timer += dt
+            if self.auto_timer >= AUTO_BASE_DELAY + AUTO_CHAR_DELAY * len(self.stage.text):
+                self.auto_timer = 0.0
+                self.advance()
 
     def handle_event(self, event: "pygame.event.Event") -> None:
         if event.type == pygame.QUIT:
-            self.running = False
+            self.quit()
         elif event.type == pygame.KEYDOWN:
             self.handle_key(event.key)
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             self.click(self.to_canvas(event.pos))
-        elif event.type == pygame.MOUSEMOTION and self.stage.choices:
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+            self.toggle_menu()
+        elif event.type == pygame.MOUSEWHEEL:
+            self.wheel(event.y)
+        elif event.type == pygame.MOUSEMOTION and self.stage.choices and self.screen is None:
             hit = self.choice_at(self.to_canvas(event.pos))
             if hit is not None:
                 self.selected_choice = hit
 
     def handle_key(self, key: int) -> None:
+        if self.screen is not None:
+            if key == pygame.K_ESCAPE:
+                self.back()
+            elif self.screen == "backlog" and key in (pygame.K_UP, pygame.K_DOWN):
+                self.wheel(1 if key == pygame.K_UP else -1)
+            return
         if key == pygame.K_ESCAPE:
-            self.running = False
+            self.toggle_menu()
+        elif key == pygame.K_F5:
+            self.save_slot(QUICK)
+        elif key == pygame.K_F9:
+            self.load_slot(QUICK)
+        elif key == pygame.K_TAB:
+            self.skip = not self.skip
+        elif key == pygame.K_a:
+            self.auto = not self.auto
+            self.auto_timer = 0.0
+        elif key == pygame.K_l:
+            self.open_backlog()
+        elif key == pygame.K_PAGEUP:
+            self.rollback()
         elif self.waiting_for == "choice":
             if pygame.K_1 <= key <= pygame.K_9:
                 self.choose(key - pygame.K_1)
@@ -244,15 +403,101 @@ class Player:
             elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
                 self.choose(self.selected_choice)
         elif key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_RIGHT):
+            self.skip = False
             self.advance()
 
     def click(self, pos: Tuple[float, float]) -> None:
+        if self.screen is not None:
+            for rect, action in self._buttons:
+                if rect.collidepoint(pos):
+                    action()
+                    return
+            if self.screen == "backlog":
+                self.back()
+            return
+        self.skip = False
         if self.waiting_for == "choice":
             hit = self.choice_at(pos)
             if hit is not None:
                 self.choose(hit)
         else:
             self.advance()
+
+    def wheel(self, direction: int) -> None:
+        if self.screen == "backlog":
+            self.backlog_scroll = max(0, self.backlog_scroll + direction)
+        elif self.screen is None and direction > 0:
+            self.rollback()
+
+    # --- screens --------------------------------------------------------
+
+    def toggle_menu(self) -> None:
+        if self.screen is None and self.started:
+            self.screen = "menu"
+        elif self.screen in ("menu", "backlog"):
+            self.screen = None
+
+    def open_backlog(self) -> None:
+        if self.started:
+            self.backlog_scroll = 0
+            self.screen = "backlog"
+
+    def back(self) -> None:
+        """Esc on a screen: go up one level"""
+        if self.screen in ("save", "load"):
+            self.screen = "menu" if self.started and not self.finished else "title"
+        elif self.screen == "title":
+            self.quit()
+        else:
+            self.screen = None
+
+    def quit(self) -> None:
+        if self.started and not self.finished:
+            self.draw_game()
+            self.save_slot(AUTO)
+        self.running = False
+
+    def _menu_buttons(self) -> List[Button]:
+        if self.screen == "title":
+            buttons: List[Button] = [("New Game", self.start)]
+            if self.saves.exists(AUTO):
+                buttons.append(("Continue", self._continue))
+            buttons += [("Load", lambda: self._open("load")), ("Quit", self.quit)]
+            return buttons
+        return [
+            ("Resume", lambda: self._open(None)),
+            ("Save", lambda: self._open("save")),
+            ("Load", lambda: self._open("load")),
+            ("Backlog", self.open_backlog),
+            (f"Skip read text: {'on' if self.skip else 'off'}", self._toggle_skip),
+            (f"Auto-advance: {'on' if self.auto else 'off'}", self._toggle_auto),
+            ("Title screen", self.show_title),
+            ("Quit", self.quit),
+        ]
+
+    def _continue(self) -> None:
+        self.load_slot(AUTO)
+
+    def _open(self, screen: Optional[str]) -> None:
+        self.screen = screen
+
+    def _toggle_skip(self) -> None:
+        self.skip = not self.skip
+        self.screen = None
+
+    def _toggle_auto(self) -> None:
+        self.auto = not self.auto
+        self.auto_timer = 0.0
+        self.screen = None
+
+    def _slot_clicked(self, slot: str) -> None:
+        if self.screen == "save":
+            if self.save_slot(slot):
+                self.screen = None
+        else:
+            self.load_slot(slot)
+
+    # --- main loop ------------------------------------------------------
 
     def frame(self) -> None:
         """One iteration of the main loop"""
@@ -264,13 +509,17 @@ class Player:
         self.present()
         self.frame_count += 1
 
-    def run(self, max_frames: Optional[int] = None) -> None:
-        self.start()
+    def run(self, max_frames: Optional[int] = None, title: bool = True) -> None:
+        if title:
+            self.show_title()
+        else:
+            self.start()
         while self.running and (max_frames is None or self.frame_count < max_frames):
             self.frame()
         self.close()
 
     def close(self) -> None:
+        self._save_persistent()
         if self.audio:
             pygame.mixer.stop()
             pygame.mixer.music.stop()
@@ -295,7 +544,8 @@ class Player:
             self.window.blit(pygame.transform.smoothscale(self.canvas, (w, h)), (x, y))
         pygame.display.flip()
 
-    def draw(self) -> None:
+    def draw_game(self) -> None:
+        """The game itself, also kept in game_frame for thumbnails"""
         self._draw_background()
         for name, character in self.stage.characters.items():
             self._draw_character(name, character)
@@ -304,8 +554,28 @@ class Player:
             self._draw_choices()
         elif self.stage.text:
             self._draw_text_box(complete=self.text_complete)
-        if self.finished:
-            self._draw_center_label("The End  -  click to close")
+        self.game_frame.blit(self.canvas, (0, 0))
+
+    def draw(self) -> None:
+        self._buttons = []
+        if self.screen == "title":
+            self._draw_title()
+        else:
+            self.draw_game()
+            if self.finished and self.screen is None:
+                self._draw_center_label("The End  -  click to close")
+            self._draw_modes()
+        if self.screen in ("menu", "title"):
+            self._draw_menu()
+        elif self.screen in ("save", "load"):
+            self._draw_slots()
+        elif self.screen == "backlog":
+            self._draw_backlog()
+        if self.toast_timer > 0:
+            surface = self.small_font.render(self.toast, True, TEXT_COLOR)
+            rect = surface.get_rect(topleft=(26, 20))
+            self._panel(rect.inflate(30, 14), BOX_COLOR)
+            self.canvas.blit(surface, rect)
 
     def image(self, asset_id: str) -> Optional["pygame.Surface"]:
         if asset_id not in self._images:
@@ -368,6 +638,11 @@ class Player:
         pygame.draw.rect(panel, color, panel.get_rect(), border_radius=14)
         self.canvas.blit(panel, rect.topleft)
 
+    def _shade(self) -> None:
+        shade = pygame.Surface(self.size, pygame.SRCALPHA)
+        shade.fill(SHADE_COLOR)
+        self.canvas.blit(shade, (0, 0))
+
     def text_box_rect(self) -> "pygame.Rect":
         w, h = self.size
         return pygame.Rect(MARGIN, h - TEXT_BOX_HEIGHT - MARGIN // 2, w - 2 * MARGIN,
@@ -423,6 +698,126 @@ class Player:
         rect = surface.get_rect(center=(w // 2, h // 2))
         self._panel(rect.inflate(60, 30), BOX_COLOR)
         self.canvas.blit(surface, rect)
+
+    def _draw_modes(self) -> None:
+        modes = [m for m, on in (("SKIP", self.skipping), ("AUTO", self.auto)) if on]
+        if modes and self.screen is None:
+            surface = self.small_font.render("  ".join(modes), True, NAME_COLOR)
+            rect = surface.get_rect(topright=(self.size[0] - 20, 16))
+            self._panel(rect.inflate(20, 10), BOX_COLOR)
+            self.canvas.blit(surface, rect)
+
+    def button_rects(self, count: int, top: int) -> List["pygame.Rect"]:
+        x = (self.size[0] - MENU_WIDTH) // 2
+        return [pygame.Rect(x, top + i * (MENU_HEIGHT + 12), MENU_WIDTH, MENU_HEIGHT)
+                for i in range(count)]
+
+    def _draw_buttons(self, buttons: List[Button], top: int) -> None:
+        mouse = self.to_canvas(pygame.mouse.get_pos()) if pygame.display.get_init() else (-1, -1)
+        for (label, action), rect in zip(buttons, self.button_rects(len(buttons), top)):
+            self._panel(rect, CHOICE_HOVER if rect.collidepoint(mouse) else CHOICE_COLOR)
+            text = self.choice_font.render(label, True, TEXT_COLOR)
+            self.canvas.blit(text, text.get_rect(center=rect.center))
+            self._buttons.append((rect, action))
+
+    def _draw_title(self) -> None:
+        in_game = self.stage.background
+        self.stage.background = self.settings.get("title_background", in_game)
+        self._draw_background()
+        self.stage.background = in_game
+        title = self.title_font.render(self.title, True, TEXT_COLOR)
+        room = self.size[0] - 160
+        if title.get_width() > room:  # long titles shrink to fit
+            scale = room / title.get_width()
+            title = pygame.transform.smoothscale(
+                title, (room, int(title.get_height() * scale))
+            )
+        rect = title.get_rect(center=(self.size[0] // 2, 150))
+        self._panel(rect.inflate(48, 28), BOX_COLOR)
+        self.canvas.blit(title, rect)
+
+    def _draw_menu(self) -> None:
+        buttons = self._menu_buttons()
+        if self.screen == "menu":
+            self._shade()
+        top = (self.size[1] - len(buttons) * (MENU_HEIGHT + 12)) // 2 + (60 if self.screen == "title" else 0)
+        self._draw_buttons(buttons, top)
+
+    def slot_rects(self) -> List["pygame.Rect"]:
+        w, h = self.size
+        gap = 16
+        grid_w = 3 * SLOT_SIZE[0] + 2 * gap
+        left, top = (w - grid_w) // 2, 86
+        return [
+            pygame.Rect(left + (i % 3) * (SLOT_SIZE[0] + gap), top + (i // 3) * (SLOT_SIZE[1] + gap),
+                        *SLOT_SIZE)
+            for i in range(len(NUMBERED_SLOTS))
+        ]
+
+    def _draw_slots(self) -> None:
+        self._shade()
+        heading = self.title_font.render("Save" if self.screen == "save" else "Load", True,
+                                         TEXT_COLOR)
+        self.canvas.blit(heading, heading.get_rect(center=(self.size[0] // 2, 42)))
+        for slot_info, rect in zip(self.saves.slots(), self.slot_rects()):
+            slot, meta = slot_info["slot"], slot_info["meta"]
+            self._panel(rect, CHOICE_COLOR)
+            self._buttons.append((rect, functools.partial(self._slot_clicked, slot)))
+            label = self.small_font.render(f"Slot {slot}", True, NAME_COLOR)
+            self.canvas.blit(label, (rect.x + 12, rect.y + 8))
+            if meta is None:
+                empty = self.small_font.render("empty", True, DIM_COLOR)
+                self.canvas.blit(empty, empty.get_rect(center=rect.center))
+                continue
+            thumb_path = self.saves.thumbnail_path(slot)
+            if thumb_path.exists():
+                try:
+                    thumb = pygame.image.load(str(thumb_path))
+                    thumb = pygame.transform.smoothscale(thumb, SLOT_THUMB)
+                    self.canvas.blit(thumb, (rect.x + 12, rect.y + 38))
+                except pygame.error:
+                    pass
+            day, _, time = meta.get("saved_at", "").partition("T")
+            for i, line in enumerate((day, time, meta.get("scene", ""))):
+                surface = self.small_font.render(line, True, TEXT_COLOR)
+                self.canvas.blit(surface, (rect.x + SLOT_THUMB[0] + 26, rect.y + 40 + i * 28))
+        self._draw_buttons([("Back", self.back)], self.size[1] - 72)
+
+    def backlog_lines(self) -> List[Tuple[str, Tuple[int, int, int]]]:
+        lines: List[Tuple[str, Tuple[int, int, int]]] = []
+        width = self.size[0] - 2 * MARGIN - 60
+        for entry in self.engine.backlog():
+            args = entry["args"] or {}
+            if entry["block_type"] == "ShowText":
+                speaker = args.get("speaker")
+                if speaker:
+                    lines.append((str(speaker), NAME_COLOR))
+                for line in wrap_text(self.text_font, str(args.get("text", "")), width):
+                    lines.append((line, TEXT_COLOR))
+            elif entry["block_type"] == "BranchChoice" and entry["choice"] is not None:
+                choices = args.get("choices", [])
+                picked = choices[entry["choice"]] if isinstance(entry["choice"], int) and \
+                    0 <= entry["choice"] < len(choices) else entry["choice"]
+                lines.append((f"> {picked}", DIM_COLOR))
+            lines.append(("", TEXT_COLOR))
+        return lines
+
+    def _draw_backlog(self) -> None:
+        self._shade()
+        heading = self.title_font.render("Backlog", True, TEXT_COLOR)
+        self.canvas.blit(heading, heading.get_rect(center=(self.size[0] // 2, 50)))
+        lines = self.backlog_lines()
+        line_h = self.text_font.get_linesize()
+        visible = (self.size[1] - 190) // line_h
+        self.backlog_scroll = min(self.backlog_scroll, max(0, len(lines) - visible))
+        end = len(lines) - self.backlog_scroll
+        y = 100
+        for text, color in lines[max(0, end - visible):end]:
+            self.canvas.blit(self.text_font.render(text, True, color), (MARGIN + 30, y))
+            y += line_h
+        hint = self.small_font.render("wheel / arrows to scroll, click or Esc to close", True,
+                                      DIM_COLOR)
+        self.canvas.blit(hint, hint.get_rect(center=(self.size[0] // 2, self.size[1] - 30)))
 
     # --- audio ----------------------------------------------------------
 

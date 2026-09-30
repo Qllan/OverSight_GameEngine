@@ -14,8 +14,8 @@ DEMO = Path(__file__).parents[1] / "examples" / "demo" / "project.json"
 
 
 @pytest.fixture
-def player():
-    p = Player(str(DEMO))
+def player(tmp_path):
+    p = Player(str(DEMO), save_root=tmp_path)
     p.start()
     yield p
     p.close()
@@ -140,7 +140,7 @@ def test_missing_assets_draw_placeholders(tmp_path):
              "edges": [{"from": "e", "to": "bg"}, {"from": "bg", "to": "c"}, {"from": "c", "to": "t"}]}
     import json
     project.write_text(json.dumps({"project_id": "p", "start": "s", "scenes": [scene]}))
-    p = Player(str(project))
+    p = Player(str(project), save_root=tmp_path / "saves")
     p.start()
     p.draw()
     assert p.stage.text == "Boo" and p.image("ghost") is None

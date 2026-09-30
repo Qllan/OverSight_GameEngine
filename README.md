@@ -246,11 +246,28 @@ for tools.
 python -m vn_engine.player examples/demo/project.json
 ```
 
-A pygame-ce window that plays a project: backgrounds, characters, a text box
-with letter-by-letter text, choice buttons, music, sounds and voice. Click,
-Space or Enter continues (the first press completes the text); choices are
-picked with the mouse, 1–9 or arrows + Enter. The canvas keeps its resolution
-and scales to any window size.
+A pygame-ce window that plays a project: title screen, backgrounds,
+characters, a text box with letter-by-letter text, choice buttons, music,
+sounds and voice. The canvas keeps its resolution and scales to any window
+size.
+
+| Control | Action |
+|---------|--------|
+| Click / Space / Enter | continue (the first press completes the text) |
+| Mouse, 1–9, arrows + Enter | pick a choice |
+| Esc / right click | menu: save, load, backlog, skip, auto, title, quit |
+| F5 / F9 | quick save / quick load |
+| Ctrl (hold) / Tab | skip text already read (stops at new text and choices) |
+| A | auto-advance (delay grows with the line length) |
+| L | backlog |
+| Mouse wheel up / PageUp | roll back to the previous line |
+
+Nine save slots with thumbnails, a quick save and an autosave (before every
+choice and on quit; the title screen's *Continue* loads it). Saves and
+persistent data live in the user's data folder, not next to the game:
+`~/.local/share/vn_engine/<project_id>` on Linux,
+`~/Library/Application Support/...` on macOS, `%APPDATA%\vn_engine\...` on
+Windows (`VN_ENGINE_SAVE_DIR` or `--save-dir` overrides it).
 
 The stage is driven by `novel_plugin` blocks:
 
@@ -270,7 +287,8 @@ placeholders, so a story can be played before its art exists. Optional
 settings in `project.json`:
 
 ```json
-"player": {"title": "My Game", "resolution": [1280, 720], "text_speed": 45, "font": "fonts/main"}
+"player": {"title": "My Game", "resolution": [1280, 720], "text_speed": 45,
+           "font": "fonts/main", "title_background": "bg/title"}
 ```
 
 `examples/demo` is a small playable project with generated art and sounds
@@ -413,5 +431,4 @@ maturin build --release
 2. **Determinism**: Floating point in blocks could break determinism.
 
 ### Next: quality of life
-- Save slots UI, auto-save, skip/auto modes built on `seen_before`
 - Export to a standalone executable (PyInstaller + Rust binary)

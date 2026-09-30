@@ -3,6 +3,7 @@
   "start": "park",
   "assets": "assets",
   "variables": {"player": "Alex", "affection": 0},
-  "player": {"title": "VN Engine Demo: Afternoon in the Park", "resolution": [1280, 720], "text_speed": 45},
+  "player": {"title": "VN Engine Demo: Afternoon in the Park", "resolution": [1280, 720], "text_speed": 45,
+             "title_background": "bg/park"},
   "scenes": ["scenes/park.json", "scenes/cafe.json"]
 }
