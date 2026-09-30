@@ -116,17 +116,7 @@ impl AstGraph {
 
     /// Check if graph has cycles (returns true if acyclic)
     pub fn is_dag(&self) -> bool {
-        let mut visited = HashMap::new();
-        let mut rec_stack = HashMap::new();
-
-        for node_id in self.get_node_ids() {
-            if !visited.get(&node_id).unwrap_or(&false)
-                && self.has_cycle_dfs(&node_id, &mut visited, &mut rec_stack)
-            {
-                return false;
-            }
-        }
-        true
+        self.find_cycle(|_| true).is_none()
     }
 
     /// The node where execution starts: the "entry" node if there is one,
@@ -146,29 +136,56 @@ impl AstGraph {
 }
 
 impl AstGraph {
-    fn has_cycle_dfs(
-        &self,
-        node_id: &str,
-        visited: &mut HashMap<String, bool>,
-        rec_stack: &mut HashMap<String, bool>,
-    ) -> bool {
-        visited.insert(node_id.to_string(), true);
-        rec_stack.insert(node_id.to_string(), true);
+    /// Find a cycle among the nodes accepted by `include`, returned as a
+    /// path that starts and ends on the same node. Iterative, so long
+    /// linear scripts cannot overflow the stack.
+    pub fn find_cycle(&self, include: impl Fn(&AstNode) -> bool) -> Option<Vec<String>> {
+        #[derive(Clone, Copy, PartialEq)]
+        enum Mark {
+            OnPath,
+            Done,
+        }
+        let mut marks: HashMap<&str, Mark> = HashMap::new();
+        let mut roots: Vec<&String> = self.nodes.keys().collect();
+        roots.sort();
 
-        if let Some(node) = self.nodes.get(node_id) {
-            for successor in &node.successors {
-                if !visited.get(successor).unwrap_or(&false) {
-                    if self.has_cycle_dfs(successor, visited, rec_stack) {
-                        return true;
+        for root in roots {
+            if marks.contains_key(root.as_str()) || !include(&self.nodes[root]) {
+                continue;
+            }
+            // (node, index of the next successor to visit)
+            let mut path: Vec<(&str, usize)> = vec![(root, 0)];
+            marks.insert(root, Mark::OnPath);
+
+            while let Some(&(id, next_index)) = path.last() {
+                let Some(next) = self.nodes[id].successors.get(next_index) else {
+                    marks.insert(id, Mark::Done);
+                    path.pop();
+                    continue;
+                };
+                if let Some(top) = path.last_mut() {
+                    top.1 += 1;
+                }
+                if !self.nodes.get(next).is_some_and(&include) {
+                    continue;
+                }
+                match marks.get(next.as_str()) {
+                    Some(Mark::OnPath) => {
+                        let start = path.iter().position(|(n, _)| n == next)?;
+                        let mut cycle: Vec<String> =
+                            path[start..].iter().map(|(n, _)| n.to_string()).collect();
+                        cycle.push(next.clone());
+                        return Some(cycle);
                     }
-                } else if *rec_stack.get(successor).unwrap_or(&false) {
-                    return true;
+                    Some(Mark::Done) => {}
+                    None => {
+                        marks.insert(next, Mark::OnPath);
+                        path.push((next, 0));
+                    }
                 }
             }
         }
-
-        rec_stack.insert(node_id.to_string(), false);
-        false
+        None
     }
 }
 
@@ -283,6 +300,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(graph.start_node().as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn find_cycle_returns_the_loop_path() {
+        let graph = parse_json_graph(
+            r#"{"graph_id":"g","version":"1.0",
+                "nodes":[{"id":"s","type":"entry"},{"id":"a","type":"X"},{"id":"b","type":"X"},{"id":"c","type":"X"}],
+                "edges":[{"from":"s","to":"a"},{"from":"a","to":"b"},{"from":"b","to":"c"},{"from":"c","to":"a"}]}"#,
+        )
+        .unwrap();
+        assert!(!graph.is_dag());
+        assert_eq!(graph.find_cycle(|_| true).unwrap(), vec!["a", "b", "c", "a"]);
+        assert_eq!(graph.find_cycle(|n| n.id != "b"), None);
+    }
+
+    #[test]
+    fn long_chain_does_not_overflow() {
+        let n = 50_000;
+        let nodes: Vec<String> = (0..n)
+            .map(|i| format!(r#"{{"id":"n{}","type":"X"}}"#, i))
+            .collect();
+        let edges: Vec<String> = (1..n)
+            .map(|i| format!(r#"{{"from":"n{}","to":"n{}"}}"#, i - 1, i))
+            .collect();
+        let json = format!(
+            r#"{{"graph_id":"g","version":"1.0","nodes":[{}],"edges":[{}]}}"#,
+            nodes.join(","),
+            edges.join(",")
+        );
+        assert!(parse_json_graph(&json).unwrap().is_dag());
     }
 
     #[test]

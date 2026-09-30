@@ -424,6 +424,33 @@ mod tests {
     }
 
     #[test]
+    fn menu_loop_returns_to_the_menu() {
+        let mut m = machine_for(include_str!("../../examples/menu_loop.json"));
+        let mut texts = Vec::new();
+        let mut choices = vec![json!(0), json!(0), json!(1)].into_iter();
+        m.run_until_blocked(1000).unwrap();
+        while m.is_running() {
+            if m.yield_reason() == Some("choice") {
+                m.resume(choices.next()).unwrap();
+            } else {
+                texts.push(m.last_block.as_ref().unwrap().1["text"].clone());
+                m.resume(None).unwrap();
+            }
+            m.run_until_blocked(1000).unwrap();
+        }
+        assert_eq!(
+            texts,
+            vec![
+                json!("You stand in a small, dusty room."),
+                json!("Nothing but dust."),
+                json!("Nothing but dust.")
+            ]
+        );
+        assert_eq!(m.get_variable("left_room"), Some(&json!(true)));
+        assert!(m.stack.is_empty());
+    }
+
+    #[test]
     fn set_variable_and_merge() {
         let mut m = machine_for(
             r#"{"graph_id":"g","version":"1.0",

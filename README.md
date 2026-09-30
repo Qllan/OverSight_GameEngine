@@ -39,7 +39,6 @@
 │   ├── compiler/
 │   │   ├── graph_parser.rs # JSON → Graph AST
 │   │   ├── validator.rs    # Structural validation
-│   │   ├── topology.rs     # Topological sort
 │   │   ├── codegen.rs      # AST → Opcodes (labels + resolved jumps)
 │   │   └── graph_compiler.rs # Python-facing compiler
 │   ├── vm/
@@ -58,7 +57,8 @@
 │   └── editor/main.py      # DearPyGui node editor
 ├── tests/                  # pytest suite + fixtures
 └── examples/
-    └── simple_novel.json   # Example visual novel graph
+    ├── simple_novel.json   # Linear scene with one choice
+    └── menu_loop.json      # Menu the player can return to
 ```
 
 ## Key Interfaces
@@ -143,6 +143,10 @@ from the start node (the `entry` node, or the only node without inputs), so a
 node's first successor normally follows it directly; any other transition is
 a `JUMP`, resolved to the target node's first opcode in a second pass. Nodes
 not reachable from the start are skipped.
+
+Graphs may contain loops (e.g. a menu the player returns to), as long as every
+loop passes through a node that waits for the player (`ShowText` or
+`BranchChoice`); otherwise validation fails with `BUSY_LOOP`.
 
 | Node | Bytecode |
 |------|----------|
@@ -276,14 +280,10 @@ maturin build --release
 ### Risks
 1. **SDL2 dependencies**: pygame-ce may need system libraries (libsdl2-dev).
 2. **Determinism**: Floating point in blocks could break determinism.
-3. **Graphs must be acyclic**: the validator still rejects cycles, although
-   the jump-based codegen could run loops (e.g. "return to menu").
-4. **PyO3 0.20**: upgrading to the Bound API (0.21+) is pending.
 
 ### Phase 2 Planned Features
 - Actual rendering with pygame-ce (sprites, backgrounds, text boxes)
 - Save/Load system integration (VM state is pc + stack + variables)
 - Audio playback (BGM, SFX, voice)
 - More block types (animations, transitions, mini-games)
-- Allow cycles in graphs
 - Export to standalone executable (PyInstaller + Rust binary)

@@ -1,12 +1,13 @@
 //! Validator - Graph validation and error reporting
 //!
 //! Validates the AST graph for structural correctness:
-//! - DAG verification (no cycles)
+//! - Every loop waits for the player at least once
 //! - A single, unambiguous start node
 //! - Node type validation
 //! - Connection integrity
 //! - Parameter validation
 
+use crate::compiler::codegen::node_waits_for_player;
 use crate::compiler::graph_parser::{AstGraph, AstNode};
 use pyo3::prelude::*;
 use std::collections::HashSet;
@@ -56,13 +57,14 @@ impl ValidationError {
 pub fn validate_graph(graph: &AstGraph) -> Vec<ValidationError> {
     let mut errors = Vec::new();
 
-    // Check 1: Verify it's a DAG (no cycles)
-    if !graph.is_dag() {
+    // Check 1: Loops are allowed ("back to the menu"), but each must wait
+    // for the player somewhere, or the VM would spin forever
+    if let Some(cycle) = graph.find_cycle(|n| !node_waits_for_player(&n.node_type)) {
         errors.push(ValidationError::new(
-            "CYCLE_DETECTED",
-            "Graph contains cycles. Visual script graphs must be Directed Acyclic Graphs (DAGs).",
-            None,
-            Some("Check your branch connections for circular references."),
+            "BUSY_LOOP",
+            &format!("Loop never waits for the player: {}", cycle.join(" -> ")),
+            Some(&cycle[0]),
+            Some("Put a ShowText or BranchChoice node inside the loop."),
         ));
     }
 
@@ -357,6 +359,28 @@ mod tests {
                 "nodes":[{"id":"a","type":"End"},{"id":"b","type":"End"}],"edges":[]}"#,
         );
         assert_eq!(types, vec!["AMBIGUOUS_ENTRY"]);
+    }
+
+    #[test]
+    fn loop_through_a_choice_is_allowed() {
+        let types = error_types(include_str!("../../examples/menu_loop.json"));
+        assert!(types.is_empty(), "{:?}", types);
+    }
+
+    #[test]
+    fn loop_without_player_input_is_rejected() {
+        let graph = parse_json_graph(
+            r#"{"graph_id":"g","version":"1.0",
+                "nodes":[{"id":"s","type":"entry"},
+                         {"id":"a","type":"SetVariable","parameters":{"name":"x","value":1}},
+                         {"id":"b","type":"SetVariable","parameters":{"name":"x","value":2}}],
+                "edges":[{"from":"s","to":"a"},{"from":"a","to":"b"},{"from":"b","to":"a"}]}"#,
+        )
+        .unwrap();
+        let errors = validate_graph(&graph);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].error_type, "BUSY_LOOP");
+        assert_eq!(errors[0].message, "Loop never waits for the player: a -> b -> a");
     }
 
     #[test]

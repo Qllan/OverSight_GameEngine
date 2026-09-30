@@ -17,6 +17,11 @@ use std::fmt;
 /// Variable that receives the player's choice in BranchChoice nodes
 pub const BRANCH_RESULT_VAR: &str = "__branch_result";
 
+/// Whether nodes of this type YIELD to wait for the player
+pub fn node_waits_for_player(node_type: &str) -> bool {
+    matches!(node_type, "ShowText" | "BranchChoice")
+}
+
 /// Bytecode opcodes for the VM
 #[allow(non_camel_case_types)]
 #[derive(Debug, Clone, PartialEq)]

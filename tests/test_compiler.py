@@ -31,10 +31,12 @@ def test_compile_is_deterministic(valid_graph):
         assert GraphCompiler().compile(valid_graph)["disassembly"] == first
 
 
-def test_broken_graph_reports_cycle_and_mismatch(broken_graph):
+def test_broken_graph_reports_busy_loop_and_mismatch(broken_graph):
     errors = GraphCompiler().validate_detailed(broken_graph)
     types = {e["error_type"] for e in errors}
-    assert types == {"CYCLE_DETECTED", "BRANCH_MISMATCH"}
+    assert types == {"BUSY_LOOP", "BRANCH_MISMATCH"}
+    busy = next(e for e in errors if e["error_type"] == "BUSY_LOOP")
+    assert "spin_a -> spin_b -> spin_a" in busy["message"]
     mismatch = next(e for e in errors if e["error_type"] == "BRANCH_MISMATCH")
     assert mismatch["node_id"] == "choice"
     assert mismatch["hint"]
@@ -59,3 +61,14 @@ def test_edge_to_missing_node_is_a_parse_error(valid_graph):
     valid_graph["edges"].append({"from": "start", "to": "nowhere"})
     with pytest.raises(ValueError, match="non-existent node"):
         GraphCompiler().parse(valid_graph)
+
+
+def test_loop_through_player_input_compiles():
+    import json
+    from pathlib import Path
+
+    graph = json.loads((Path(__file__).parents[1] / "examples" / "menu_loop.json").read_text())
+    compiler = GraphCompiler()
+    assert compiler.validate(graph) == []
+    assert compiler.parse(graph)["is_dag"] is False
+    assert compiler.compile(graph)["opcode_count"] > 0

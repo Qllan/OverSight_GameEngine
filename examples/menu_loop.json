@@ -1,0 +1,24 @@
+{
+  "graph_id": "menu_loop",
+  "version": "1.0",
+  "nodes": [
+    {"id": "start", "type": "entry", "position": [20, 120], "parameters": {}},
+    {"id": "intro", "type": "ShowText", "position": [150, 120],
+     "parameters": {"text": "You stand in a small, dusty room.", "speaker": "Narrator"}},
+    {"id": "menu", "type": "BranchChoice", "position": [540, 120],
+     "parameters": {"choices": ["Look around", "Leave"]}},
+    {"id": "look", "type": "ShowText", "position": [920, 20],
+     "parameters": {"text": "Nothing but dust.", "speaker": "Narrator"}},
+    {"id": "leave", "type": "SetVariable", "position": [920, 260],
+     "parameters": {"name": "left_room", "value": true}},
+    {"id": "end", "type": "EndScene", "position": [1300, 260], "parameters": {}}
+  ],
+  "edges": [
+    {"from": "start", "to": "intro"},
+    {"from": "intro", "to": "menu"},
+    {"from": "menu", "to": "look", "port": 0},
+    {"from": "menu", "to": "leave", "port": 1},
+    {"from": "look", "to": "menu"},
+    {"from": "leave", "to": "end"}
+  ]
+}
