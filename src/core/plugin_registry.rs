@@ -36,7 +36,7 @@ pub struct ParameterDefinition {
 #[pymethods]
 impl ParameterDefinition {
     #[new]
-    fn new(name: &str, param_type: &str, default: Option<&str>) -> Self {
+    pub fn new(name: &str, param_type: &str, default: Option<&str>) -> Self {
         ParameterDefinition {
             name: name.to_string(),
             param_type: param_type.to_string(),
@@ -48,7 +48,7 @@ impl ParameterDefinition {
 #[pymethods]
 impl BlockDefinition {
     #[new]
-    fn new(
+    pub fn new(
         block_type: &str,
         display_name: &str,
         inputs: Vec<String>,
@@ -80,7 +80,7 @@ pub struct PluginInfo {
 #[pymethods]
 impl PluginInfo {
     #[new]
-    fn new(name: &str, version: &str, author: &str) -> Self {
+    pub fn new(name: &str, version: &str, author: &str) -> Self {
         PluginInfo {
             name: name.to_string(),
             version: version.to_string(),
@@ -94,20 +94,23 @@ impl PluginInfo {
 pub struct PluginRegistry {
     plugins: HashMap<String, PluginInfo>,
     blocks: HashMap<String, BlockDefinition>,
+    /// block_type -> name of the plugin that registered it
+    block_owners: HashMap<String, String>,
 }
 
 #[pymethods]
 impl PluginRegistry {
     #[new]
-    fn new() -> Self {
+    pub fn new() -> Self {
         PluginRegistry {
             plugins: HashMap::new(),
             blocks: HashMap::new(),
+            block_owners: HashMap::new(),
         }
     }
 
     /// Register a plugin with its metadata
-    fn register_plugin(&mut self, info: &PluginInfo) -> PyResult<()> {
+    pub fn register_plugin(&mut self, info: &PluginInfo) -> PyResult<()> {
         if self.plugins.contains_key(&info.name) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Plugin '{}' already registered",
@@ -120,7 +123,7 @@ impl PluginRegistry {
     }
 
     /// Register a block definition from a plugin
-    fn register_block(&mut self, plugin_name: &str, block: &BlockDefinition) -> PyResult<()> {
+    pub fn register_block(&mut self, plugin_name: &str, block: &BlockDefinition) -> PyResult<()> {
         if !self.plugins.contains_key(plugin_name) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Plugin '{}' not found",
@@ -139,31 +142,40 @@ impl PluginRegistry {
             plugin_name
         );
         self.blocks.insert(block.block_type.clone(), block.clone());
+        self.block_owners
+            .insert(block.block_type.clone(), plugin_name.to_string());
         Ok(())
     }
 
     /// Get a block definition by type
-    fn get_block(&self, block_type: &str) -> Option<BlockDefinition> {
+    pub fn get_block(&self, block_type: &str) -> Option<BlockDefinition> {
         self.blocks.get(block_type).cloned()
     }
 
     /// Check if a block type is registered
-    fn has_block(&self, block_type: &str) -> bool {
+    pub fn has_block(&self, block_type: &str) -> bool {
         self.blocks.contains_key(block_type)
     }
 
     /// Get all registered block types
-    fn get_all_blocks(&self) -> Vec<BlockDefinition> {
-        self.blocks.values().cloned().collect()
+    pub fn get_all_blocks(&self) -> Vec<BlockDefinition> {
+        let mut blocks: Vec<BlockDefinition> = self.blocks.values().cloned().collect();
+        blocks.sort_by(|a, b| a.block_type.cmp(&b.block_type));
+        blocks
+    }
+
+    /// Get the name of the plugin that registered a block type
+    pub fn get_block_owner(&self, block_type: &str) -> Option<String> {
+        self.block_owners.get(block_type).cloned()
     }
 
     /// Get all registered plugins
-    fn get_all_plugins(&self) -> Vec<PluginInfo> {
+    pub fn get_all_plugins(&self) -> Vec<PluginInfo> {
         self.plugins.values().cloned().collect()
     }
 
     /// Unregister a plugin and its blocks
-    fn unregister_plugin(&mut self, plugin_name: &str) -> PyResult<()> {
+    pub fn unregister_plugin(&mut self, plugin_name: &str) -> PyResult<()> {
         if !self.plugins.contains_key(plugin_name) {
             return Err(pyo3::exceptions::PyValueError::new_err(format!(
                 "Plugin '{}' not found",
@@ -173,14 +185,15 @@ impl PluginRegistry {
         
         // Remove all blocks from this plugin
         let blocks_to_remove: Vec<String> = self
-            .blocks
+            .block_owners
             .iter()
-            .filter(|(_, b)| b.display_name.starts_with(plugin_name))
-            .map(|(k, _)| k.clone())
+            .filter(|(_, owner)| owner.as_str() == plugin_name)
+            .map(|(block_type, _)| block_type.clone())
             .collect();
-        
+
         for block_type in blocks_to_remove {
             self.blocks.remove(&block_type);
+            self.block_owners.remove(&block_type);
         }
         
         self.plugins.remove(plugin_name);

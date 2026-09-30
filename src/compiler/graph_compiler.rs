@@ -44,6 +44,8 @@ impl GraphCompiler {
 
     /// Full compile pipeline: JSON → AST → Validate → Bytecode
     fn compile_json(&mut self, json_str: &str) -> PyResult<CompiledProgram> {
+        self.last_errors.clear();
+
         // Parse
         let ast = parse_json_graph(json_str)
             .map_err(|e| pyo3::exceptions::PyValueError::new_err(format!("Parse error: {}", e)))?;

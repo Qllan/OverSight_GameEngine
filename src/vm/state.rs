@@ -22,6 +22,12 @@ pub struct PyVMState {
     pub yield_reason: Option<String>,
     #[pyo3(get)]
     pub is_running: bool,
+    /// Block type of the most recent CALL_BLOCK
+    #[pyo3(get)]
+    pub last_block_type: Option<String>,
+    /// Arguments of the most recent CALL_BLOCK as a JSON object string
+    #[pyo3(get)]
+    pub last_block_args: Option<String>,
 }
 
 #[pymethods]
@@ -36,6 +42,8 @@ impl PyVMState {
             is_yielding: false,
             yield_reason: None,
             is_running: false,
+            last_block_type: None,
+            last_block_args: None,
         }
     }
 
@@ -78,18 +86,20 @@ impl PyVMState {
         stack: &[JsonValue],
         variables: &HashMap<String, JsonValue>,
         current_node_id: Option<&str>,
-        is_yielding: bool,
         yield_reason: Option<&str>,
         is_running: bool,
+        last_block: Option<&(String, JsonValue)>,
     ) -> Self {
         PyVMState {
             pc,
             stack: stack.iter().map(|v| v.to_string()).collect(),
             variables: variables.iter().map(|(k, v)| (k.clone(), v.to_string())).collect(),
             current_node_id: current_node_id.map(String::from),
-            is_yielding,
+            is_yielding: yield_reason.is_some(),
             yield_reason: yield_reason.map(String::from),
             is_running,
+            last_block_type: last_block.map(|(t, _)| t.clone()),
+            last_block_args: last_block.map(|(_, a)| a.to_string()),
         }
     }
 }

@@ -82,6 +82,7 @@ mod tests {
             position: None,
             parameters: HashMap::new(),
             successors: vec!["B".to_string(), "C".to_string()],
+            successor_ports: vec![None; 2],
             predecessors: vec![],
         });
         
@@ -91,6 +92,7 @@ mod tests {
             position: None,
             parameters: HashMap::new(),
             successors: vec!["D".to_string()],
+            successor_ports: vec![None; 1],
             predecessors: vec!["A".to_string()],
         });
         
@@ -100,6 +102,7 @@ mod tests {
             position: None,
             parameters: HashMap::new(),
             successors: vec!["D".to_string()],
+            successor_ports: vec![None; 1],
             predecessors: vec!["A".to_string()],
         });
         
@@ -109,6 +112,7 @@ mod tests {
             position: None,
             parameters: HashMap::new(),
             successors: vec![],
+            successor_ports: vec![None; 0],
             predecessors: vec!["B".to_string(), "C".to_string()],
         });
 

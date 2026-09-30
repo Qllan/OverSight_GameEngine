@@ -5,13 +5,13 @@
     {
       "id": "start",
       "type": "entry",
-      "position": [100, 100],
+      "position": [20, 120],
       "parameters": {}
     },
     {
       "id": "show_title",
       "type": "ShowText",
-      "position": [300, 100],
+      "position": [150, 120],
       "parameters": {
         "text": "Welcome to the Visual Novel!",
         "speaker": "Narrator"
@@ -20,7 +20,7 @@
     {
       "id": "player_choice",
       "type": "BranchChoice",
-      "position": [500, 100],
+      "position": [540, 120],
       "parameters": {
         "choices": ["Start Adventure", "Exit"]
       }
@@ -28,7 +28,7 @@
     {
       "id": "adventure_path",
       "type": "ShowText",
-      "position": [700, 50],
+      "position": [920, 40],
       "parameters": {
         "text": "Your adventure begins...",
         "speaker": "Narrator"
@@ -37,7 +37,7 @@
     {
       "id": "exit_path",
       "type": "EndScene",
-      "position": [700, 150],
+      "position": [920, 260],
       "parameters": {}
     }
   ],
