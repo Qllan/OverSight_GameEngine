@@ -19,6 +19,23 @@ use crate::vm::values;
 /// Deepest CallScene nesting before the VM reports runaway recursion
 pub const MAX_CALL_DEPTH: usize = 256;
 
+/// Most recent lines kept in the backlog
+pub const BACKLOG_LIMIT: usize = 200;
+
+/// Yields kept for rollback, unless changed with `set_rollback_limit`
+pub const DEFAULT_ROLLBACK_LIMIT: usize = 100;
+
+/// One line of the backlog: what was shown at a yield
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BacklogEntry {
+    pub scene: String,
+    pub node_id: Option<String>,
+    pub block_type: Option<String>,
+    pub args: JsonValue,
+    /// The value picked at a choice
+    pub choice: Option<JsonValue>,
+}
+
 /// What an opcode asks the machine to do next
 enum Flow {
     Next,
@@ -54,6 +71,9 @@ pub struct ExecState {
     /// Whether the current yield had been reached before (any playthrough)
     #[serde(default)]
     pub yield_seen: bool,
+    /// What the player has seen, oldest first (at most BACKLOG_LIMIT)
+    #[serde(default)]
+    pub backlog: Vec<BacklogEntry>,
 }
 
 /// Prefix of variables kept across playthroughs (not in saves)
@@ -138,13 +158,30 @@ fn resolve_anchor(program: &CompiledProgram, anchor: &Anchor) -> Option<usize> {
         .nth(anchor.occurrence)
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Machine {
     project: Option<CompiledProject>,
     pub(crate) exec: ExecState,
     persistent: PersistentData,
+    /// State at each recent yield, oldest first, for rollback
+    history: std::collections::VecDeque<ExecState>,
+    rollback_limit: usize,
     log: Vec<String>,
     events: Vec<Event>,
+}
+
+impl Default for Machine {
+    fn default() -> Self {
+        Machine {
+            project: None,
+            exec: ExecState::default(),
+            persistent: PersistentData::default(),
+            history: Default::default(),
+            rollback_limit: DEFAULT_ROLLBACK_LIMIT,
+            log: Vec::new(),
+            events: Vec::new(),
+        }
+    }
 }
 
 impl Machine {
@@ -183,7 +220,9 @@ impl Machine {
         self.exec.wait_frames = 0;
         self.exec.current_node_id = None;
         self.exec.last_block = None;
+        self.exec.backlog.clear();
         self.exec.running = true;
+        self.history.clear();
         self.log_event("VM started");
         self.enter_scene(start);
         Ok(())
@@ -253,6 +292,7 @@ impl Machine {
                 self.log_event(&format!("Yielded: {}", reason));
                 self.events.push(Event::YieldRequest { reason: reason.clone() });
                 self.exec.yield_reason = Some(reason);
+                self.record_yield();
             }
             Flow::Wait(frames) => {
                 self.exec.pc += 1;
@@ -287,6 +327,62 @@ impl Machine {
         Ok(())
     }
 
+    /// Add the shown block to the backlog and remember the state for rollback
+    fn record_yield(&mut self) {
+        let (block_type, args) = match &self.exec.last_block {
+            Some((block_type, args)) => (Some(block_type.clone()), args.clone()),
+            None => (None, JsonValue::Null),
+        };
+        self.exec.backlog.push(BacklogEntry {
+            scene: self.exec.scene.clone(),
+            node_id: self.exec.current_node_id.clone(),
+            block_type,
+            args,
+            choice: None,
+        });
+        if self.exec.backlog.len() > BACKLOG_LIMIT {
+            self.exec.backlog.remove(0);
+        }
+        if self.rollback_limit > 0 {
+            if self.history.len() >= self.rollback_limit {
+                self.history.pop_front();
+            }
+            self.history.push_back(self.exec.clone());
+        }
+    }
+
+    /// Go back to the previous point where the game waited for the player,
+    /// undoing everything since (except persistent data). Returns false if
+    /// there is nothing to go back to.
+    pub fn rollback(&mut self) -> bool {
+        // While waiting, the newest snapshot is the current point itself
+        let at_newest = self.exec.yield_reason.is_some() && self.history.back() == Some(&self.exec);
+        let needed = if at_newest { 2 } else { 1 };
+        if self.history.len() < needed {
+            return false;
+        }
+        if at_newest {
+            self.history.pop_back();
+        }
+        if let Some(previous) = self.history.back() {
+            self.exec = previous.clone();
+        }
+        self.log_event("Rolled back");
+        true
+    }
+
+    /// How many yields are kept for rollback (0 disables it)
+    pub fn set_rollback_limit(&mut self, limit: usize) {
+        self.rollback_limit = limit;
+        while self.history.len() > limit {
+            self.history.pop_front();
+        }
+    }
+
+    pub fn backlog(&self) -> &[BacklogEntry] {
+        &self.exec.backlog
+    }
+
     fn enter_scene(&mut self, scene: String) {
         self.exec.scene = scene.clone();
         self.exec.pc = 0;
@@ -317,7 +413,12 @@ impl Machine {
             return Ok(false);
         };
         match (reason.as_str(), value) {
-            ("choice", Some(value)) => self.exec.stack.push(value),
+            ("choice", Some(value)) => {
+                if let Some(entry) = self.exec.backlog.last_mut() {
+                    entry.choice = Some(value.clone());
+                }
+                self.exec.stack.push(value)
+            }
             ("choice", None) => return Err("resume() needs the selected choice".to_string()),
             (_, Some(_)) => return Err(format!("Yield '{}' does not take a value", reason)),
             (_, None) => {}
@@ -367,6 +468,7 @@ impl Machine {
     /// Clear execution state (keeps the loaded project and persistent data)
     pub fn reset(&mut self) {
         self.exec = ExecState::default();
+        self.history.clear();
         self.log.clear();
         self.events.clear();
     }
@@ -442,6 +544,11 @@ impl Machine {
         let defaults = project.variables.clone();
         self.exec = state;
         self.apply_defaults(&defaults);
+        // Rollback starts over from the loaded point
+        self.history.clear();
+        if self.exec.yield_reason.is_some() && self.rollback_limit > 0 {
+            self.history.push_back(self.exec.clone());
+        }
         self.log_event("State loaded");
         Ok(())
     }
@@ -1209,6 +1316,62 @@ mod tests {
         assert_eq!(m.get_variable("persistent.endings"), Some(&json!(2)));
         assert!(m.persistent().seen.contains("g:line"));
         assert!(!m.exec.variables.contains_key("persistent.endings"));
+    }
+
+    #[test]
+    fn rollback_returns_to_previous_yields() {
+        let mut m = machine_for(AFFECTION);
+        m.set_variable("player", json!("Alex"));
+        m.set_variable("speaker_name", json!("Mia"));
+        assert!(!m.rollback(), "nothing to roll back to yet");
+        m.run_until_blocked(1000).unwrap(); // greeting
+        m.resume(None).unwrap();
+        m.run_until_blocked(1000).unwrap(); // choice
+        m.resume(Some(json!(1))).unwrap();
+        m.run_until_blocked(1000).unwrap(); // "She frowns."
+        assert_eq!(m.get_variable("affection"), Some(&json!(-1)));
+        assert_eq!(m.backlog().len(), 3);
+        assert_eq!(m.backlog()[1].choice, Some(json!(1)));
+
+        // Back to the choice: the rude answer is undone
+        assert!(m.rollback());
+        assert_eq!(m.yield_reason(), Some("choice"));
+        assert_eq!(m.get_variable("affection"), Some(&json!(0)));
+        assert_eq!(m.backlog().len(), 2);
+        assert_eq!(m.backlog()[1].choice, None);
+
+        // Choose differently this time
+        m.resume(Some(json!(0))).unwrap();
+        m.run_until_blocked(1000).unwrap();
+        assert_eq!(m.exec.last_block.as_ref().unwrap().1["text"], "She smiles. (affection: 3)");
+
+        // smile -> choice -> greeting
+        assert!(m.rollback());
+        assert!(m.rollback());
+        assert_eq!(m.backlog().len(), 1, "back at the greeting");
+        assert!(!m.rollback());
+
+        // Right after resume (not waiting any more) the latest yield is
+        // the point to go back to
+        m.resume(None).unwrap();
+        assert!(!m.is_yielding());
+        assert!(m.rollback());
+        assert_eq!(m.yield_reason(), Some("input"));
+        assert_eq!(m.backlog().len(), 1);
+    }
+
+    #[test]
+    fn rollback_limit_bounds_history() {
+        let mut m = machine_for(include_str!("../../examples/menu_loop.json"));
+        m.set_rollback_limit(2);
+        m.run_until_blocked(1000).unwrap();
+        for _ in 0..5 {
+            m.resume(if m.yield_reason() == Some("choice") { Some(json!(0)) } else { None })
+                .unwrap();
+            m.run_until_blocked(1000).unwrap();
+        }
+        assert!(m.rollback());
+        assert!(!m.rollback(), "only two yields are kept");
     }
 
     #[test]

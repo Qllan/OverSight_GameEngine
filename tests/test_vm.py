@@ -341,3 +341,26 @@ def test_persistent_data_is_separate_from_saves(tmp_path):
     again.run()
     assert again.run_until_yield()["seen_before"] is True
     assert "persistent.ending_a" not in again.save_state()["state"]["variables"]
+
+
+def test_rollback_and_backlog(engine):
+    engine.run_until_yield()
+    engine.resume()
+    engine.run_until_yield()
+    engine.resume(0)
+    state = engine.run_until_yield()
+    assert state["last_block_args"]["text"] == "Your adventure begins..."
+    assert [(b["node_id"], b["choice"]) for b in engine.backlog()] == [
+        ("show_title", None), ("player_choice", 0), ("adventure_path", None),
+    ]
+
+    state = engine.rollback()
+    assert state["yield_reason"] == "choice"
+    assert [b["node_id"] for b in engine.backlog()] == ["show_title", "player_choice"]
+    engine.resume(1)
+    assert engine.run_until_yield() is None  # took the other branch
+
+    engine.set_rollback_limit(0)
+    engine.run()
+    engine.run_until_yield()
+    assert engine.rollback() is None

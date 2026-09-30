@@ -319,6 +319,33 @@ class Engine:
         with open(path, "r", encoding="utf-8") as f:
             self.load_state(json.load(f))
 
+    def rollback(self) -> Optional[Dict[str, Any]]:
+        """
+        Go back to the previous point where the game waited for the player
+        (the previous line or choice), undoing everything since except
+        persistent data.
+
+        Returns:
+            State dict at that point, or None if there is nothing to go back to
+        """
+        self._require_init()
+        return state_to_dict(self._vm.rollback())
+
+    def set_rollback_limit(self, limit: int) -> None:
+        """How many steps back rollback() can go (default 100; 0 disables)."""
+        self._require_init()
+        self._vm.set_rollback_limit(limit)
+
+    def backlog(self) -> List[Dict[str, Any]]:
+        """
+        Lines and choices shown so far, oldest first (last 200). Each entry
+        has scene, node_id, block_type, args and, for choices, the picked
+        choice. Saved with the game.
+        """
+        self._require_init()
+        entries: List[Dict[str, Any]] = json.loads(self._vm.get_backlog())
+        return entries
+
     def persistent_state(self) -> Dict[str, Any]:
         """
         Data shared by all playthroughs: ``persistent.*`` variables and the

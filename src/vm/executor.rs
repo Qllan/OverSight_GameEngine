@@ -147,6 +147,24 @@ impl VMExecutor {
             .map_err(pyo3::exceptions::PyValueError::new_err)
     }
 
+    /// Go back to the previous point where the game waited for the player.
+    /// Returns the state there, or None if there is nothing to go back to.
+    fn rollback(&mut self) -> Option<PyVMState> {
+        self.machine.rollback().then(|| self.get_state())
+    }
+
+    /// How many yields are kept for rollback (0 disables it)
+    fn set_rollback_limit(&mut self, limit: usize) {
+        self.machine.set_rollback_limit(limit);
+    }
+
+    /// What the player has seen, oldest first, as a JSON list of
+    /// {scene, node_id, block_type, args, choice}
+    fn get_backlog(&self) -> PyResult<String> {
+        serde_json::to_string(self.machine.backlog())
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+    }
+
     /// Persistent data (persistent.* variables and seen places) as JSON
     fn save_persistent(&self) -> PyResult<String> {
         serde_json::to_string(self.machine.persistent())
