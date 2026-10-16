@@ -1,11 +1,28 @@
 //! Engine: the object a game talks to. It owns the renderer, the loaded
-//! resources and (later) the window, input and audio.
+//! resources, the window, input and timing.
+//!
+//! A game runs its own loop:
+//!
+//! ```no_run
+//! # use oversight::*;
+//! let mut engine = Engine::windowed(WindowConfig::default()).unwrap();
+//! while engine.poll() {
+//!     let dt = engine.time.dt;
+//!     engine.begin_frame(Color::BLACK);
+//!     // update with dt, then draw
+//!     engine.end_frame();
+//! }
+//! ```
 
 use crate::camera::Camera;
+use crate::input::{Input, Key, MouseButton};
 use crate::render::{DrawKind, Renderer, Shape};
 use crate::text::{Font, DEFAULT_FONT};
 use crate::texture::{Store, Texture};
+use crate::time::Time;
 use crate::types::{Color, Rect, Space, Sprite, Vec2};
+#[cfg(feature = "window")]
+use crate::window::{Window, WindowConfig};
 
 /// Font id of the built-in DejaVu Sans
 pub const DEFAULT_FONT_ID: u32 = 1;
@@ -23,6 +40,23 @@ pub struct Engine {
     pub textures: Store<Texture>,
     pub fonts: Store<Font>,
     pub state: DrawState,
+    pub input: Input,
+    pub time: Time,
+    #[cfg(feature = "window")]
+    pub window: Option<Window>,
+    /// Input events injected by code, applied at the next poll
+    injected: Vec<InputEvent>,
+    quit: bool,
+    last_error: Option<String>,
+}
+
+/// An input change injected by code (tests, replays, bots)
+#[derive(Debug, Clone, Copy)]
+pub enum InputEvent {
+    Key(Key, bool),
+    MouseButton(MouseButton, bool),
+    MouseMove(Vec2),
+    Wheel(f32),
 }
 
 impl Engine {
@@ -36,7 +70,107 @@ impl Engine {
             textures: Store::default(),
             fonts,
             state: DrawState::default(),
+            input: Input::default(),
+            time: Time::new(Some(1.0 / 60.0)),
+            #[cfg(feature = "window")]
+            window: None,
+            injected: Vec::new(),
+            quit: false,
+            last_error: None,
         })
+    }
+
+    /// An engine with a window; the canvas has the configured size and is
+    /// scaled to fit the window
+    #[cfg(feature = "window")]
+    pub fn windowed(config: WindowConfig) -> Result<Engine, String> {
+        let mut engine = Engine::headless(config.width, config.height)?;
+        engine.window = Some(Window::open(config)?);
+        engine.time = Time::new(None);
+        Ok(engine)
+    }
+
+    /// Start a frame: read window events and injected input and advance
+    /// the clock. Returns false when the game should end (window closed
+    /// or `quit` called).
+    pub fn poll(&mut self) -> bool {
+        self.input.next_frame();
+        #[cfg(feature = "window")]
+        if let Some(window) = self.window.as_mut() {
+            let canvas = self.renderer.size();
+            if !window.pump(&mut self.input, canvas) {
+                self.quit = true;
+            }
+        }
+        for event in std::mem::take(&mut self.injected) {
+            match event {
+                InputEvent::Key(key, down) => self.input.set_key(key, down),
+                InputEvent::MouseButton(b, down) => self.input.set_mouse_button(b, down),
+                InputEvent::MouseMove(p) => self.input.mouse = p,
+                InputEvent::Wheel(w) => self.input.wheel += w,
+            }
+        }
+        self.time.tick();
+        !self.quit
+    }
+
+    /// Make the next `poll` return false
+    pub fn quit(&mut self) {
+        self.quit = true;
+    }
+
+    pub fn inject(&mut self, event: InputEvent) {
+        self.injected.push(event);
+    }
+
+    /// The last error from loading or presenting, taken (C API reports it)
+    pub fn take_error(&mut self) -> Option<String> {
+        self.last_error.take()
+    }
+
+    pub fn set_error(&mut self, error: String) {
+        self.last_error = Some(error);
+    }
+
+    pub fn has_window(&self) -> bool {
+        #[cfg(feature = "window")]
+        return self.window.is_some();
+        #[cfg(not(feature = "window"))]
+        false
+    }
+
+    pub fn set_title(&mut self, _title: &str) {
+        #[cfg(feature = "window")]
+        if let Some(w) = self.window.as_mut() {
+            w.set_title(_title);
+        }
+    }
+
+    pub fn set_fullscreen(&mut self, _on: bool) {
+        #[cfg(feature = "window")]
+        if let Some(w) = self.window.as_mut() {
+            w.set_fullscreen(_on);
+        }
+    }
+
+    pub fn fullscreen(&self) -> bool {
+        #[cfg(feature = "window")]
+        return self.window.as_ref().is_some_and(|w| w.fullscreen());
+        #[cfg(not(feature = "window"))]
+        false
+    }
+
+    /// Frame limit for windowed engines (0 = unlimited)
+    pub fn set_target_fps(&mut self, _fps: u32) {
+        #[cfg(feature = "window")]
+        if let Some(w) = self.window.as_mut() {
+            w.set_target_fps(_fps);
+        }
+    }
+
+    /// Mouse position in world coordinates
+    pub fn mouse_world(&self) -> Vec2 {
+        self.screen_to_world(self.input.mouse)
     }
 
     pub fn size(&self) -> (u32, u32) {
@@ -134,6 +268,13 @@ impl Engine {
     /// Rasterize the frame (and show it, when there is a window)
     pub fn end_frame(&mut self) {
         self.renderer.flush(&mut self.textures, &mut self.fonts);
+        #[cfg(feature = "window")]
+        if let Some(window) = self.window.as_mut() {
+            if let Err(e) = window.present(&self.renderer.canvas) {
+                self.last_error = Some(e);
+            }
+            self.time.limit(window.target_fps());
+        }
     }
 
     pub fn draw_sprite(&mut self, texture: u32, sprite: &Sprite) {
@@ -375,6 +516,21 @@ mod tests {
         assert!(lit > 150, "text should cover some pixels, got {}", lit);
         let size = e.measure_text(DEFAULT_FONT_ID, "Привет, мир!", 24.0);
         assert!(size.x > 100.0 && size.x < 200.0);
+    }
+
+    #[test]
+    fn poll_applies_injected_input_and_quit() {
+        let mut e = Engine::headless(8, 8).unwrap();
+        e.inject(InputEvent::Key(Key::Space, true));
+        e.inject(InputEvent::MouseMove(Vec2::new(3.0, 4.0)));
+        assert!(e.poll());
+        assert!(e.input.key_pressed(Key::Space));
+        assert_eq!(e.input.mouse, Vec2::new(3.0, 4.0));
+        assert!(e.poll());
+        assert!(e.input.key_down(Key::Space) && !e.input.key_pressed(Key::Space));
+        assert!((e.time.total - 2.0 / 60.0).abs() < 1e-6);
+        e.quit();
+        assert!(!e.poll());
     }
 
     #[test]

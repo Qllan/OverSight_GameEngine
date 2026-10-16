@@ -8,11 +8,19 @@
 
 pub mod camera;
 pub mod engine;
+pub mod input;
 pub mod render;
 pub mod text;
 pub mod texture;
+pub mod time;
 pub mod types;
+#[cfg(feature = "window")]
+pub mod window;
 
 pub use camera::Camera;
-pub use engine::{Engine, DEFAULT_FONT_ID};
+pub use engine::{Engine, InputEvent, DEFAULT_FONT_ID};
+pub use input::{Input, Key, MouseButton};
+pub use time::Time;
 pub use types::{Color, Rect, Space, Sprite, Vec2};
+#[cfg(feature = "window")]
+pub use window::WindowConfig;
