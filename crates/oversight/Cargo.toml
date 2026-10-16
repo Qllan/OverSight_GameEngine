@@ -1,0 +1,26 @@
+[package]
+name = "oversight"
+version = "0.1.0"
+edition = "2021"
+description = "OverSight 2D: a 2D game runtime with a C API for C++ and C# games"
+license = "MIT"
+
+[lib]
+name = "oversight"
+# cdylib: oversight.dll / liboversight.so for C++ and C#; rlib: Rust tests
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tiny-skia = "0.12"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+fontdue = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+winit = { version = "0.30", optional = true }
+softbuffer = { version = "0.4", optional = true }
+rodio = { version = "0.21", optional = true, default-features = false, features = ["playback", "wav", "vorbis", "mp3"] }
+
+[features]
+default = ["window", "audio"]
+window = ["dep:winit", "dep:softbuffer"]
+audio = ["dep:rodio"]
