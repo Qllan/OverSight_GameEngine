@@ -16,8 +16,8 @@
 //! field: what the file does not mention keeps its default. Components
 //! without fields are kept as their bytes in hex. `id` numbers entities
 //! inside the file only: entity fields point at them, and loading gives
-//! fresh entities. Textures and tile maps are named by file, through
-//! `Assets`; polygons are written out as their corners. Keys are sorted,
+//! fresh entities. Textures and tile maps are named through `Assets`: by
+//! path (Files) or by uid and path (the asset database); polygons are written out as their corners. Keys are sorted,
 //! so saving the same world gives the same text, which keeps diffs small.
 //!
 //! Loading reports what it could not use (a component nobody registered,
@@ -35,13 +35,14 @@ use std::path::{Path, PathBuf};
 
 pub const SCENE_VERSION: u64 = 1;
 
-/// How scene files name textures and tile maps
+/// How scene files name textures and tile maps: a path (Files) or a uid
+/// with a path (asset_db::AssetDb)
 pub trait Assets {
-    /// The name of a loaded resource; None when it has none (made from
-    /// pixels, or from a file outside the project)
-    fn name(&self, engine: &Engine, ty: FieldType, id: u32) -> Option<String>;
+    /// How a scene names a loaded resource; None when it has no name (made
+    /// from pixels, or from a file outside the project)
+    fn name(&self, engine: &Engine, ty: FieldType, id: u32) -> Option<Json>;
     /// The resource a name stands for, loaded if it is not yet
-    fn load(&mut self, engine: &mut Engine, ty: FieldType, name: &str) -> Result<u32, String>;
+    fn load(&mut self, engine: &mut Engine, ty: FieldType, name: &Json) -> Result<u32, String>;
 }
 
 /// Names resources by their path under a folder, with '/' between parts
@@ -65,15 +66,17 @@ impl Files {
 }
 
 impl Assets for Files {
-    fn name(&self, engine: &Engine, ty: FieldType, id: u32) -> Option<String> {
-        match ty {
-            FieldType::Texture => self.relative(engine.texture_file(id)?),
-            FieldType::Tilemap => self.relative(engine.tilemap_file(id)?),
-            _ => None,
-        }
+    fn name(&self, engine: &Engine, ty: FieldType, id: u32) -> Option<Json> {
+        let file = match ty {
+            FieldType::Texture => engine.texture_file(id)?,
+            FieldType::Tilemap => engine.tilemap_file(id)?,
+            _ => return None,
+        };
+        self.relative(file).map(Json::String)
     }
 
-    fn load(&mut self, engine: &mut Engine, ty: FieldType, name: &str) -> Result<u32, String> {
+    fn load(&mut self, engine: &mut Engine, ty: FieldType, name: &Json) -> Result<u32, String> {
+        let name = name.as_str().ok_or("not a file name")?;
         // One already loaded from the same file is shared
         let ids: Vec<u32> = match ty {
             FieldType::Texture => engine.textures.ids().collect(),
@@ -82,7 +85,7 @@ impl Assets for Files {
         };
         if let Some(id) = ids
             .into_iter()
-            .find(|&id| self.name(engine, ty, id).as_deref() == Some(name))
+            .find(|&id| self.name(engine, ty, id).as_ref().and_then(Json::as_str) == Some(name))
         {
             return Ok(id);
         }
@@ -156,7 +159,7 @@ impl Engine {
                         },
                         (FieldType::Texture | FieldType::Tilemap, Value::U32(id)) => {
                             match assets.name(self, f.ty, id) {
-                                Some(name) => json!(name),
+                                Some(name) => name,
                                 None => {
                                     warnings.push(format!(
                                         "{}: {} {id} has no file in the project",
@@ -297,10 +300,7 @@ impl Engine {
             FieldType::Texture | FieldType::Tilemap | FieldType::Polygon if v.is_null() => {
                 Ok(Value::U32(0))
             }
-            FieldType::Texture | FieldType::Tilemap => {
-                let name = v.as_str().ok_or("not a file name")?;
-                assets.load(self, f.ty, name).map(Value::U32)
-            }
+            FieldType::Texture | FieldType::Tilemap => assets.load(self, f.ty, v).map(Value::U32),
             FieldType::Polygon => {
                 let points: Option<Vec<Vec2>> = v.as_array().and_then(|a| {
                     a.iter()

@@ -8,6 +8,7 @@
 
 pub mod actions;
 pub mod anim;
+pub mod asset_db;
 #[cfg(feature = "audio")]
 pub mod audio;
 pub mod camera;
