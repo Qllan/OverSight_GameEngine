@@ -58,7 +58,13 @@ impl Font {
         self.glyphs.entry(key).or_insert_with(|| {
             let (metrics, coverage) = data.rasterize(ch, size);
             let pixmap = Pixmap::new(metrics.width as u32, metrics.height as u32).map(|mut p| {
-                for (px, &c) in p.data_mut().chunks_exact_mut(4).zip(&coverage) {
+                for (px, &c) in p
+                    .data_mut()
+                    .as_chunks_mut::<4>()
+                    .0
+                    .iter_mut()
+                    .zip(&coverage)
+                {
                     let a = (c as u16 * color.a as u16 + 127) / 255;
                     px[0] = ((color.r as u16 * a + 127) / 255) as u8;
                     px[1] = ((color.g as u16 * a + 127) / 255) as u8;

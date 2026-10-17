@@ -45,8 +45,10 @@ impl Texture {
             Pixmap::new(width, height).ok_or_else(|| "invalid texture size".to_string())?;
         for (dst, src) in pixmap
             .data_mut()
-            .chunks_exact_mut(4)
-            .zip(rgba.chunks_exact(4))
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(rgba.as_chunks::<4>().0)
         {
             let a = src[3] as u16;
             dst[0] = ((src[0] as u16 * a + 127) / 255) as u8;
@@ -83,7 +85,7 @@ impl Texture {
             .entry((tint.r, tint.g, tint.b))
             .or_insert_with(|| {
                 let mut copy = source.clone();
-                for px in copy.data_mut().chunks_exact_mut(4) {
+                for px in copy.data_mut().as_chunks_mut::<4>().0 {
                     px[0] = ((px[0] as u16 * tint.r as u16 + 127) / 255) as u8;
                     px[1] = ((px[1] as u16 * tint.g as u16 + 127) / 255) as u8;
                     px[2] = ((px[2] as u16 * tint.b as u16 + 127) / 255) as u8;
