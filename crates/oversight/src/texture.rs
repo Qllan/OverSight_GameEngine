@@ -6,12 +6,17 @@ use tiny_skia::{FilterQuality, Pixmap};
 
 use crate::types::Color;
 
+static NEXT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 pub struct Texture {
     pub pixmap: Pixmap,
     /// Smooth (bilinear) instead of crisp (nearest) when scaled
     pub smooth: bool,
     /// Tinted copies, made on first use
     tinted: HashMap<(u8, u8, u8), Pixmap>,
+    /// Unique per image, so a GPU copy can tell a reloaded or reused id
+    /// from the image it uploaded
+    pub generation: u64,
 }
 
 impl Texture {
@@ -20,6 +25,7 @@ impl Texture {
             pixmap,
             smooth: false,
             tinted: HashMap::new(),
+            generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         }
     }
 
@@ -122,6 +128,15 @@ impl<T> Store<T> {
 
     pub fn get_mut(&mut self, id: u32) -> Option<&mut T> {
         self.items.get_mut((id as usize).wrapping_sub(1))?.as_mut()
+    }
+
+    /// Ids of the items in the store
+    pub fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.items
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.is_some())
+            .map(|(i, _)| i as u32 + 1)
     }
 
     pub fn remove(&mut self, id: u32) -> Option<T> {

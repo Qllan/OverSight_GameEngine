@@ -13,6 +13,7 @@ internal struct NativeConfig
     public byte Resizable, Fullscreen, IntegerScale;
     public uint TargetFps;
     public byte Headless;
+    public int Renderer;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -103,6 +104,7 @@ internal static class Native
     [DllImport(Lib)] internal static extern float ov_ease(int ease, float t);
     [DllImport(Lib)] internal static extern float ov_tween_progress(float time, float duration, int ease, int repeat);
     [DllImport(Lib)] internal static extern Color ov_lerp_color(Color a, Color b, float t);
+    [DllImport(Lib)] internal static extern nuint ov_renderer_name(IntPtr e, byte[]? buf, nuint size);
     [DllImport(Lib)] internal static extern void ov_set_hot_reload(IntPtr e, [MarshalAs(UnmanagedType.U1)] bool on);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_hot_reload_enabled(IntPtr e);
     [DllImport(Lib)] internal static extern uint ov_reload_changed(IntPtr e);

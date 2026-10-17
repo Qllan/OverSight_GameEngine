@@ -1,0 +1,1199 @@
+//! GPU renderer: draws the frame's sorted draw calls with wgpu (DirectX 12
+//! or Vulkan on Windows, Vulkan on Linux, Metal on macOS) into an
+//! offscreen texture the size of the canvas, then scales it into the
+//! window with black bars, the same way the software renderer does.
+//!
+//! Everything becomes textured triangles: sprites use their texture,
+//! shapes a 1x1 white texture, text a glyph atlas. Consecutive triangles
+//! with the same texture go out in one draw call, so the order of the
+//! draw calls (layer, depth, call order) is kept exactly.
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use tiny_skia::{Pixmap, Point, Transform};
+use wgpu::util::DeviceExt;
+
+use crate::render::{sprite_src, sprite_transform, DrawCmd, DrawKind, Renderer, Shape};
+use crate::text::Font;
+use crate::texture::{Store, Texture};
+use crate::types::{Color, Rect, Vec2};
+
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const ATLAS_SIZE: u32 = 2048;
+/// Samples per pixel when shapes are antialiased
+const MSAA: u32 = 4;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Vertex {
+    pos: [f32; 2],
+    uv: [f32; 2],
+    /// Premultiplied colour the texel is multiplied by
+    color: [f32; 4],
+}
+
+impl Vertex {
+    fn bytes(v: &[Vertex]) -> &[u8] {
+        // Vertex is repr(C) and made only of f32s, so it has no padding
+        unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u8, std::mem::size_of_val(v)) }
+    }
+}
+
+/// Which texture a run of triangles samples
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Source {
+    White,
+    Atlas,
+    Texture(u32),
+}
+
+struct Batch {
+    source: Source,
+    start: u32,
+    count: u32,
+}
+
+struct GpuTexture {
+    generation: u64,
+    smooth: bool,
+    bind_group: wgpu::BindGroup,
+    _texture: wgpu::Texture,
+}
+
+/// Glyph images packed into one texture, row by row
+struct Atlas {
+    texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    places: HashMap<(u32, char, u32), Rect>,
+    x: u32,
+    y: u32,
+    row_h: u32,
+}
+
+impl Atlas {
+    /// Place for a glyph image; when the atlas is full it starts over
+    /// (glyphs already placed this frame may show garbage for a frame)
+    fn allocate(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
+        if w + 2 > ATLAS_SIZE || h + 2 > ATLAS_SIZE {
+            return None;
+        }
+        if self.x + w + 1 > ATLAS_SIZE {
+            self.x = 1;
+            self.y += self.row_h + 1;
+            self.row_h = 0;
+        }
+        if self.y + h + 1 > ATLAS_SIZE {
+            self.places.clear();
+            self.x = 1;
+            self.y = 1;
+            self.row_h = 0;
+        }
+        let at = (self.x, self.y);
+        self.x += w + 1;
+        self.row_h = self.row_h.max(h);
+        Some(at)
+    }
+}
+
+struct Target {
+    size: (u32, u32),
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    msaa: Option<wgpu::TextureView>,
+    /// The canvas texture, for scaling it into the window
+    blit_group: wgpu::BindGroup,
+}
+
+struct Presenter {
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
+    pipeline: wgpu::RenderPipeline,
+}
+
+pub struct Gpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    pub adapter_name: String,
+    texture_layout: wgpu::BindGroupLayout,
+    uniforms: wgpu::Buffer,
+    uniform_group: wgpu::BindGroup,
+    /// 1 sample (crisp) and MSAA (antialiased) versions
+    pipelines: [wgpu::RenderPipeline; 2],
+    nearest: wgpu::Sampler,
+    linear: wgpu::Sampler,
+    white: wgpu::BindGroup,
+    atlas: Atlas,
+    textures: HashMap<u32, GpuTexture>,
+    target: Target,
+    presenter: Option<Presenter>,
+    vertex_buffer: wgpu::Buffer,
+    vertices: Vec<Vertex>,
+    batches: Vec<Batch>,
+}
+
+const SHADER: &str = r#"
+struct Uniforms { size: vec2<f32> };
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(1) @binding(0) var tex: texture_2d<f32>;
+@group(1) @binding(1) var samp: sampler;
+
+struct VOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+@vertex
+fn vs(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) color: vec4<f32>) -> VOut {
+    var o: VOut;
+    o.pos = vec4<f32>(pos.x / u.size.x * 2.0 - 1.0, 1.0 - pos.y / u.size.y * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    o.color = color;
+    return o;
+}
+
+@fragment
+fn fs(i: VOut) -> @location(0) vec4<f32> {
+    return textureSample(tex, samp, i.uv) * i.color;
+}
+
+// Scaling the canvas into the window: one triangle covering the viewport
+struct BOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn blit_vs(@builtin(vertex_index) i: u32) -> BOut {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    var o: BOut;
+    o.pos = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    return o;
+}
+
+@fragment
+fn blit_fs(i: BOut) -> @location(0) vec4<f32> {
+    let c = textureSample(tex, samp, i.uv);
+    // Premultiplied colour over black is its rgb
+    return vec4<f32>(c.rgb, 1.0);
+}
+"#;
+
+impl Gpu {
+    /// A GPU renderer for a canvas of `size`; with a window it also
+    /// presents into it. Tries a real graphics card first, then the
+    /// system's software adapter (WARP, llvmpipe).
+    #[cfg(feature = "window")]
+    pub fn for_window(window: Arc<winit::window::Window>, size: (u32, u32)) -> Result<Gpu, String> {
+        let desc = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()));
+        let instance = wgpu::Instance::new(desc);
+        let surface = instance
+            .create_surface(window.clone())
+            .map_err(|e| e.to_string())?;
+        let (mut gpu, adapter) = Gpu::create(&instance, Some(&surface), size)?;
+        let caps = surface.get_capabilities(&adapter);
+        // A non-sRGB format: blending happens on the stored values, as in
+        // the software renderer, so both look the same
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| !f.is_srgb())
+            .or_else(|| caps.formats.first().copied())
+            .ok_or("the window cannot show GPU frames")?;
+        let inner = window.inner_size();
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width: inner.width.max(1),
+            height: inner.height.max(1),
+            present_mode: wgpu::PresentMode::AutoVsync,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: caps
+                .alpha_modes
+                .first()
+                .copied()
+                .unwrap_or(wgpu::CompositeAlphaMode::Auto),
+            view_formats: vec![],
+            color_space: Default::default(),
+        };
+        surface.configure(&gpu.device, &config);
+        let pipeline = gpu.blit_pipeline(format);
+        gpu.presenter = Some(Presenter {
+            surface,
+            config,
+            pipeline,
+        });
+        Ok(gpu)
+    }
+
+    /// A GPU renderer without a window (tests, comparing with software)
+    pub fn headless(size: (u32, u32)) -> Result<Gpu, String> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        Ok(Gpu::create(&instance, None, size)?.0)
+    }
+
+    fn create(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        size: (u32, u32),
+    ) -> Result<(Gpu, wgpu::Adapter), String> {
+        let adapter = request_adapter(instance, surface)?;
+        let adapter_name = adapter.get_info().name;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("oversight"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            ..Default::default()
+        }))
+        .map_err(|e| format!("no GPU device: {}", e))?;
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oversight"),
+            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+        });
+        let uniform_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let uniform_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &uniform_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms.as_entire_binding(),
+            }],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&uniform_layout), Some(&texture_layout)],
+            immediate_size: 0,
+        });
+        let pipeline = |samples: u32| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("oversight"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Vertex>() as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2, 1 => Float32x2, 2 => Float32x4
+                        ],
+                    })],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: FORMAT,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipelines = [pipeline(1), pipeline(MSAA)];
+        let sampler = |filter: wgpu::FilterMode| {
+            device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::ClampToEdge,
+                address_mode_v: wgpu::AddressMode::ClampToEdge,
+                mag_filter: filter,
+                min_filter: filter,
+                ..Default::default()
+            })
+        };
+        let (nearest, linear) = (
+            sampler(wgpu::FilterMode::Nearest),
+            sampler(wgpu::FilterMode::Linear),
+        );
+        let bind = |texture: &wgpu::Texture, sampler: &wgpu::Sampler| {
+            let view = texture.create_view(&Default::default());
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &texture_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        };
+        let white_texture = device.create_texture_with_data(
+            &queue,
+            &texture_desc(1, 1, wgpu::TextureUsages::TEXTURE_BINDING),
+            Default::default(),
+            &[255; 4],
+        );
+        let white = bind(&white_texture, &nearest);
+        let atlas_texture = device.create_texture(&texture_desc(
+            ATLAS_SIZE,
+            ATLAS_SIZE,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        ));
+        let atlas = Atlas {
+            bind_group: bind(&atlas_texture, &linear),
+            texture: atlas_texture,
+            places: HashMap::new(),
+            x: 1,
+            y: 1,
+            row_h: 0,
+        };
+        let target = make_target(&device, &texture_layout, &nearest, size);
+        let vertex_buffer = vertex_buffer(&device, 4096);
+        let gpu = Gpu {
+            device,
+            queue,
+            adapter_name,
+            texture_layout,
+            uniforms,
+            uniform_group,
+            pipelines,
+            nearest,
+            linear,
+            white,
+            atlas,
+            textures: HashMap::new(),
+            target,
+            presenter: None,
+            vertex_buffer,
+            vertices: Vec::new(),
+            batches: Vec::new(),
+        };
+        Ok((gpu, adapter))
+    }
+
+    #[cfg(feature = "window")]
+    fn blit_pipeline(&self, format: wgpu::TextureFormat) -> wgpu::RenderPipeline {
+        let shader = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("blit"),
+                source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            });
+        let layout = self
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[None, Some(&self.texture_layout)],
+                immediate_size: 0,
+            });
+        self.device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("blit"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("blit_vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("blit_fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(format.into())],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+    }
+
+    /// Draw a frame's sorted draw calls into the canvas texture; returns
+    /// how many sprites were drawn (after culling)
+    pub fn render(
+        &mut self,
+        renderer: &Renderer,
+        commands: &[DrawCmd],
+        textures: &mut Store<Texture>,
+        fonts: &mut Store<Font>,
+    ) -> u32 {
+        let size = renderer.size();
+        if self.target.size != size {
+            self.target = make_target(&self.device, &self.texture_layout, &self.nearest, size);
+        }
+        self.sync_textures(textures);
+        self.vertices.clear();
+        self.batches.clear();
+        let mut sprites = 0;
+        for cmd in commands {
+            let base = renderer.space_transform(cmd.space);
+            match &cmd.kind {
+                DrawKind::Sprite { texture, sprite } => {
+                    let Some(tex) = textures.get(*texture) else {
+                        continue;
+                    };
+                    let (tw, th) = (tex.width(), tex.height());
+                    let src = sprite_src(sprite, tw, th);
+                    let transform = base.pre_concat(sprite_transform(sprite, src));
+                    if !renderer.visible(Rect::new(0.0, 0.0, src.w, src.h), transform) {
+                        continue;
+                    }
+                    if !self.textures.contains_key(texture) {
+                        continue;
+                    }
+                    let uv = Rect::new(
+                        src.x / tw as f32,
+                        src.y / th as f32,
+                        src.w / tw as f32,
+                        src.h / th as f32,
+                    );
+                    let local = Rect::new(0.0, 0.0, src.w, src.h);
+                    self.quad(Source::Texture(*texture), local, uv, transform, sprite.tint);
+                    sprites += 1;
+                }
+                DrawKind::Shape { shape, color } => self.shape(shape, *color, base),
+                DrawKind::Text {
+                    font,
+                    text,
+                    pos,
+                    size,
+                    color,
+                } => {
+                    if let Some(f) = fonts.get_mut(*font) {
+                        self.text(*font, f, text, *pos, *size, *color, base);
+                    }
+                }
+            }
+        }
+        self.draw(renderer.clear_color, renderer.antialias);
+        sprites
+    }
+
+    /// Upload new or changed textures, drop freed ones
+    fn sync_textures(&mut self, textures: &Store<Texture>) {
+        self.textures.retain(|id, g| {
+            textures
+                .get(*id)
+                .is_some_and(|t| t.generation == g.generation)
+        });
+        for id in textures.ids() {
+            let Some(tex) = textures.get(id) else {
+                continue;
+            };
+            let rebind = match self.textures.get(&id) {
+                Some(g) if g.smooth == tex.smooth => continue,
+                // Only the filter changed: same image, other sampler
+                Some(g) => Some(g._texture.create_view(&Default::default())),
+                None => None,
+            };
+            match rebind {
+                Some(view) => {
+                    let bind_group = self.bind_group(&view, tex.smooth);
+                    if let Some(g) = self.textures.get_mut(&id) {
+                        g.smooth = tex.smooth;
+                        g.bind_group = bind_group;
+                    }
+                }
+                None => {
+                    let texture = self.device.create_texture_with_data(
+                        &self.queue,
+                        &texture_desc(
+                            tex.width(),
+                            tex.height(),
+                            wgpu::TextureUsages::TEXTURE_BINDING,
+                        ),
+                        Default::default(),
+                        tex.pixmap.data(),
+                    );
+                    let view = texture.create_view(&Default::default());
+                    let bind_group = self.bind_group(&view, tex.smooth);
+                    self.textures.insert(
+                        id,
+                        GpuTexture {
+                            generation: tex.generation,
+                            smooth: tex.smooth,
+                            bind_group,
+                            _texture: texture,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    fn bind_group(&self, view: &wgpu::TextureView, smooth: bool) -> wgpu::BindGroup {
+        let sampler = if smooth { &self.linear } else { &self.nearest };
+        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sampler),
+                },
+            ],
+        })
+    }
+
+    fn push(&mut self, source: Source, vertices: &[Vertex]) {
+        let start = self.vertices.len() as u32;
+        self.vertices.extend_from_slice(vertices);
+        match self.batches.last_mut() {
+            Some(b) if b.source == source => b.count += vertices.len() as u32,
+            _ => self.batches.push(Batch {
+                source,
+                start,
+                count: vertices.len() as u32,
+            }),
+        }
+    }
+
+    /// Two triangles: `local` rectangle mapped by `transform`, sampling `uv`
+    fn quad(&mut self, source: Source, local: Rect, uv: Rect, transform: Transform, tint: Color) {
+        let color = premultiplied(tint);
+        let corner = |x: f32, y: f32, u: f32, v: f32| Vertex {
+            pos: map(transform, x, y),
+            uv: [u, v],
+            color,
+        };
+        let a = corner(local.x, local.y, uv.x, uv.y);
+        let b = corner(local.right(), local.y, uv.right(), uv.y);
+        let c = corner(local.right(), local.bottom(), uv.right(), uv.bottom());
+        let d = corner(local.x, local.bottom(), uv.x, uv.bottom());
+        self.push(source, &[a, b, c, a, c, d]);
+    }
+
+    /// Filled triangles from a list of points in local space
+    fn triangles(&mut self, points: &[Vec2], color: Color, transform: Transform) {
+        let color = premultiplied(color);
+        let vertices: Vec<Vertex> = points
+            .iter()
+            .map(|p| Vertex {
+                pos: map(transform, p.x, p.y),
+                uv: [0.5, 0.5],
+                color,
+            })
+            .collect();
+        self.push(Source::White, &vertices);
+    }
+
+    fn shape(&mut self, shape: &Shape, color: Color, transform: Transform) {
+        let mut tris = Vec::new();
+        let rect = |tris: &mut Vec<Vec2>, x: f32, y: f32, w: f32, h: f32| {
+            let (a, b) = (Vec2::new(x, y), Vec2::new(x + w, y));
+            let (c, d) = (Vec2::new(x + w, y + h), Vec2::new(x, y + h));
+            tris.extend_from_slice(&[a, b, c, a, c, d]);
+        };
+        // Enough segments that a circle looks round at its size on screen
+        let scale = (transform.sx * transform.sx + transform.ky * transform.ky).sqrt();
+        let segments = |r: f32| ((r * scale).sqrt() * 6.0).clamp(12.0, 256.0) as usize;
+        match *shape {
+            Shape::Rect {
+                rect: r,
+                filled: true,
+                ..
+            } => rect(&mut tris, r.x, r.y, r.w, r.h),
+            Shape::Rect {
+                rect: r,
+                filled: false,
+                thickness,
+            } => {
+                // A stroke centred on the edge, like the software renderer
+                let t = thickness.max(0.1);
+                let h = t / 2.0;
+                rect(&mut tris, r.x - h, r.y - h, r.w + t, t);
+                rect(&mut tris, r.x - h, r.bottom() - h, r.w + t, t);
+                rect(&mut tris, r.x - h, r.y + h, t, r.h - t);
+                rect(&mut tris, r.right() - h, r.y + h, t, r.h - t);
+            }
+            Shape::Line {
+                from,
+                to,
+                thickness,
+            } => {
+                let (dx, dy) = (to.x - from.x, to.y - from.y);
+                let len = (dx * dx + dy * dy).sqrt();
+                if len > 0.0 {
+                    let h = thickness.max(0.1) / 2.0;
+                    let (nx, ny) = (-dy / len * h, dx / len * h);
+                    let a = Vec2::new(from.x + nx, from.y + ny);
+                    let b = Vec2::new(to.x + nx, to.y + ny);
+                    let c = Vec2::new(to.x - nx, to.y - ny);
+                    let d = Vec2::new(from.x - nx, from.y - ny);
+                    tris.extend_from_slice(&[a, b, c, a, c, d]);
+                }
+            }
+            Shape::Circle {
+                center,
+                radius,
+                filled,
+                thickness,
+            } => {
+                let half = thickness.max(0.1) / 2.0;
+                let (inner, outer) = if filled {
+                    (0.0, radius)
+                } else {
+                    ((radius - half).max(0.0), radius + half)
+                };
+                let n = segments(outer);
+                let at = |r: f32, i: usize| {
+                    let a = i as f32 / n as f32 * std::f32::consts::TAU;
+                    Vec2::new(center.x + a.cos() * r, center.y + a.sin() * r)
+                };
+                for i in 0..n {
+                    let (o0, o1) = (at(outer, i), at(outer, i + 1));
+                    if inner <= 0.0 {
+                        tris.extend_from_slice(&[center, o0, o1]);
+                    } else {
+                        let (i0, i1) = (at(inner, i), at(inner, i + 1));
+                        tris.extend_from_slice(&[i0, o0, o1, i0, o1, i1]);
+                    }
+                }
+            }
+        }
+        self.triangles(&tris, color, transform);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn text(
+        &mut self,
+        font_id: u32,
+        font: &mut Font,
+        text: &str,
+        pos: Vec2,
+        size: f32,
+        color: Color,
+        base: Transform,
+    ) {
+        // White glyphs: coverage in every channel, coloured per vertex
+        let (glyphs, _) = font.layout(text, size, Color::WHITE);
+        let transform = base.pre_translate(pos.x, pos.y);
+        for placed in glyphs {
+            let Some(pixmap) = font.cached(&placed.key).and_then(|g| g.pixmap.as_ref()) else {
+                continue;
+            };
+            let key = (font_id, placed.key.0, placed.key.1);
+            let place = match self.atlas.places.get(&key) {
+                Some(&r) => r,
+                None => {
+                    let (w, h) = (pixmap.width(), pixmap.height());
+                    let Some((x, y)) = self.atlas.allocate(w, h) else {
+                        continue;
+                    };
+                    self.queue.write_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: &self.atlas.texture,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x, y, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        pixmap.data(),
+                        wgpu::TexelCopyBufferLayout {
+                            offset: 0,
+                            bytes_per_row: Some(w * 4),
+                            rows_per_image: Some(h),
+                        },
+                        wgpu::Extent3d {
+                            width: w,
+                            height: h,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                    let r = Rect::new(x as f32, y as f32, w as f32, h as f32);
+                    self.atlas.places.insert(key, r);
+                    r
+                }
+            };
+            let s = ATLAS_SIZE as f32;
+            let uv = Rect::new(place.x / s, place.y / s, place.w / s, place.h / s);
+            let (x, y) = (placed.pos.x.round(), placed.pos.y.round());
+            let local = Rect::new(x, y, place.w, place.h);
+            self.quad(Source::Atlas, local, uv, transform, color);
+        }
+    }
+
+    fn draw(&mut self, clear: Color, antialias: bool) {
+        let (w, h) = self.target.size;
+        let mut uniforms = [0u8; 16];
+        uniforms[0..4].copy_from_slice(&(w as f32).to_le_bytes());
+        uniforms[4..8].copy_from_slice(&(h as f32).to_le_bytes());
+        self.queue.write_buffer(&self.uniforms, 0, &uniforms);
+        let bytes = Vertex::bytes(&self.vertices);
+        if bytes.len() as u64 > self.vertex_buffer.size() {
+            self.vertex_buffer = vertex_buffer(&self.device, bytes.len() as u64 * 2);
+        }
+        if !bytes.is_empty() {
+            self.queue.write_buffer(&self.vertex_buffer, 0, bytes);
+        }
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let c = premultiplied(clear);
+            let (view, resolve) = match (&self.target.msaa, antialias) {
+                (Some(msaa), true) => (msaa, Some(&self.target.view)),
+                _ => (&self.target.view, None),
+            };
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("frame"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: resolve,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: c[0] as f64,
+                            g: c[1] as f64,
+                            b: c[2] as f64,
+                            a: c[3] as f64,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            let msaa = resolve.is_some();
+            pass.set_pipeline(&self.pipelines[msaa as usize]);
+            pass.set_bind_group(0, &self.uniform_group, &[]);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            for batch in &self.batches {
+                let group = match batch.source {
+                    Source::White => &self.white,
+                    Source::Atlas => &self.atlas.bind_group,
+                    Source::Texture(id) => match self.textures.get(&id) {
+                        Some(t) => &t.bind_group,
+                        None => continue,
+                    },
+                };
+                pass.set_bind_group(1, group, &[]);
+                pass.draw(batch.start..batch.start + batch.count, 0..1);
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Show the last frame in the window, scaled like the software
+    /// renderer: `view` is the letterboxed area (x, y, scale)
+    #[cfg(feature = "window")]
+    pub fn present(&mut self, window: (u32, u32), view: (f32, f32, f32)) -> Result<(), String> {
+        let Some(p) = self.presenter.as_mut() else {
+            return Ok(());
+        };
+        if window.0 == 0 || window.1 == 0 {
+            return Ok(()); // minimized
+        }
+        if (p.config.width, p.config.height) != window {
+            p.config.width = window.0;
+            p.config.height = window.1;
+            p.surface.configure(&self.device, &p.config);
+        }
+        let frame = match p.surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(f)
+            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
+                p.surface.configure(&self.device, &p.config);
+                return Ok(());
+            }
+            _ => return Ok(()), // occluded or timed out: skip this frame
+        };
+        let out = frame.texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("present"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &out,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            let (cw, ch) = self.target.size;
+            let (x, y, scale) = view;
+            // The viewport must stay inside the window
+            let (vx, vy) = (x.max(0.0), y.max(0.0));
+            let vw = (cw as f32 * scale).min(window.0 as f32 - vx);
+            let vh = (ch as f32 * scale).min(window.1 as f32 - vy);
+            if vw > 0.0 && vh > 0.0 {
+                pass.set_viewport(vx, vy, vw, vh, 0.0, 1.0);
+                pass.set_pipeline(&p.pipeline);
+                pass.set_bind_group(1, &self.target.blit_group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(frame);
+        Ok(())
+    }
+
+    /// Copy the last frame into `canvas` (screenshots, pixel reads)
+    pub fn read_canvas(&self, canvas: &mut Pixmap) -> Result<(), String> {
+        let (w, h) = self.target.size;
+        if (canvas.width(), canvas.height()) != (w, h) {
+            return Err("canvas size changed".into());
+        }
+        let row = w * 4;
+        let padded =
+            row.div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("readback"),
+            size: padded as u64 * h as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            self.target.texture.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(padded),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
+        let slice = buffer.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .map_err(|e| e.to_string())?;
+        {
+            let data = slice.get_mapped_range().map_err(|e| e.to_string())?;
+            let out = canvas.data_mut();
+            for y in 0..h as usize {
+                let src = &data[y * padded as usize..][..row as usize];
+                out[y * row as usize..][..row as usize].copy_from_slice(src);
+            }
+        }
+        buffer.unmap();
+        Ok(())
+    }
+}
+
+fn request_adapter(
+    instance: &wgpu::Instance,
+    surface: Option<&wgpu::Surface<'_>>,
+) -> Result<wgpu::Adapter, String> {
+    let mut last = String::new();
+    for fallback in [false, true] {
+        let options = wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: fallback,
+            compatible_surface: surface,
+            apply_limit_buckets: false,
+        };
+        match pollster::block_on(instance.request_adapter(&options)) {
+            Ok(a) => return Ok(a),
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Err(format!("no GPU adapter: {}", last))
+}
+
+fn texture_desc(w: u32, h: u32, usage: wgpu::TextureUsages) -> wgpu::TextureDescriptor<'static> {
+    wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: w.max(1),
+            height: h.max(1),
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage,
+        view_formats: &[],
+    }
+}
+
+fn make_target(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    size: (u32, u32),
+) -> Target {
+    let texture = device.create_texture(&texture_desc(
+        size.0,
+        size.1,
+        wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+    ));
+    let view = texture.create_view(&Default::default());
+    let msaa = device
+        .create_texture(&wgpu::TextureDescriptor {
+            sample_count: MSAA,
+            ..texture_desc(size.0, size.1, wgpu::TextureUsages::RENDER_ATTACHMENT)
+        })
+        .create_view(&Default::default());
+    let blit_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    });
+    Target {
+        size,
+        texture,
+        view,
+        msaa: Some(msaa),
+        blit_group,
+    }
+}
+
+fn vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("vertices"),
+        size,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+fn map(t: Transform, x: f32, y: f32) -> [f32; 2] {
+    let mut p = Point::from_xy(x, y);
+    t.map_point(&mut p);
+    [p.x, p.y]
+}
+
+fn premultiplied(c: Color) -> [f32; 4] {
+    let a = c.a as f32 / 255.0;
+    [
+        c.r as f32 / 255.0 * a,
+        c.g as f32 / 255.0 * a,
+        c.b as f32 / 255.0 * a,
+        a,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::engine::Engine;
+    use crate::types::{Color, Rect, Space, Sprite, Vec2};
+
+    /// A GPU engine, or None when the machine has no adapter at all (CI
+    /// sets OVERSIGHT_REQUIRE_GPU so a missing one fails there)
+    fn gpu_engine(w: u32, h: u32) -> Option<Engine> {
+        match Engine::headless_gpu(w, h) {
+            Ok(e) => Some(e),
+            Err(err) if std::env::var_os("OVERSIGHT_REQUIRE_GPU").is_none() => {
+                eprintln!("skipped, {}", err);
+                None
+            }
+            Err(err) => panic!("{}", err),
+        }
+    }
+
+    /// The same frame through either renderer
+    fn scene(e: &mut Engine, antialias: bool) {
+        e.set_antialias(antialias);
+        let mut rgba = Vec::new();
+        for i in 0..64u32 {
+            let (x, y) = (i % 8, i / 8);
+            let on = (x + y) % 2 == 0;
+            rgba.extend_from_slice(&[
+                if on { 255 } else { 40 },
+                (x * 30) as u8,
+                (y * 30) as u8,
+                255,
+            ]);
+        }
+        let tex = e.texture_from_rgba(8, 8, &rgba).unwrap();
+        let mut camera = e.camera();
+        camera.center = Vec2::new(64.0, 48.0);
+        camera.zoom = 2.0;
+        e.set_camera(camera);
+        e.begin_frame(Color::rgba(20, 30, 60, 255));
+        e.set_space(Space::World);
+        for (i, flip) in [false, true].into_iter().enumerate() {
+            e.draw_sprite(
+                tex,
+                &Sprite {
+                    pos: Vec2::new(40.0 + i as f32 * 12.0, 30.0),
+                    flip_x: flip,
+                    tint: Color::rgba(255, 200, 200, 200),
+                    ..Sprite::default()
+                },
+            );
+        }
+        e.draw_sprite(
+            tex,
+            &Sprite {
+                src: Rect::new(2.0, 2.0, 4.0, 4.0),
+                pos: Vec2::new(70.0, 50.0),
+                scale: Vec2::new(3.0, 3.0),
+                ..Sprite::default()
+            },
+        );
+        e.fill_rect(
+            Rect::new(30.0, 55.0, 20.0, 6.0),
+            Color::rgba(0, 255, 0, 160),
+        );
+        e.set_space(Space::Screen);
+        e.set_layer(5);
+        e.draw_rect(Rect::new(4.0, 4.0, 40.0, 20.0), 2.0, Color::WHITE);
+        e.draw_line(
+            Vec2::new(4.0, 90.0),
+            Vec2::new(120.0, 90.0),
+            2.0,
+            Color::rgba(255, 255, 0, 255),
+        );
+        e.fill_circle(Vec2::new(100.0, 20.0), 10.0, Color::rgba(255, 0, 255, 255));
+        e.draw_text(1, "Ab Жж", Vec2::new(60.0, 64.0), 14.0, Color::WHITE);
+        e.end_frame();
+    }
+
+    /// Share of pixels whose channels differ by more than `tolerance`
+    fn differ(a: &mut Engine, b: &mut Engine, tolerance: u8) -> f32 {
+        let (w, h) = a.size();
+        let mut bad = 0;
+        for y in 0..h {
+            for x in 0..w {
+                let (p, q) = (a.pixel(x, y).unwrap(), b.pixel(x, y).unwrap());
+                let d = [p.r.abs_diff(q.r), p.g.abs_diff(q.g), p.b.abs_diff(q.b)];
+                if d.into_iter().max().unwrap() > tolerance {
+                    bad += 1;
+                }
+            }
+        }
+        bad as f32 / (w * h) as f32
+    }
+
+    #[test]
+    fn gpu_frame_matches_software() {
+        let Some(mut gpu) = gpu_engine(128, 96) else {
+            return;
+        };
+        let mut soft = Engine::headless(128, 96).unwrap();
+        scene(&mut soft, false);
+        scene(&mut gpu, false);
+        // Crisp: only a few edge pixels of the circle and glyph filtering differ
+        let crisp = differ(&mut soft, &mut gpu, 24);
+        // Antialiased: the GPU smooths edges with 4x MSAA instead of coverage
+        scene(&mut soft, true);
+        scene(&mut gpu, true);
+        let smooth = differ(&mut soft, &mut gpu, 48);
+        eprintln!(
+            "crisp {:.3}%, smooth {:.3}%, {}",
+            crisp * 100.0,
+            smooth * 100.0,
+            gpu.renderer_name()
+        );
+        if crisp > 0.01 || smooth > 0.02 || std::env::var_os("OVERSIGHT_GPU_SHOTS").is_some() {
+            soft.save_screenshot("gpu_test_software.png").ok();
+            gpu.save_screenshot("gpu_test_gpu.png").ok();
+        }
+        assert!(crisp <= 0.01, "{:.2}% pixels differ (crisp)", crisp * 100.0);
+        assert!(
+            smooth <= 0.02,
+            "{:.2}% pixels differ (antialiased)",
+            smooth * 100.0
+        );
+        assert!(gpu.renderer_name().starts_with("gpu: "));
+        assert_eq!(gpu.renderer.drawn_sprites, 3);
+    }
+
+    #[test]
+    fn gpu_follows_reloaded_and_freed_textures() {
+        let Some(mut e) = gpu_engine(4, 4) else {
+            return;
+        };
+        e.set_space(Space::Screen);
+        let red = e.texture_from_rgba(1, 1, &[255, 0, 0, 255]).unwrap();
+        let draw = |e: &mut Engine, id: u32| {
+            e.begin_frame(Color::BLACK);
+            let s = Sprite {
+                scale: Vec2::new(4.0, 4.0),
+                ..Sprite::default()
+            };
+            e.draw_sprite(id, &s);
+            e.end_frame();
+        };
+        draw(&mut e, red);
+        assert_eq!(e.pixel(1, 1), Some(Color::rgba(255, 0, 0, 255)));
+        // Same id, new image (what hot reload does)
+        *e.textures.get_mut(red).unwrap() =
+            crate::texture::Texture::from_rgba(1, 1, &[0, 0, 255, 255]).unwrap();
+        draw(&mut e, red);
+        assert_eq!(e.pixel(1, 1), Some(Color::rgba(0, 0, 255, 255)));
+        e.free_texture(red);
+        let green = e.texture_from_rgba(1, 1, &[0, 255, 0, 255]).unwrap();
+        assert_eq!(green, red, "the id is reused");
+        draw(&mut e, green);
+        assert_eq!(e.pixel(1, 1), Some(Color::rgba(0, 255, 0, 255)));
+    }
+}

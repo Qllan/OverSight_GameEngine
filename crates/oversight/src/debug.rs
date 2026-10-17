@@ -49,6 +49,7 @@ pub struct Stats {
     pub sprites: u32,
     pub camera: Vec2,
     pub mouse_world: Vec2,
+    pub renderer: String,
 }
 
 impl DebugOverlay {
@@ -184,6 +185,7 @@ impl DebugOverlay {
                 "mouse {:.0}, {:.0}",
                 stats.mouse_world.x, stats.mouse_world.y
             ),
+            stats.renderer.chars().take(22).collect(),
         ];
         let (w, line_h) = (112.0, 10.0);
         let x = renderer.size().0 as f32 - w - 2.0;

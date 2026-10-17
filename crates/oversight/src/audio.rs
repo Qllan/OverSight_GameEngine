@@ -11,7 +11,7 @@ use std::io::{BufReader, Cursor};
 use rodio::buffer::SamplesBuffer;
 use rodio::mixer::Mixer;
 use rodio::source::Buffered;
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source};
 
 use crate::texture::Store;
 
@@ -30,12 +30,12 @@ impl Sound {
         let decoder = Decoder::new(Cursor::new(bytes)).map_err(|e| e.to_string())?;
         let (channels, sample_rate) = (decoder.channels(), decoder.sample_rate());
         let data: Vec<f32> = decoder.collect();
-        let frames = data.len() as f32 / channels.max(1) as f32;
+        let frames = data.len() as f32 / channels.get() as f32;
         Ok(Sound {
             samples: SamplesBuffer::new(channels, sample_rate, data).buffered(),
-            channels,
-            sample_rate,
-            duration: frames / sample_rate.max(1) as f32,
+            channels: channels.get(),
+            sample_rate: sample_rate.get(),
+            duration: frames / sample_rate.get() as f32,
         })
     }
 
@@ -48,12 +48,12 @@ impl Sound {
 pub struct Audio {
     pub sounds: Store<Sound>,
     /// Kept alive while sound plays; None without a device
-    _stream: Option<OutputStream>,
+    _stream: Option<MixerDeviceSink>,
     mixer: Option<Mixer>,
     /// Effects still playing, by voice id
-    voices: Vec<(u32, Sink)>,
+    voices: Vec<(u32, Player)>,
     next_voice: u32,
-    music: Option<Sink>,
+    music: Option<Player>,
     music_volume: f32,
     master: f32,
 }
@@ -75,13 +75,13 @@ impl Audio {
 
     /// The default output device, or silent when there is none
     pub fn open() -> Result<Audio, String> {
-        let mut stream = OutputStreamBuilder::open_default_stream().map_err(|e| e.to_string())?;
+        let mut stream = DeviceSinkBuilder::open_default_sink().map_err(|e| e.to_string())?;
         stream.log_on_drop(false);
         Ok(Audio::with_mixer(stream.mixer().clone(), Some(stream)))
     }
 
     /// Mix into a given mixer (tests and offline rendering read its output)
-    pub fn with_mixer(mixer: Mixer, stream: Option<OutputStream>) -> Audio {
+    pub fn with_mixer(mixer: Mixer, stream: Option<MixerDeviceSink>) -> Audio {
         Audio {
             _stream: stream,
             mixer: Some(mixer),
@@ -120,7 +120,7 @@ impl Audio {
         // Volume and pitch go on the source itself: sink controls apply
         // only after the first few milliseconds
         let source = sound.samples.clone().amplify(volume.max(0.0) * self.master);
-        let sink = Sink::connect_new(mixer);
+        let sink = Player::connect_new(mixer);
         sink.append(source.speed(pitch.max(0.01)));
         let id = self.next_voice;
         self.next_voice = self.next_voice.wrapping_add(1).max(1);
@@ -157,7 +157,7 @@ impl Audio {
         };
         let err = |e: rodio::decoder::DecoderError| format!("{}: {}", path, e);
         // Decode first so a bad file is reported even without a device
-        let sink = self.mixer.as_ref().map(Sink::connect_new);
+        let sink = self.mixer.as_ref().map(Player::connect_new);
         if looped {
             let source = Decoder::new_looped(open()?).map_err(err)?;
             if let Some(sink) = &sink {
@@ -255,7 +255,8 @@ mod tests {
     fn volume_pitch_and_stop_reach_the_mix() {
         // A stereo 44.1 kHz mix, as from a real device; a mono 0.1 s
         // sound at half amplitude plays into both channels
-        let (mixer, mut out) = rodio::mixer::mixer(2, 44100);
+        let (mixer, mut out) =
+            rodio::mixer::mixer(2.try_into().unwrap(), 44100.try_into().unwrap());
         let mut audio = Audio::with_mixer(mixer, None);
         let id = audio.sound_from_bytes(wav(4410, 44100, 16384)).unwrap();
         let heard = |out: &mut rodio::mixer::MixerSource| {
@@ -297,7 +298,8 @@ mod tests {
         let path = std::env::temp_dir().join(format!("oversight_music_{}.wav", std::process::id()));
         std::fs::write(&path, wav(441, 44100, 16384)).unwrap();
         let path = path.to_string_lossy().to_string();
-        let (mixer, mut out) = rodio::mixer::mixer(1, 44100);
+        let (mixer, mut out) =
+            rodio::mixer::mixer(1.try_into().unwrap(), 44100.try_into().unwrap());
         let mut audio = Audio::with_mixer(mixer, None);
         audio.play_music(&path, 1.0, true).unwrap();
         // A 10 ms track looped is still sounding a second later

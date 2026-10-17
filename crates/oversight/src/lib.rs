@@ -15,6 +15,8 @@ pub mod debug;
 pub mod engine;
 pub mod ffi;
 pub mod gamepad;
+#[cfg(feature = "gpu")]
+pub mod gpu;
 pub mod hotreload;
 pub mod input;
 pub mod particles;

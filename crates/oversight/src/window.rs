@@ -1,10 +1,10 @@
 //! Window: a winit window whose events are pumped by the game's own loop
-//! (`while engine.poll() { ... }`), and a softbuffer surface that shows the
-//! canvas scaled to the window with nearest-neighbour filtering and black
-//! bars.
+//! (`while engine.poll() { ... }`). The GPU renderer draws into it itself;
+//! without one, a softbuffer surface shows the software canvas scaled to
+//! the window with nearest-neighbour filtering and black bars.
 
 use std::num::NonZeroU32;
-use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tiny_skia::Pixmap;
@@ -35,6 +35,8 @@ pub struct WindowConfig {
     pub integer_scale: bool,
     /// Frame limit; 0 = unlimited
     pub target_fps: u32,
+    /// Draw with the CPU even when a graphics card is there
+    pub software: bool,
 }
 
 impl Default for WindowConfig {
@@ -48,6 +50,7 @@ impl Default for WindowConfig {
             fullscreen: false,
             integer_scale: false,
             target_fps: 60,
+            software: false,
         }
     }
 }
@@ -81,9 +84,13 @@ impl Viewport {
     }
 }
 
+type SoftSurface = softbuffer::Surface<Arc<WinitWindow>, Arc<WinitWindow>>;
+
 struct Graphics {
-    window: Rc<WinitWindow>,
-    surface: softbuffer::Surface<Rc<WinitWindow>, Rc<WinitWindow>>,
+    window: Arc<WinitWindow>,
+    /// Made on the first software present, so a GPU renderer has the
+    /// window to itself
+    surface: Option<SoftSurface>,
 }
 
 pub struct Window {
@@ -178,6 +185,18 @@ impl Window {
         self.config.target_fps = fps;
     }
 
+    /// The winit window, for the GPU renderer's surface
+    pub fn handle(&self) -> Option<Arc<WinitWindow>> {
+        self.graphics.as_ref().map(|g| g.window.clone())
+    }
+
+    /// Ask for the next frame to be shown (after a GPU present)
+    pub fn pre_present(&self) {
+        if let Some(g) = &self.graphics {
+            g.window.pre_present_notify();
+        }
+    }
+
     /// Window size in physical pixels
     pub fn size(&self) -> (u32, u32) {
         self.graphics.as_ref().map_or((0, 0), |g| {
@@ -213,8 +232,15 @@ impl Window {
         let Some(g) = self.graphics.as_mut() else {
             return Ok(());
         };
-        g.surface.resize(nw, nh).map_err(|e| e.to_string())?;
-        let mut buffer = g.surface.buffer_mut().map_err(|e| e.to_string())?;
+        if g.surface.is_none() {
+            let context = softbuffer::Context::new(g.window.clone()).map_err(|e| e.to_string())?;
+            let surface =
+                softbuffer::Surface::new(&context, g.window.clone()).map_err(|e| e.to_string())?;
+            g.surface = Some(surface);
+        }
+        let surface = g.surface.as_mut().expect("made above");
+        surface.resize(nw, nh).map_err(|e| e.to_string())?;
+        let mut buffer = surface.buffer_mut().map_err(|e| e.to_string())?;
         let src = canvas.data();
         for (y, row) in buffer.chunks_exact_mut(ww as usize).enumerate() {
             let cy = ((y as f32 + 0.5 - view.y) / view.scale).floor();
@@ -255,15 +281,15 @@ impl ApplicationHandler for Pump<'_> {
             attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
         }
         let result = (|| -> Result<Graphics, String> {
-            let window = Rc::new(
+            let window = Arc::new(
                 event_loop
                     .create_window(attributes)
                     .map_err(|e| format!("cannot open a window: {}", e))?,
             );
-            let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
-            let surface =
-                softbuffer::Surface::new(&context, window.clone()).map_err(|e| e.to_string())?;
-            Ok(Graphics { window, surface })
+            Ok(Graphics {
+                window,
+                surface: None,
+            })
         })();
         match result {
             Ok(g) => self.window.graphics = Some(g),

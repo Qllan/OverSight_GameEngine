@@ -173,6 +173,8 @@ enum class Key : int32_t {
     Grave = OV_KEY_GRAVE,
 };
 
+enum class Renderer : int32_t { Auto = OV_RENDERER_AUTO, Software = OV_RENDERER_SOFTWARE, Gpu = OV_RENDERER_GPU };
+
 struct Config {
     std::string title = "OverSight";
     uint32_t width = 960, height = 540;
@@ -182,6 +184,7 @@ struct Config {
     bool integer_scale = false;
     uint32_t target_fps = 60;
     bool headless = false;
+    Renderer renderer = Renderer::Auto;
 };
 
 inline SpriteSheet sheet_grid(uint32_t texture_w, uint32_t texture_h, uint32_t frame_w, uint32_t frame_h,
@@ -422,7 +425,8 @@ class Engine {
 public:
     explicit Engine(const Config &c = {}) {
         OvConfig oc{c.title.c_str(), c.width, c.height, c.scale, c.resizable,
-                    c.fullscreen, c.integer_scale, c.target_fps, c.headless};
+                    c.fullscreen, c.integer_scale, c.target_fps, c.headless,
+                    static_cast<int32_t>(c.renderer)};
         e_ = ov_engine_create(&oc);
         if (!e_) throw Error(std::string("cannot start the engine: ") + ov_last_error());
     }
@@ -549,6 +553,13 @@ public:
         ov_inject_gamepad_button(e_, pad, static_cast<int32_t>(b), down);
     }
     void inject_pad_axis(int pad, PadAxis a, float v) { ov_inject_gamepad_axis(e_, pad, static_cast<int32_t>(a), v); }
+
+    /// "gpu: <graphics card>" or "software"
+    std::string renderer_name() const {
+        std::string s(ov_renderer_name(e_, nullptr, 0), '\0');
+        ov_renderer_name(e_, s.data(), s.size() + 1);
+        return s;
+    }
 
     // hot reload: textures and maps reload in place when their files change
     void set_hot_reload(bool on) { ov_set_hot_reload(e_, on); }

@@ -19,10 +19,15 @@ serde_json = "1.0"
 winit = { version = "0.30", optional = true }
 softbuffer = { version = "0.4", optional = true }
 gilrs = { version = "0.11", optional = true }
-rodio = { version = "0.21", optional = true, default-features = false, features = ["playback", "wav", "vorbis", "mp3"] }
+wgpu = { version = "30", optional = true }
+pollster = { version = "1", optional = true }
+rodio = { version = "0.23", optional = true, default-features = false, features = ["playback", "wav", "vorbis", "mp3"] }
 
 [features]
-default = ["window", "audio", "gamepad"]
+default = ["window", "audio", "gamepad", "gpu"]
 window = ["dep:winit", "dep:softbuffer"]
 audio = ["dep:rodio"]
 gamepad = ["dep:gilrs"]
+# Draw with the graphics card (DirectX 12, Vulkan, Metal, OpenGL); the
+# software renderer stays for tests, screenshots and machines without one
+gpu = ["dep:wgpu", "dep:pollster"]

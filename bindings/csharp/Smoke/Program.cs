@@ -78,13 +78,14 @@ Check(engine.GamepadConnected(1) && engine.GamepadName(1) == "Injected", "gamepa
 Check(engine.PadPressed(1, Pad.South) && !engine.PadDown(0, Pad.South), "gamepad button");
 Check(engine.PadStick(1).Y == -1f, "gamepad stick");
 
+Check(engine.RendererName == "software", "renderer name");
 engine.HotReload = true;
 Check(engine.HotReload && engine.ReloadChanged() == 0 && engine.Reloaded == 0, "hot reload");
 
 engine.Debug = true;
 Check(engine.Debug, "debug on");
 engine.BeginFrame(Color.Black);
-engine.DebugRect(new Rect(0, 50, 8, 8), new Color(0, 255, 0));
+engine.DebugRect(new Rect(0, 57, 8, 7), new Color(0, 255, 0)); // below the stats panel
 engine.EndFrame();
-Check(engine.Pixel(0, 54) == new Color(0, 255, 0), $"debug outline {engine.Pixel(0, 54)}");
+Check(engine.Pixel(0, 60) == new Color(0, 255, 0), $"debug outline {engine.Pixel(0, 60)}");
 Console.WriteLine("smoke_cs: ok");

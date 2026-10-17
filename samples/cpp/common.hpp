@@ -20,6 +20,9 @@ struct Options {
     // --headless N: no window, run N frames with scripted input and exit
     int frames = 0;
     std::string screenshot;  // --screenshot file.png: the last frame
+    // --gpu / --software: what draws (default: the graphics card for a
+    // window, the CPU headless)
+    ov::Renderer renderer = ov::Renderer::Auto;
 };
 
 inline Options parse_options(int argc, char **argv) {
@@ -30,6 +33,8 @@ inline Options parse_options(int argc, char **argv) {
         if (a == "--assets" && more) o.assets = argv[++i];
         else if (a == "--headless" && more) o.frames = std::atoi(argv[++i]);
         else if (a == "--screenshot" && more) o.screenshot = argv[++i];
+        else if (a == "--gpu") o.renderer = ov::Renderer::Gpu;
+        else if (a == "--software") o.renderer = ov::Renderer::Software;
     }
     return o;
 }
@@ -61,7 +66,7 @@ inline bool next_frame(ov::Engine &engine, const Options &o, const Script &scrip
 
 inline int finish(ov::Engine &engine, const Options &o, const char *name) {
     if (!o.screenshot.empty()) engine.save_screenshot(o.screenshot);
-    if (o.frames > 0) std::printf("%s: %d frames ok\n", name, o.frames);
+    if (o.frames > 0) std::printf("%s: %d frames ok (%s)\n", name, o.frames, engine.renderer_name().c_str());
     return 0;
 }
 
@@ -73,6 +78,7 @@ inline ov::Config window(const char *title, const Options &o) {
     c.scale = 4.0f;
     c.integer_scale = true;
     c.headless = o.frames > 0;
+    c.renderer = o.renderer;
     return c;
 }
 

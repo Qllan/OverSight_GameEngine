@@ -21,7 +21,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Rust tests
+      - name: Rust tests (GPU tests on the WARP software adapter)
+        env:
+          OVERSIGHT_REQUIRE_GPU: "1"
         run: cargo test -p oversight
 
       - name: Build oversight.dll
@@ -40,6 +42,8 @@ jobs:
           New-Item -ItemType Directory -Force shots | Out-Null
           foreach ($s in "topdown", "platformer", "isometric") {
             & "build/samples/Release/$s.exe" --headless 200 --screenshot "shots/cpp_$s.png"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            & "build/samples/Release/$s.exe" --headless 200 --gpu --screenshot "shots/gpu_$s.png"
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
 
@@ -90,8 +94,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: System libraries (sound, gamepads)
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev
+      - name: System libraries (sound, gamepads, software Vulkan for GPU tests)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mesa-vulkan-drivers
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -106,4 +110,6 @@ jobs:
         run: cargo clippy -p oversight --all-targets -- -D warnings
 
       - name: Rust tests
+        env:
+          OVERSIGHT_REQUIRE_GPU: "1"
         run: cargo test -p oversight

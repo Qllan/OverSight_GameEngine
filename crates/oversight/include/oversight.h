@@ -70,7 +70,14 @@ typedef struct OvConfig {
     bool integer_scale;     /* scale by whole numbers only (pixel art) */
     uint32_t target_fps;    /* 0 = unlimited */
     bool headless;          /* no window: render offscreen */
+    int32_t renderer;       /* OvRenderer */
 } OvConfig;
+
+typedef enum OvRenderer {
+    OV_RENDERER_AUTO = 0,     /* the graphics card for a window (the CPU if it fails), the CPU headless */
+    OV_RENDERER_SOFTWARE = 1, /* always the CPU */
+    OV_RENDERER_GPU = 2       /* always the graphics card, also headless; creating fails without one */
+} OvRenderer;
 
 /* A texture cut into a grid of equal frames, numbered row by row */
 typedef struct OvSpriteSheet {
@@ -260,7 +267,7 @@ typedef struct OvRayHit {
 #define OV_DEFAULT_FONT 1u
 
 static inline OvConfig ov_default_config(void) {
-    OvConfig c = {"OverSight", 960, 540, 1.0f, true, false, false, 60, false};
+    OvConfig c = {"OverSight", 960, 540, 1.0f, true, false, false, 60, false, OV_RENDERER_AUTO};
     return c;
 }
 
@@ -362,6 +369,9 @@ float ov_ease(int32_t ease, float t);
    time is the delay before it. repeat is an OvRepeat */
 float ov_tween_progress(float time, float duration, int32_t ease, int32_t repeat);
 OvColor ov_lerp_color(OvColor a, OvColor b, float t);
+
+/* "gpu: <graphics card>" or "software" */
+size_t ov_renderer_name(OvEngine *e, char *buf, size_t size);
 
 /* --- hot reload: textures and maps reload in place when their files change --- */
 void ov_set_hot_reload(OvEngine *e, bool on); /* checked in ov_poll twice a second */

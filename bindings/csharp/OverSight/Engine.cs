@@ -18,6 +18,8 @@ public sealed class Config
     public uint TargetFps = 60;
     /// <summary>No window: render offscreen (tests, CI)</summary>
     public bool Headless;
+    /// <summary>Auto: the graphics card for a window (the CPU if it fails), the CPU headless</summary>
+    public Renderer Renderer = Renderer.Auto;
 
     public Config() { }
 
@@ -222,6 +224,7 @@ public sealed class Engine : IDisposable
                 IntegerScale = B(config.IntegerScale),
                 TargetFps = config.TargetFps,
                 Headless = B(config.Headless),
+                Renderer = (int)config.Renderer,
             };
             Handle = Native.ov_engine_create(native);
         }
@@ -341,6 +344,18 @@ public sealed class Engine : IDisposable
     public void InjectGamepadConnected(int pad, bool on) => Native.ov_inject_gamepad_connected(Handle, pad, on);
     public void InjectPadButton(int pad, Pad b, bool down) => Native.ov_inject_gamepad_button(Handle, pad, (int)b, down);
     public void InjectPadAxis(int pad, PadAxis a, float v) => Native.ov_inject_gamepad_axis(Handle, pad, (int)a, v);
+
+    /// <summary>"gpu: graphics card" or "software"</summary>
+    public string RendererName
+    {
+        get
+        {
+            var n = Native.ov_renderer_name(Handle, null, 0);
+            var buf = new byte[(int)n + 1];
+            Native.ov_renderer_name(Handle, buf, (nuint)buf.Length);
+            return Encoding.UTF8.GetString(buf, 0, (int)n);
+        }
+    }
 
     // hot reload: textures and maps reload in place when their files change
     public bool HotReload { get => Native.ov_hot_reload_enabled(Handle); set => Native.ov_set_hot_reload(Handle, value); }

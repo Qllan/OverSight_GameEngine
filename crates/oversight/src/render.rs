@@ -1,5 +1,6 @@
 //! Renderer: draw calls are collected during a frame, sorted by layer,
-//! depth and call order, then rasterized into the canvas.
+//! depth and call order, then rasterized into the canvas here (the
+//! software renderer) or drawn by the graphics card (`gpu`).
 
 use tiny_skia::{FillRule, Paint, PathBuilder, Pattern, Pixmap, SpreadMode, Stroke, Transform};
 
@@ -7,6 +8,31 @@ use crate::camera::Camera;
 use crate::text::Font;
 use crate::texture::{Store, Texture};
 use crate::types::{Color, Rect, Space, Sprite, Vec2};
+
+/// Texture region a sprite shows (an empty `src` means the whole texture)
+pub(crate) fn sprite_src(s: &Sprite, tw: u32, th: u32) -> Rect {
+    if s.src.w > 0.0 && s.src.h > 0.0 {
+        s.src
+    } else {
+        Rect::new(0.0, 0.0, tw as f32, th as f32)
+    }
+}
+
+/// Maps the sprite's rectangle (0, 0, src.w, src.h) to where it is drawn
+pub(crate) fn sprite_transform(s: &Sprite, src: Rect) -> Transform {
+    let mut local = Transform::from_translate(s.pos.x, s.pos.y)
+        .pre_concat(Transform::from_rotate(s.rotation.to_degrees()))
+        .pre_scale(s.scale.x, s.scale.y)
+        .pre_translate(-s.origin.x, -s.origin.y);
+    // Flips mirror the image inside its own rectangle
+    if s.flip_x {
+        local = local.pre_translate(src.w, 0.0).pre_scale(-1.0, 1.0);
+    }
+    if s.flip_y {
+        local = local.pre_translate(0.0, src.h).pre_scale(1.0, -1.0);
+    }
+    local
+}
 
 #[derive(Debug, Clone)]
 pub enum Shape {
@@ -108,15 +134,16 @@ impl Renderer {
         self.commands.len()
     }
 
-    fn space_transform(&self, space: Space) -> Transform {
+    pub(crate) fn space_transform(&self, space: Space) -> Transform {
         match space {
             Space::World => self.camera.transform(self.size()),
             Space::Screen => Transform::identity(),
         }
     }
 
-    /// Sort and rasterize this frame's draw calls into the canvas
-    pub fn flush(&mut self, textures: &mut Store<Texture>, fonts: &mut Store<Font>) {
+    /// This frame's draw calls in drawing order; give them back with
+    /// `recycle` to keep the allocation
+    pub fn take_sorted(&mut self) -> Vec<DrawCmd> {
         let mut commands = std::mem::take(&mut self.commands);
         commands.sort_by(|a, b| {
             a.layer
@@ -124,6 +151,17 @@ impl Renderer {
                 .then(a.depth.total_cmp(&b.depth))
                 .then(a.seq.cmp(&b.seq))
         });
+        commands
+    }
+
+    pub fn recycle(&mut self, mut commands: Vec<DrawCmd>) {
+        commands.clear();
+        self.commands = commands;
+    }
+
+    /// Sort and rasterize this frame's draw calls into the canvas
+    pub fn flush(&mut self, textures: &mut Store<Texture>, fonts: &mut Store<Font>) {
+        let commands = self.take_sorted();
         self.canvas.fill(self.clear_color.to_skia());
         self.drawn_sprites = 0;
         for cmd in &commands {
@@ -150,30 +188,13 @@ impl Renderer {
                 }
             }
         }
-        commands.clear();
-        self.commands = commands; // keep the allocation
+        self.recycle(commands);
     }
 
     /// Returns false when the sprite was culled
     fn draw_sprite(&mut self, tex: &mut Texture, s: &Sprite, base: Transform) -> bool {
-        let (tw, th) = (tex.width() as f32, tex.height() as f32);
-        let src = if s.src.w > 0.0 && s.src.h > 0.0 {
-            s.src
-        } else {
-            Rect::new(0.0, 0.0, tw, th)
-        };
-        let mut local = Transform::from_translate(s.pos.x, s.pos.y)
-            .pre_concat(Transform::from_rotate(s.rotation.to_degrees()))
-            .pre_scale(s.scale.x, s.scale.y)
-            .pre_translate(-s.origin.x, -s.origin.y);
-        // Flips mirror the image inside its own rectangle
-        if s.flip_x {
-            local = local.pre_translate(src.w, 0.0).pre_scale(-1.0, 1.0);
-        }
-        if s.flip_y {
-            local = local.pre_translate(0.0, src.h).pre_scale(1.0, -1.0);
-        }
-        let transform = base.pre_concat(local);
+        let src = sprite_src(s, tex.width(), tex.height());
+        let transform = base.pre_concat(sprite_transform(s, src));
         if !self.visible(Rect::new(0.0, 0.0, src.w, src.h), transform) {
             return false;
         }
@@ -198,7 +219,7 @@ impl Renderer {
     }
 
     /// Whether a local rectangle can touch the canvas
-    fn visible(&self, rect: Rect, transform: Transform) -> bool {
+    pub(crate) fn visible(&self, rect: Rect, transform: Transform) -> bool {
         let mut corners = [
             tiny_skia::Point::from_xy(rect.x, rect.y),
             tiny_skia::Point::from_xy(rect.right(), rect.y),

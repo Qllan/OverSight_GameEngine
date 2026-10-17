@@ -45,6 +45,7 @@ internal struct NativeConfig
     public byte Resizable, Fullscreen, IntegerScale;
     public uint TargetFps;
     public byte Headless;
+    public int Renderer;
 }
 
 [StructLayout(LayoutKind.Sequential)]

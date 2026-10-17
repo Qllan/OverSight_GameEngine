@@ -132,6 +132,8 @@ public struct SpriteSheet
     public readonly Rect Frame(uint index) => Native.ov_sheet_frame(this, index);
 }
 
+/// <summary>What draws the frames</summary>
+public enum Renderer { Auto = 0, Software = 1, Gpu = 2 }
 public enum AnimMode { Loop = 0, Once = 1, PingPong = 2 }
 public enum Ease
 {

@@ -41,6 +41,9 @@ pub struct OvConfig {
     pub target_fps: u32,
     /// No window: render offscreen (tests, servers, CI)
     pub headless: bool,
+    /// 0 auto (the graphics card for a window, falling back to the CPU;
+    /// the CPU without one), 1 always the CPU, 2 always the graphics card
+    pub renderer: i32,
 }
 
 #[repr(C)]
@@ -150,7 +153,15 @@ pub unsafe extern "C" fn ov_engine_create(config: *const OvConfig) -> *mut OvEng
     let width = c.map_or(960, |c| c.width);
     let height = c.map_or(540, |c| c.height);
     let headless = c.is_some_and(|c| c.headless);
-    let engine = if headless || cfg!(not(feature = "window")) {
+    let renderer = c.map_or(0, |c| c.renderer);
+    let engine = if renderer == 2 && (headless || cfg!(not(feature = "window"))) {
+        #[cfg(feature = "gpu")]
+        {
+            Engine::headless_gpu(width, height)
+        }
+        #[cfg(not(feature = "gpu"))]
+        Err("this build has no GPU renderer".to_string())
+    } else if headless || cfg!(not(feature = "window")) {
         Engine::headless(width, height)
     } else {
         #[cfg(feature = "window")]
@@ -169,8 +180,15 @@ pub unsafe extern "C" fn ov_engine_create(config: *const OvConfig) -> *mut OvEng
                 wc.fullscreen = c.fullscreen;
                 wc.integer_scale = c.integer_scale;
                 wc.target_fps = c.target_fps;
+                wc.software = c.renderer == 1;
             }
-            Engine::windowed(wc)
+            match Engine::windowed(wc) {
+                // Asked for the graphics card and did not get it
+                Ok(mut e) if renderer == 2 && !e.renderer_name().starts_with("gpu") => {
+                    Err(e.take_error().unwrap_or_else(|| "no GPU".to_string()))
+                }
+                other => other,
+            }
         }
         #[cfg(not(feature = "window"))]
         unreachable!()
@@ -762,6 +780,19 @@ pub extern "C" fn ov_tween_progress(time: f32, duration: f32, ease: i32, repeat:
 #[no_mangle]
 pub extern "C" fn ov_lerp_color(a: Color, b: Color, t: f32) -> Color {
     tween::lerp_color(a, b, t)
+}
+
+/// "gpu: <graphics card>" or "software"
+///
+/// # Safety
+/// `buf` is NULL or has room for `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn ov_renderer_name(
+    e: *mut OvEngine,
+    buf: *mut c_char,
+    size: usize,
+) -> usize {
+    copy_out(&engine!(e, 0).renderer_name(), buf, size)
 }
 
 // --- hot reload ----------------------------------------------------------------
@@ -1510,6 +1541,7 @@ mod tests {
             integer_scale: false,
             target_fps: 0,
             headless: true,
+            renderer: 0,
         };
         unsafe { ov_engine_create(&config) }
     }

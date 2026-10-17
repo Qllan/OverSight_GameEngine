@@ -63,6 +63,12 @@ pub struct Engine {
     /// headless runs depend on injected input alone
     #[cfg(feature = "gamepad")]
     gamepads: Option<crate::gamepad::Backend>,
+    /// Draws frames on the graphics card; None: the software renderer
+    #[cfg(feature = "gpu")]
+    gpu: Option<crate::gpu::Gpu>,
+    /// The software canvas is behind the GPU's frame (read it back before
+    /// screenshots and pixel reads)
+    canvas_stale: bool,
     /// Input events injected by code, applied at the next poll
     injected: Vec<InputEvent>,
     quit: bool,
@@ -106,6 +112,9 @@ impl Engine {
             window: None,
             #[cfg(feature = "gamepad")]
             gamepads: None,
+            #[cfg(feature = "gpu")]
+            gpu: None,
+            canvas_stale: false,
             injected: Vec::new(),
             quit: false,
             last_error: None,
@@ -117,7 +126,22 @@ impl Engine {
     #[cfg(feature = "window")]
     pub fn windowed(config: WindowConfig) -> Result<Engine, String> {
         let mut engine = Engine::headless(config.width, config.height)?;
+        let software = config.software;
         engine.window = Some(Window::open(config)?);
+        // The graphics card when there is one; the CPU otherwise, and the
+        // error says why
+        #[cfg(feature = "gpu")]
+        if !software {
+            let handle = engine.window.as_ref().and_then(|w| w.handle());
+            let size = engine.renderer.size();
+            match handle.map(|h| crate::gpu::Gpu::for_window(h, size)) {
+                Some(Ok(gpu)) => engine.gpu = Some(gpu),
+                Some(Err(e)) => engine.last_error = Some(format!("drawing in software: {}", e)),
+                None => {}
+            }
+        }
+        #[cfg(not(feature = "gpu"))]
+        let _ = software;
         engine.time = Time::new(None);
         // A game without sound still runs; the error says why it is quiet
         #[cfg(feature = "audio")]
@@ -134,6 +158,24 @@ impl Engine {
             }
         }
         Ok(engine)
+    }
+
+    /// An engine without a window that draws on the graphics card (or the
+    /// system's software adapter); for comparing the two renderers
+    #[cfg(feature = "gpu")]
+    pub fn headless_gpu(width: u32, height: u32) -> Result<Engine, String> {
+        let mut engine = Engine::headless(width, height)?;
+        engine.gpu = Some(crate::gpu::Gpu::headless((width, height))?);
+        Ok(engine)
+    }
+
+    /// "gpu: <adapter>" or "software"
+    pub fn renderer_name(&self) -> String {
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = &self.gpu {
+            return format!("gpu: {}", gpu.adapter_name);
+        }
+        "software".to_string()
     }
 
     /// Start a frame: read window events and injected input and advance
@@ -478,8 +520,32 @@ impl Engine {
             sprites: self.renderer.drawn_sprites,
             camera: self.renderer.camera.center,
             mouse_world: self.mouse_world(),
+            renderer: self.renderer_name(),
         };
         self.debug.flush(&mut self.renderer, &stats);
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = self.gpu.as_mut() {
+            let commands = self.renderer.take_sorted();
+            let sprites = gpu.render(
+                &self.renderer,
+                &commands,
+                &mut self.textures,
+                &mut self.fonts,
+            );
+            self.renderer.drawn_sprites = sprites;
+            self.renderer.recycle(commands);
+            self.canvas_stale = true;
+            #[cfg(feature = "window")]
+            if let Some(window) = self.window.as_mut() {
+                let view = window.viewport(self.renderer.size());
+                window.pre_present();
+                if let Err(e) = gpu.present(window.size(), (view.x, view.y, view.scale)) {
+                    self.last_error = Some(e);
+                }
+                self.time.limit(window.target_fps());
+            }
+            return;
+        }
         self.renderer.flush(&mut self.textures, &mut self.fonts);
         #[cfg(feature = "window")]
         if let Some(window) = self.window.as_mut() {
@@ -487,6 +553,19 @@ impl Engine {
                 self.last_error = Some(e);
             }
             self.time.limit(window.target_fps());
+        }
+    }
+
+    /// Bring the software canvas up to the GPU's last frame
+    fn sync_canvas(&mut self) {
+        if !std::mem::take(&mut self.canvas_stale) {
+            return;
+        }
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = &self.gpu {
+            if let Err(e) = gpu.read_canvas(&mut self.renderer.canvas) {
+                self.last_error = Some(e);
+            }
         }
     }
 
@@ -711,14 +790,16 @@ impl Engine {
     }
 
     /// Write the last rendered frame to a PNG file
-    pub fn save_screenshot(&self, path: &str) -> Result<(), String> {
+    pub fn save_screenshot(&mut self, path: &str) -> Result<(), String> {
+        self.sync_canvas();
         self.renderer
             .canvas
             .save_png(path)
             .map_err(|e| format!("{}: {}", path, e))
     }
 
-    pub fn pixel(&self, x: u32, y: u32) -> Option<Color> {
+    pub fn pixel(&mut self, x: u32, y: u32) -> Option<Color> {
+        self.sync_canvas();
         self.renderer.pixel(x, y)
     }
 }

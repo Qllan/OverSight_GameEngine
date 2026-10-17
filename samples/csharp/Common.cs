@@ -10,13 +10,19 @@ static class Sample
         public int Frames;
         /// <summary>--screenshot file.png: save the last frame</summary>
         public string? Screenshot;
+        /// <summary>--gpu / --software: what draws (default: the graphics card
+        /// for a window, the CPU headless)</summary>
+        public Renderer Renderer = Renderer.Auto;
     }
 
     public static Options Parse(string[] args)
     {
         var o = new Options();
-        for (int i = 0; i + 1 < args.Length; i++)
+        for (int i = 0; i < args.Length; i++)
         {
+            if (args[i] == "--gpu") o.Renderer = Renderer.Gpu;
+            if (args[i] == "--software") o.Renderer = Renderer.Software;
+            if (i + 1 >= args.Length) break;
             switch (args[i])
             {
                 case "--assets": o.Assets = args[++i]; break;
@@ -31,6 +37,7 @@ static class Sample
     {
         IntegerScale = true,
         Headless = o.Frames > 0,
+        Renderer = o.Renderer,
     };
 
     /// <summary>Key presses at given frames, for headless runs</summary>
@@ -58,7 +65,7 @@ static class Sample
     public static int Finish(Engine engine, Options o, string name)
     {
         if (o.Screenshot != null) engine.SaveScreenshot(o.Screenshot);
-        if (o.Frames > 0) Console.WriteLine($"{name}: {o.Frames} frames ok");
+        if (o.Frames > 0) Console.WriteLine($"{name}: {o.Frames} frames ok ({engine.RendererName})");
         return 0;
     }
 

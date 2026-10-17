@@ -94,6 +94,7 @@ int main() {
     CHECK(engine.pad_pressed(1, ov::Pad::South) && !engine.pad_down(0, ov::Pad::South));
     CHECK(engine.pad_stick(1).y == -1.0f);
 
+    CHECK(engine.renderer_name() == "software");
     engine.set_hot_reload(true);
     CHECK(engine.hot_reload() && engine.reload_changed() == 0 && engine.reloaded() == 0);
 
@@ -101,9 +102,9 @@ int main() {
     engine.set_debug(true);
     CHECK(engine.debug());
     engine.begin_frame(ov::Color::Black);
-    engine.debug_rect({0, 50, 8, 8}, {0, 255, 0});
+    engine.debug_rect({0, 57, 8, 7}, {0, 255, 0});
     engine.end_frame();
-    CHECK(engine.pixel(0, 54) == ov::Color(0, 255, 0));
+    CHECK(engine.pixel(0, 60) == ov::Color(0, 255, 0)); // below the stats panel
     std::printf("smoke_cpp: ok\n");
     return 0;
 }
