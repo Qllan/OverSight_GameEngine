@@ -52,4 +52,11 @@ Check(engine.MeasureText("Привет", 12).X > 20, "text size");
 engine.InjectKey(Key.Space, true);
 engine.Poll();
 Check(engine.KeyPressed(Key.Space), "injected key");
+
+engine.Debug = true;
+Check(engine.Debug, "debug on");
+engine.BeginFrame(Color.Black);
+engine.DebugRect(new Rect(0, 50, 8, 8), new Color(0, 255, 0));
+engine.EndFrame();
+Check(engine.Pixel(0, 54) == new Color(0, 255, 0), $"debug outline {engine.Pixel(0, 54)}");
 Console.WriteLine("smoke_cs: ok");

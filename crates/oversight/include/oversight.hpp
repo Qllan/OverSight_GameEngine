@@ -449,6 +449,18 @@ public:
     void inject_mouse_button(Mouse b, bool down) { ov_inject_mouse_button(e_, static_cast<int32_t>(b), down); }
     void inject_mouse_move(Vec2 p) { ov_inject_mouse_move(e_, p); }
 
+    // debug overlay: drawn on top only while on; F3 toggles it
+    void set_debug(bool on) { ov_set_debug(e_, on); }
+    bool debug() const { return ov_debug_enabled(e_); }
+    void set_debug_key(std::optional<Key> k) { ov_set_debug_key(e_, k ? static_cast<int32_t>(*k) : 0); }
+    void debug_rect(Rect r, Color c = {255, 60, 60}) { ov_debug_rect(e_, r, c); }
+    void debug_line(Vec2 a, Vec2 b, Color c = {255, 60, 60}) { ov_debug_line(e_, a, b, c); }
+    void debug_circle(Vec2 center, float radius, Color c = {255, 60, 60}) { ov_debug_circle(e_, center, radius, c); }
+    void debug_text(const std::string &text, Vec2 pos, Color c = Color::White) {
+        ov_debug_text(e_, text.c_str(), pos, c);
+    }
+    void debug_tilemap(const Tilemap &map) { ov_debug_tilemap(e_, map.id()); }
+
     // sound
     void stop_voice(uint32_t voice) { ov_stop_voice(e_, voice); }
     bool voice_playing(uint32_t voice) const { return ov_voice_playing(e_, voice); }

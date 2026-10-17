@@ -1070,6 +1070,57 @@ pub extern "C" fn ov_rects_overlap(a: Rect, b: Rect) -> bool {
     a.overlaps(&b)
 }
 
+// --- debug overlay -------------------------------------------------------------
+
+/// On while debugging: draws the stats panel and the debug shapes
+#[no_mangle]
+pub extern "C" fn ov_set_debug(e: *mut OvEngine, on: bool) {
+    engine!(e).set_debug(on);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_debug_enabled(e: *mut OvEngine) -> bool {
+    engine!(e, false).debug.enabled
+}
+
+/// Key that toggles the overlay (F3 by default; 0 = none)
+#[no_mangle]
+pub extern "C" fn ov_set_debug_key(e: *mut OvEngine, key: i32) {
+    engine!(e).debug.toggle_key = (key != 0).then(|| key_from_u32(key as u32));
+}
+
+#[no_mangle]
+pub extern "C" fn ov_debug_rect(e: *mut OvEngine, rect: Rect, color: Color) {
+    engine!(e).debug_rect(rect, color);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_debug_line(e: *mut OvEngine, from: Vec2, to: Vec2, color: Color) {
+    engine!(e).debug_line(from, to, color);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_debug_circle(e: *mut OvEngine, center: Vec2, radius: f32, color: Color) {
+    engine!(e).debug_circle(center, radius, color);
+}
+
+/// # Safety
+/// `text` is a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_debug_text(
+    e: *mut OvEngine,
+    text: *const c_char,
+    pos: Vec2,
+    color: Color,
+) {
+    engine!(e).debug_text(string(text), pos, color);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_debug_tilemap(e: *mut OvEngine, map: u32) {
+    engine!(e).debug_tilemap(map);
+}
+
 // --- sound ---------------------------------------------------------------------
 // Built without the "audio" feature these do nothing and return 0/false.
 

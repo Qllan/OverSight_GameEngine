@@ -11,6 +11,7 @@ pub mod anim;
 pub mod audio;
 pub mod camera;
 pub mod collision;
+pub mod debug;
 pub mod engine;
 pub mod ffi;
 pub mod input;

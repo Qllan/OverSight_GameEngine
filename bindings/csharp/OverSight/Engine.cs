@@ -300,6 +300,18 @@ public sealed class Engine : IDisposable
     public void InjectMouseButton(MouseButton b, bool down) => Native.ov_inject_mouse_button(Handle, (int)b, down);
     public void InjectMouseMove(Vec2 p) => Native.ov_inject_mouse_move(Handle, p);
 
+    // debug overlay: drawn on top only while on; F3 toggles it
+    public bool Debug { get => Native.ov_debug_enabled(Handle); set => Native.ov_set_debug(Handle, value); }
+    /// <summary>Key that toggles the overlay; null for none</summary>
+    public Key? DebugKey { set => Native.ov_set_debug_key(Handle, value is { } k ? (int)k : 0); }
+    public void DebugRect(Rect r, Color? c = null) => Native.ov_debug_rect(Handle, r, c ?? DebugRed);
+    public void DebugLine(Vec2 a, Vec2 b, Color? c = null) => Native.ov_debug_line(Handle, a, b, c ?? DebugRed);
+    public void DebugCircle(Vec2 center, float radius, Color? c = null)
+        => Native.ov_debug_circle(Handle, center, radius, c ?? DebugRed);
+    public void DebugText(string text, Vec2 pos, Color? c = null) => Native.ov_debug_text(Handle, text, pos, c ?? Color.White);
+    public void DebugTilemap(Tilemap map) => Native.ov_debug_tilemap(Handle, map.Id);
+    private static readonly Color DebugRed = new(255, 60, 60);
+
     // sound
     public void StopVoice(uint voice) => Native.ov_stop_voice(Handle, voice);
     public bool VoicePlaying(uint voice) => Native.ov_voice_playing(Handle, voice);

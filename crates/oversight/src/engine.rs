@@ -19,6 +19,7 @@ use crate::anim::SpriteSheet;
 use crate::audio::Audio;
 use crate::camera::Camera;
 use crate::collision::{self, MoveResult, RayHit};
+use crate::debug::{DebugOverlay, Stats};
 use crate::input::{Input, Key, MouseButton};
 use crate::render::{DrawKind, Renderer, Shape};
 use crate::text::{Font, DEFAULT_FONT};
@@ -48,6 +49,7 @@ pub struct Engine {
     pub state: DrawState,
     pub input: Input,
     pub time: Time,
+    pub debug: DebugOverlay,
     #[cfg(feature = "audio")]
     pub audio: Audio,
     #[cfg(feature = "window")]
@@ -81,6 +83,7 @@ impl Engine {
             state: DrawState::default(),
             input: Input::default(),
             time: Time::new(Some(1.0 / 60.0)),
+            debug: DebugOverlay::default(),
             #[cfg(feature = "audio")]
             audio: Audio::silent(),
             #[cfg(feature = "window")]
@@ -125,6 +128,11 @@ impl Engine {
                 InputEvent::MouseButton(b, down) => self.input.set_mouse_button(b, down),
                 InputEvent::MouseMove(p) => self.input.mouse = p,
                 InputEvent::Wheel(w) => self.input.wheel += w,
+            }
+        }
+        if let Some(key) = self.debug.toggle_key {
+            if self.input.key_pressed(key) {
+                self.debug.enabled = !self.debug.enabled;
             }
         }
         #[cfg(feature = "audio")]
@@ -329,6 +337,15 @@ impl Engine {
 
     /// Rasterize the frame (and show it, when there is a window)
     pub fn end_frame(&mut self) {
+        let stats = Stats {
+            fps: self.time.fps,
+            dt: self.time.dt,
+            commands: self.renderer.pending(),
+            sprites: self.renderer.drawn_sprites,
+            camera: self.renderer.camera.center,
+            mouse_world: self.mouse_world(),
+        };
+        self.debug.flush(&mut self.renderer, &stats);
         self.renderer.flush(&mut self.textures, &mut self.fonts);
         #[cfg(feature = "window")]
         if let Some(window) = self.window.as_mut() {
@@ -393,6 +410,51 @@ impl Engine {
                 };
                 map.draw_layer(&mut self.renderer, i, &opts);
             }
+        }
+    }
+
+    // --- debug overlay (drawn only while it is on; F3 toggles it) ------------
+
+    pub fn set_debug(&mut self, on: bool) {
+        self.debug.enabled = on;
+    }
+
+    /// Outline in the current space (world or screen)
+    pub fn debug_rect(&mut self, rect: Rect, color: Color) {
+        self.debug.rect(rect, color, self.state.space);
+    }
+
+    pub fn debug_line(&mut self, from: Vec2, to: Vec2, color: Color) {
+        let line = Shape::Line {
+            from,
+            to,
+            thickness: 1.0,
+        };
+        self.debug.shape(line, color, self.state.space);
+    }
+
+    pub fn debug_circle(&mut self, center: Vec2, radius: f32, color: Color) {
+        let circle = Shape::Circle {
+            center,
+            radius,
+            filled: false,
+            thickness: 1.0,
+        };
+        self.debug.shape(circle, color, self.state.space);
+    }
+
+    pub fn debug_text(&mut self, text: &str, pos: Vec2, color: Color) {
+        self.debug.text(text, pos, color, self.state.space);
+    }
+
+    /// Solid cells, platforms and objects of a stored map
+    pub fn debug_tilemap(&mut self, map: u32) {
+        if !self.debug.enabled {
+            return;
+        }
+        let view = self.renderer.camera.visible_world(self.size());
+        if let Some(m) = self.tilemaps.get(map) {
+            self.debug.tilemap(m, view);
         }
     }
 

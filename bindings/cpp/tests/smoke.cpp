@@ -66,6 +66,14 @@ int main() {
     engine.inject_key(ov::Key::Space, true);
     engine.poll();
     CHECK(engine.key_pressed(ov::Key::Space));
+
+    // Debug overlay: drawn only while on, above the game
+    engine.set_debug(true);
+    CHECK(engine.debug());
+    engine.begin_frame(ov::Color::Black);
+    engine.debug_rect({0, 50, 8, 8}, {0, 255, 0});
+    engine.end_frame();
+    CHECK(engine.pixel(0, 54) == ov::Color(0, 255, 0));
     std::printf("smoke_cpp: ok\n");
     return 0;
 }

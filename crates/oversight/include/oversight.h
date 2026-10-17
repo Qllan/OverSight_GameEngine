@@ -330,6 +330,16 @@ bool ov_point_solid(OvEngine *e, uint32_t map, OvVec2 p);
 bool ov_rect_solid(OvEngine *e, uint32_t map, OvRect rect);
 bool ov_rects_overlap(OvRect a, OvRect b);
 
+/* --- debug overlay: drawn on top only while on; F3 toggles it --- */
+void ov_set_debug(OvEngine *e, bool on);
+bool ov_debug_enabled(OvEngine *e);
+void ov_set_debug_key(OvEngine *e, int32_t key); /* 0: no toggle key */
+void ov_debug_rect(OvEngine *e, OvRect rect, OvColor color);   /* in the current space */
+void ov_debug_line(OvEngine *e, OvVec2 from, OvVec2 to, OvColor color);
+void ov_debug_circle(OvEngine *e, OvVec2 center, float radius, OvColor color);
+void ov_debug_text(OvEngine *e, const char *text, OvVec2 pos, OvColor color);
+void ov_debug_tilemap(OvEngine *e, uint32_t map); /* solid cells, platforms, objects */
+
 /* --- sound (WAV, OGG, MP3) --- */
 uint32_t ov_load_sound(OvEngine *e, const char *path);
 void ov_free_sound(OvEngine *e, uint32_t sound);
