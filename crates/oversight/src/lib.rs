@@ -12,6 +12,7 @@ pub mod audio;
 pub mod camera;
 pub mod collision;
 pub mod engine;
+pub mod ffi;
 pub mod input;
 pub mod render;
 pub mod text;
