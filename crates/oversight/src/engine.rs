@@ -60,6 +60,10 @@ pub struct Engine {
     pub polygons: Store<Vec<Vec2>>,
     /// WGSL sources of post effect shaders
     pub shaders: Store<String>,
+    /// Collider layers that cast shadows
+    shadow_layers: u32,
+    /// Maps whose solid cells cast shadows
+    shadow_maps: std::collections::BTreeSet<u32>,
     pub state: DrawState,
     pub input: Input,
     /// Named actions bound to keys, buttons and sticks
@@ -125,6 +129,8 @@ impl Engine {
             emitters: Store::default(),
             polygons: Store::default(),
             shaders: Store::default(),
+            shadow_layers: 0,
+            shadow_maps: Default::default(),
             state: DrawState::default(),
             input: Input::default(),
             actions: Default::default(),
@@ -654,6 +660,7 @@ impl Engine {
         for e in effects {
             match e.kind {
                 crate::post::EFFECT_GLOW..=crate::post::EFFECT_CRT => {}
+                crate::post::EFFECT_LIGHTING => {}
                 crate::post::EFFECT_SHADER if self.shaders.get(e.shader).is_some() => {}
                 crate::post::EFFECT_SHADER => return Err(format!("no shader {}", e.shader)),
                 k => return Err(format!("unknown effect kind {}", k)),
@@ -696,6 +703,121 @@ impl Engine {
         #[cfg(feature = "gpu")]
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.free_shader(shader);
+        }
+    }
+
+    /// Lighting uses this texture of the same size as `texture`'s normal
+    /// map (red right, green up); 0 removes it
+    pub fn set_normal_map(&mut self, texture: u32, normal: u32) {
+        if let Some(t) = self.textures.get_mut(texture) {
+            t.normal = normal;
+        }
+    }
+
+    /// Colliders on these layers (bits) cast shadows
+    pub fn set_shadow_layers(&mut self, layers: u32) {
+        self.shadow_layers = layers;
+    }
+
+    /// Solid cells of a stored map cast shadows (or stop)
+    pub fn set_shadow_tilemap(&mut self, map: u32, on: bool) {
+        if on {
+            self.shadow_maps.insert(map);
+        } else {
+            self.shadow_maps.remove(&map);
+        }
+    }
+
+    /// What each target with the lighting effect sees of the lights and
+    /// shadow casters, in its own pixels
+    fn prepare_lighting(&mut self) {
+        use crate::components::{read, Light, Transform, LIGHT, TRANSFORM};
+        use crate::light::{shape_edges, tilemap_edges, LightPx, LightScene};
+        let lit = |fx: &[Effect]| fx.iter().any(|e| e.kind == crate::post::EFFECT_LIGHTING);
+        let mut targets: Vec<u32> = self
+            .renderer
+            .targets
+            .iter()
+            .filter(|(_, t)| lit(&t.effects))
+            .map(|(id, _)| *id)
+            .collect();
+        if lit(&self.renderer.effects) {
+            targets.push(0);
+        }
+        self.renderer.light_scenes.clear();
+        if targets.is_empty() {
+            return;
+        }
+        let lights: Vec<(Vec2, Light)> = self
+            .world
+            .query(&[LIGHT, TRANSFORM])
+            .into_iter()
+            .filter_map(|ent| {
+                let t = read::<Transform>(&self.world, ent, TRANSFORM)?;
+                let l = read::<Light>(&self.world, ent, LIGHT)?;
+                Some((Vec2::new(t.pos.x + l.offset.x, t.pos.y + l.offset.y), l))
+            })
+            .collect();
+        let reach = lights.iter().map(|(_, l)| l.radius).fold(0.0, f32::max);
+        let casters: Vec<crate::shapes::Shape> = if self.shadow_layers == 0 {
+            Vec::new()
+        } else {
+            self.world
+                .query(&[crate::components::COLLIDER, TRANSFORM])
+                .into_iter()
+                .filter(|ent| {
+                    read::<crate::components::Collider>(
+                        &self.world,
+                        *ent,
+                        crate::components::COLLIDER,
+                    )
+                    .is_some_and(|c| c.layer & self.shadow_layers != 0)
+                })
+                .filter_map(|ent| self.collider_shape(ent))
+                .collect()
+        };
+        for target in targets {
+            let t = self.renderer.space_transform(Space::World, target);
+            let size = if target == 0 {
+                self.renderer.size()
+            } else {
+                self.renderer.targets[&target].size
+            };
+            let scale = (t.sx * t.sy - t.kx * t.ky).abs().sqrt();
+            let mut scene = LightScene::default();
+            for (pos, l) in &lights {
+                let mut p = tiny_skia::Point::from_xy(pos.x, pos.y);
+                t.map_point(&mut p);
+                let k = l.intensity / 255.0;
+                scene.lights.push(LightPx {
+                    pos: Vec2::new(p.x, p.y),
+                    radius: l.radius * scale,
+                    color: [
+                        l.color.r as f32 * k,
+                        l.color.g as f32 * k,
+                        l.color.b as f32 * k,
+                    ],
+                    height: l.height,
+                    softness: l.softness,
+                    shadows: l.shadows != 0,
+                });
+            }
+            for shape in &casters {
+                shape_edges(shape, t, &mut scene.edges);
+            }
+            let view = self.renderer.camera_of(target).visible_world(size);
+            let view = Rect::new(
+                view.x - reach,
+                view.y - reach,
+                view.w + reach * 2.0,
+                view.h + reach * 2.0,
+            );
+            for map in &self.shadow_maps {
+                if let Some(m) = self.tilemaps.get(*map) {
+                    tilemap_edges(m, view, t, &mut scene.edges);
+                }
+            }
+            self.renderer.light_scenes.insert(target, scene);
         }
     }
 
@@ -919,6 +1041,7 @@ impl Engine {
         self.renderer.target = 0;
         self.scenes.draw(&mut self.renderer);
         self.debug.flush(&mut self.renderer, &stats);
+        self.prepare_lighting();
         let dt = self.time.dt;
         #[cfg(feature = "gpu")]
         if let Some(gpu) = self.gpu.as_mut() {
@@ -1626,5 +1749,150 @@ mod tests {
         e.free_shader(id);
         e.begin_frame(RED);
         e.end_frame();
+    }
+
+    /// A white world 64x32 seen 1:1, lit by one light at (10, 16), with a
+    /// wall at x 28..32 on the shadow layer
+    fn lit_world(e: &mut Engine, softness: f32, ambient: Color) {
+        use crate::components::{write, Collider, Light, Transform, COLLIDER, LIGHT, TRANSFORM};
+        e.set_camera(Camera {
+            center: Vec2::new(32.0, 16.0),
+            ..Camera::default()
+        });
+        e.set_effects(0, &[crate::post::Effect::lighting(ambient, 1.0)])
+            .unwrap();
+        e.set_shadow_layers(2);
+        let lamp = e.world.spawn();
+        let at = |x, y| Transform {
+            pos: Vec2::new(x, y),
+            ..Transform::default()
+        };
+        write(&mut e.world, lamp, TRANSFORM, &at(10.0, 16.0));
+        let light = Light {
+            radius: 60.0,
+            softness,
+            ..Light::default()
+        };
+        write(&mut e.world, lamp, LIGHT, &light);
+        let wall = e.world.spawn();
+        write(&mut e.world, wall, TRANSFORM, &at(30.0, 16.0));
+        let c = Collider {
+            size: Vec2::new(4.0, 20.0),
+            layer: 2,
+            ..Collider::default()
+        };
+        write(&mut e.world, wall, COLLIDER, &c);
+        e.begin_frame(Color::BLACK);
+        e.fill_rect(Rect::new(0.0, 0.0, 64.0, 32.0), Color::WHITE);
+        e.end_frame();
+    }
+
+    #[test]
+    fn lights_fade_out_and_walls_cast_shadows() {
+        let mut e = Engine::headless(64, 32).unwrap();
+        lit_world(&mut e, 0.0, Color::BLACK);
+        let r = |e: &mut Engine, x, y| e.pixel(x, y).unwrap().r;
+        assert!(r(&mut e, 10, 16) > 240, "at the light");
+        let (near, far) = (r(&mut e, 14, 16), r(&mut e, 24, 16));
+        assert!(near > far && far > 50, "fades with distance: {near} {far}");
+        assert!(r(&mut e, 30, 16) > 0, "the wall's own face is lit");
+        assert_eq!(r(&mut e, 40, 16), 0, "behind the wall");
+        assert!(r(&mut e, 34, 0) > 0, "past its end");
+        assert_eq!(r(&mut e, 63, 31), 0, "out of reach, no ambient");
+
+        let mut e = Engine::headless(64, 32).unwrap();
+        lit_world(&mut e, 4.0, Color::rgba(128, 128, 128, 255));
+        assert_eq!(r(&mut e, 63, 31), 128, "ambient light");
+        let edge = r(&mut e, 34, 3);
+        assert!(edge > 128 && edge < 250, "a soft edge: {edge}");
+    }
+
+    #[test]
+    fn normal_maps_tilt_the_light() {
+        use crate::components::{write, Light, Transform, LIGHT, TRANSFORM};
+        let shade = |normal: Option<[u8; 4]>, light_x: f32| {
+            let mut e = Engine::headless(16, 16).unwrap();
+            e.set_camera(Camera {
+                center: Vec2::new(8.0, 8.0),
+                ..Camera::default()
+            });
+            let white = e.texture_from_rgba(16, 16, &[255; 16 * 16 * 4]).unwrap();
+            if let Some(n) = normal {
+                let px: Vec<u8> = n.iter().copied().cycle().take(16 * 16 * 4).collect();
+                let map = e.texture_from_rgba(16, 16, &px).unwrap();
+                e.set_normal_map(white, map);
+            }
+            e.set_effects(0, &[crate::post::Effect::lighting(Color::BLACK, 1.0)])
+                .unwrap();
+            let lamp = e.world.spawn();
+            let t = Transform {
+                pos: Vec2::new(light_x, 8.0),
+                ..Transform::default()
+            };
+            write(&mut e.world, lamp, TRANSFORM, &t);
+            let l = Light {
+                radius: 40.0,
+                height: 0.3,
+                ..Light::default()
+            };
+            write(&mut e.world, lamp, LIGHT, &l);
+            e.begin_frame(Color::BLACK);
+            e.draw_texture(white, 0.0, 0.0);
+            e.end_frame();
+            e.pixel(8, 8).unwrap().r
+        };
+        let right = Some([230, 128, 200, 255]); // tilted to the right
+        let flat = shade(None, 30.0);
+        assert!(shade(right, 30.0) > flat + 20, "faces the light");
+        assert!(shade(right, -14.0) + 20 < flat, "faces away");
+        let level = shade(Some([128, 128, 255, 255]), 30.0);
+        assert!(level.abs_diff(flat) <= 2, "a flat map changes nothing");
+    }
+
+    #[test]
+    fn solid_cells_of_shadow_maps_cast_shadows() {
+        use crate::components::{write, Light, Transform, LIGHT, TRANSFORM};
+        use crate::tilemap::{Orientation, Property, Tileset};
+        let mut e = Engine::headless(64, 16).unwrap();
+        e.set_camera(Camera {
+            center: Vec2::new(32.0, 8.0),
+            ..Camera::default()
+        });
+        // A wall column at x 24..32
+        let mut m = Tilemap::new(Orientation::Orthogonal, 8, 2, 8, 8);
+        let mut ts = Tileset::new(1, 0, SpriteSheet::grid(8, 8, 8, 8, 0, 0));
+        ts.tile_properties
+            .entry(0)
+            .or_default()
+            .insert("solid".into(), Property::Bool(true));
+        m.add_tileset(ts);
+        let l = m.add_layer("walls");
+        m.layers[l].set(3, 0, 1);
+        m.layers[l].set(3, 1, 1);
+        let map = e.add_tilemap(m);
+        e.set_effects(0, &[crate::post::Effect::lighting(Color::BLACK, 1.0)])
+            .unwrap();
+        let lamp = e.world.spawn();
+        let t = Transform {
+            pos: Vec2::new(8.0, 8.0),
+            ..Transform::default()
+        };
+        write(&mut e.world, lamp, TRANSFORM, &t);
+        let light = Light {
+            radius: 60.0,
+            softness: 0.0,
+            ..Light::default()
+        };
+        write(&mut e.world, lamp, LIGHT, &light);
+        let frame = |e: &mut Engine| {
+            e.begin_frame(Color::BLACK);
+            e.fill_rect(Rect::new(0.0, 0.0, 64.0, 16.0), Color::WHITE);
+            e.end_frame();
+            e.pixel(40, 8).unwrap().r
+        };
+        assert!(frame(&mut e) > 0, "no shadow map yet");
+        e.set_shadow_tilemap(map, true);
+        assert_eq!(frame(&mut e), 0, "behind the wall");
+        assert!(e.pixel(28, 8).unwrap().r > 0, "the wall's face is lit");
     }
 }

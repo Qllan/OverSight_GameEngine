@@ -7,6 +7,7 @@
 
 use tiny_skia::Pixmap;
 
+use crate::light::{LightPx, LightScene};
 use crate::types::{Color, Vec2};
 
 pub const EFFECT_GLOW: u32 = 1;
@@ -14,6 +15,7 @@ pub const EFFECT_BLUR: u32 = 2;
 pub const EFFECT_GRADE: u32 = 3;
 pub const EFFECT_CRT: u32 = 4;
 pub const EFFECT_SHADER: u32 = 5;
+pub use crate::light::EFFECT_LIGHTING;
 /// Pixels the blur and glow reach at most
 pub const MAX_RADIUS: f32 = 32.0;
 
@@ -27,6 +29,7 @@ pub struct Effect {
     /// Glow: threshold, strength, radius. Blur: radius.
     /// Grade: brightness, contrast, saturation, gamma, tint r, g, b.
     /// CRT: scanlines, curvature, vignette, aberration.
+    /// Lighting: ambient r, g, b.
     /// Shader: anything, as `post.p` in WGSL.
     pub p: [f32; 8],
 }
@@ -64,6 +67,13 @@ impl Effect {
 
     pub fn crt(scanlines: f32, curvature: f32, vignette: f32, aberration: f32) -> Effect {
         Effect::with(EFFECT_CRT, &[scanlines, curvature, vignette, aberration])
+    }
+
+    /// Lights the picture with the engine's lights; `ambient` is the light
+    /// everywhere, times `brightness`
+    pub fn lighting(ambient: Color, brightness: f32) -> Effect {
+        let c = |v: u8| v as f32 / 255.0 * brightness;
+        Effect::with(EFFECT_LIGHTING, &[c(ambient.r), c(ambient.g), c(ambient.b)])
     }
 
     pub fn shader(shader: u32, params: [f32; 8]) -> Effect {
@@ -259,10 +269,10 @@ fn crt(img: &Image, x: i32, y: i32, p: &[f32; 8]) -> Px {
 }
 
 /// Run a chain over a pixmap. Custom shaders are skipped here.
-pub fn apply(pixmap: &mut Pixmap, effects: &[Effect]) {
+pub fn apply(pixmap: &mut Pixmap, effects: &[Effect], light: Option<Lit>) {
     if !effects
         .iter()
-        .any(|e| (EFFECT_GLOW..EFFECT_SHADER).contains(&e.kind))
+        .any(|e| e.kind != EFFECT_SHADER && e.kind != 0)
     {
         return;
     }
@@ -288,10 +298,139 @@ pub fn apply(pixmap: &mut Pixmap, effects: &[Effect]) {
                 .blur(e.radius(), false, |c| c),
             EFFECT_GRADE => img.map(|x, y| grade(img.at(x, y), &e.p)),
             EFFECT_CRT => img.map(|x, y| crt(&img, x, y, &e.p)),
+            EFFECT_LIGHTING => lighting(&img, &e.p, light),
             _ => continue,
         };
     }
     img.write(pixmap);
+}
+
+/// What the lighting effect lights a picture with
+#[derive(Clone, Copy)]
+pub struct Lit<'a> {
+    pub scene: &'a LightScene,
+    /// Screen-space normals (see `normal_texel`); None: all flat
+    pub normals: Option<&'a Pixmap>,
+}
+
+/// A normal map texel turned to the screen by the 2x2 matrix `m` (local
+/// x, y to screen; all zero: a flat surface with the texel's alpha).
+/// Normal maps point green up; the result is encoded like them, but y
+/// down, premultiplied.
+pub fn normal_texel(px: [u8; 4], m: [f32; 4]) -> [u8; 4] {
+    let a = px[3] as f32 / 255.0;
+    if a <= 0.0 {
+        return [0; 4];
+    }
+    let n = if m == [0.0; 4] {
+        [0.0, 0.0, 1.0]
+    } else {
+        let d = |i: usize| px[i] as f32 / 255.0 / a * 2.0 - 1.0;
+        let (lx, ly, z) = (d(0), -d(1), d(2));
+        normalize([m[0] * lx + m[1] * ly, m[2] * lx + m[3] * ly, z])
+    };
+    let e = |v: f32| ((v * 0.5 + 0.5) * a * 255.0).round().clamp(0.0, 255.0) as u8;
+    [e(n[0]), e(n[1]), e(n[2]), px[3]]
+}
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len <= 1e-6 {
+        return [0.0, 0.0, 1.0];
+    }
+    v.map(|c| c / len)
+}
+
+/// The normal stored in a normal buffer pixel
+fn decode_normal(c: Px) -> [f32; 3] {
+    if c[3] <= 0.0 {
+        return [0.0, 0.0, 1.0];
+    }
+    normalize([0, 1, 2].map(|i| c[i] / c[3] * 2.0 - 1.0))
+}
+
+/// Where a light's shadows fall inside its bounds: 1 lit, 0 dark
+fn shadow_mask(light: &LightPx, edges: &[crate::light::Edge], b: [i32; 4]) -> Image {
+    let (w, h) = ((b[2] - b[0]) as u32, (b[3] - b[1]) as u32);
+    let mut pix = Pixmap::new(w, h).expect("light bounds");
+    pix.fill(tiny_skia::Color::WHITE);
+    let mut paint = tiny_skia::Paint {
+        anti_alias: false,
+        ..Default::default()
+    };
+    paint.set_color(tiny_skia::Color::BLACK);
+    let shift = tiny_skia::Transform::from_translate(-b[0] as f32, -b[1] as f32);
+    for q in light.shadow_quads(edges) {
+        let mut pb = tiny_skia::PathBuilder::new();
+        pb.move_to(q[0].x, q[0].y);
+        for p in &q[1..] {
+            pb.line_to(p.x, p.y);
+        }
+        pb.close();
+        if let Some(path) = pb.finish() {
+            pix.fill_path(&path, &paint, tiny_skia::FillRule::Winding, shift, None);
+        }
+    }
+    let mask = Image::from(&pix);
+    match light.blur() {
+        0 => mask,
+        r => mask.blur(r, true, |c| c).blur(r, false, |c| c),
+    }
+}
+
+/// How much of a light reaches the pixel centre (cx, cy) on a surface
+/// facing `n`, before shadows
+fn light_at(light: &LightPx, cx: f32, cy: f32, n: [f32; 3]) -> f32 {
+    let (dx, dy) = (
+        (light.pos.x - cx) / light.radius,
+        (light.pos.y - cy) / light.radius,
+    );
+    let d = (dx * dx + dy * dy).sqrt();
+    if d >= 1.0 {
+        return 0.0;
+    }
+    let l = normalize([dx, dy, light.height.max(0.01)]);
+    // Flat ground gets the plain falloff; normal maps tilt it up or down
+    let facing = ((n[0] * l[0] + n[1] * l[1] + n[2] * l[2]) / l[2]).clamp(0.0, 2.0);
+    (1.0 - d) * (1.0 - d) * facing
+}
+
+/// Light gathered over the picture: the ambient light plus every light,
+/// capped at twice the picture's own brightness
+fn lighting(img: &Image, p: &[f32; 8], lit: Option<Lit>) -> Image {
+    let (w, h) = (img.w, img.h);
+    let mut sum = vec![[p[0], p[1], p[2]]; (w * h) as usize];
+    if let Some(lit) = lit {
+        let normals = lit.normals.map(Image::from);
+        for light in &lit.scene.lights {
+            let Some(b) = light.bounds((w as u32, h as u32)) else {
+                continue;
+            };
+            let mask = shadow_mask(light, &lit.scene.edges, b);
+            for y in b[1]..b[3] {
+                for x in b[0]..b[2] {
+                    let n = normals
+                        .as_ref()
+                        .map_or([0.0, 0.0, 1.0], |n| decode_normal(n.at(x, y)));
+                    let k = light_at(light, x as f32 + 0.5, y as f32 + 0.5, n);
+                    if k <= 0.0 {
+                        continue;
+                    }
+                    let k = k * mask.at(x - b[0], y - b[1])[0];
+                    let s = &mut sum[(y * w + x) as usize];
+                    for (v, c) in s.iter_mut().zip(light.color) {
+                        *v += c * k;
+                    }
+                }
+            }
+        }
+    }
+    img.map(|x, y| {
+        let c = img.at(x, y);
+        let l = sum[(y * w + x) as usize];
+        let o = [0, 1, 2].map(|i| (c[i] * l[i].min(2.0)).min(c[3]));
+        [o[0], o[1], o[2], c[3]]
+    })
 }
 
 /// Camera shake: the world part of the screen jitters, fading out
@@ -361,6 +500,10 @@ mod tests {
         p
     }
 
+    fn apply_all(p: &mut Pixmap, effects: &[Effect]) {
+        apply(p, effects, None);
+    }
+
     fn px(p: &Pixmap, x: u32, y: u32) -> [u8; 4] {
         let i = ((y * p.width() + x) * 4) as usize;
         p.data()[i..i + 4].try_into().unwrap()
@@ -388,11 +531,11 @@ mod tests {
             })
         };
         let mut p = base([255, 255, 255, 255]);
-        apply(&mut p, &[Effect::glow(0.5, 2.0, 4.0)]);
+        apply_all(&mut p, &[Effect::glow(0.5, 2.0, 4.0)]);
         assert!(px(&p, 10, 8)[0] > 18, "{:?}", px(&p, 10, 8));
         assert_eq!(px(&p, 0, 0), [10, 10, 10, 255], "too far to reach");
         let mut dim = base([100, 100, 100, 255]);
-        apply(&mut dim, &[Effect::glow(0.5, 2.0, 4.0)]);
+        apply_all(&mut dim, &[Effect::glow(0.5, 2.0, 4.0)]);
         assert_eq!(px(&dim, 10, 8), [10, 10, 10, 255], "below the threshold");
     }
 
@@ -405,7 +548,7 @@ mod tests {
                 [200, 200, 200, 255]
             }
         });
-        apply(&mut p, &[Effect::blur(3.0)]);
+        apply_all(&mut p, &[Effect::blur(3.0)]);
         assert_eq!(px(&p, 0, 0), [0, 0, 0, 255]);
         assert_eq!(px(&p, 15, 0), [200, 200, 200, 255]);
         let edge = px(&p, 8, 0)[0];
@@ -416,11 +559,11 @@ mod tests {
     fn grade_moves_colours() {
         let start = || pixmap(1, 1, |_, _| [200, 100, 50, 255]);
         let mut p = start();
-        apply(&mut p, &[Effect::grade(0.0, 1.0, 0.0, 1.0, Color::WHITE)]);
+        apply_all(&mut p, &[Effect::grade(0.0, 1.0, 0.0, 1.0, Color::WHITE)]);
         let g = px(&p, 0, 0);
         assert!(g[0] == g[1] && g[1] == g[2], "no saturation is grey: {g:?}");
         let mut p = start();
-        apply(
+        apply_all(
             &mut p,
             &[Effect::grade(
                 0.0,
@@ -432,11 +575,11 @@ mod tests {
         );
         assert_eq!(px(&p, 0, 0), [200, 0, 0, 255], "tint");
         let mut p = start();
-        apply(&mut p, &[Effect::grade(0.2, 1.0, 1.0, 1.0, Color::WHITE)]);
+        apply_all(&mut p, &[Effect::grade(0.2, 1.0, 1.0, 1.0, Color::WHITE)]);
         assert_eq!(px(&p, 0, 0), [251, 151, 101, 255], "brighter");
         // Transparent pixels stay transparent
         let mut clear = pixmap(1, 1, |_, _| [0, 0, 0, 0]);
-        apply(
+        apply_all(
             &mut clear,
             &[Effect::grade(0.5, 1.0, 1.0, 1.0, Color::WHITE)],
         );
@@ -446,11 +589,11 @@ mod tests {
     #[test]
     fn crt_darkens_odd_rows_and_bends_corners_away() {
         let mut p = pixmap(32, 32, |_, _| [200, 200, 200, 255]);
-        apply(&mut p, &[Effect::crt(0.5, 0.0, 0.0, 0.0)]);
+        apply_all(&mut p, &[Effect::crt(0.5, 0.0, 0.0, 0.0)]);
         assert_eq!(px(&p, 5, 4), [200, 200, 200, 255]);
         assert_eq!(px(&p, 5, 5), [100, 100, 100, 255]);
         let mut p = pixmap(32, 32, |_, _| [200, 200, 200, 255]);
-        apply(&mut p, &[Effect::crt(0.0, 0.3, 0.0, 0.0)]);
+        apply_all(&mut p, &[Effect::crt(0.0, 0.3, 0.0, 0.0)]);
         assert_eq!(
             px(&p, 0, 0),
             [0, 0, 0, 255],
@@ -462,7 +605,7 @@ mod tests {
     #[test]
     fn shaders_are_left_out_in_software() {
         let mut p = pixmap(2, 2, |_, _| [1, 2, 3, 255]);
-        apply(&mut p, &[Effect::shader(1, [0.0; 8])]);
+        apply_all(&mut p, &[Effect::shader(1, [0.0; 8])]);
         assert_eq!(px(&p, 1, 1), [1, 2, 3, 255]);
     }
 

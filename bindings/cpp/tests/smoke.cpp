@@ -224,6 +224,20 @@ int main() {
     CHECK(keep && bad_shader);
     engine.shake(4, 0.2f);
 
+    // Lighting: one light in the dark
+    engine.set_effects({ov::Effect::lighting()});
+    ov::Entity lamp = engine.spawn();
+    engine.set(lamp, ov::Transform{{32, 32}});
+    engine.set(lamp, ov::Light(40));
+    engine.set_shadow_layers(1);
+    engine.set_normal_map(target, target);
+    engine.begin_frame(ov::Color::White);
+    engine.end_frame();
+    CHECK(engine.pixel(32, 32).r > 200 && engine.pixel(0, 0).r == 0);
+    CHECK(engine.component<ov::Light>() == OV_LIGHT);
+    engine.set_effects({});
+    engine.despawn(lamp);
+
     std::printf("smoke_cpp: ok\n");
     return 0;
 }

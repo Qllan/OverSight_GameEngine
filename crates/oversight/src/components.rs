@@ -14,6 +14,7 @@ pub const SPRITE_RENDERER: u32 = 3;
 pub const BODY: u32 = 4;
 pub const COLLIDER: u32 = 5;
 pub const RIGIDBODY: u32 = 6;
+pub const LIGHT: u32 = 7;
 
 pub const BODY_DYNAMIC: u32 = 0;
 pub const BODY_FIXED: u32 = 1;
@@ -215,6 +216,42 @@ impl Default for RigidBody {
     }
 }
 
+/// A light at the entity's position, seen by targets (or the screen)
+/// with the lighting effect. Colliders on the shadow layers and solid
+/// cells of shadow maps cast shadows.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Light {
+    /// From the position (not turned with the entity)
+    pub offset: Vec2,
+    pub color: Color,
+    pub intensity: f32,
+    /// World units it reaches
+    pub radius: f32,
+    /// How high above the ground it is, as a share of the radius: low
+    /// lights bring out normal maps more
+    pub height: f32,
+    /// Shadow edge blur in pixels (0: hard)
+    pub softness: f32,
+    pub shadows: u8,
+    pub _pad: [u8; 3],
+}
+
+impl Default for Light {
+    fn default() -> Self {
+        Light {
+            offset: Vec2::default(),
+            color: Color::WHITE,
+            intensity: 1.0,
+            radius: 160.0,
+            height: 0.5,
+            softness: 4.0,
+            shadows: 1,
+            _pad: [0; 3],
+        }
+    }
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -229,6 +266,7 @@ pub fn register(world: &mut World) {
         world.component("Body", size(std::mem::size_of::<Body>()), 4),
         world.component("Collider", size(std::mem::size_of::<Collider>()), 4),
         world.component("RigidBody", size(std::mem::size_of::<RigidBody>()), 4),
+        world.component("Light", size(std::mem::size_of::<Light>()), 4),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -242,7 +280,8 @@ pub fn register(world: &mut World) {
             SPRITE_RENDERER,
             BODY,
             COLLIDER,
-            RIGIDBODY
+            RIGIDBODY,
+            LIGHT
         ],
         "built-ins come first"
     );
@@ -263,6 +302,7 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         BODY => Some(bytes(Body::default())),
         COLLIDER => Some(bytes(Collider::default())),
         RIGIDBODY => Some(bytes(RigidBody::default())),
+        LIGHT => Some(bytes(Light::default())),
         _ => None,
     }
 }
@@ -295,6 +335,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<Body>(), 24);
         assert_eq!(std::mem::size_of::<Collider>(), 40);
         assert_eq!(std::mem::size_of::<RigidBody>(), 32);
+        assert_eq!(std::mem::size_of::<Light>(), 32);
         let mut w = World::new();
         register(&mut w);
         assert_eq!(w.component_id("Body"), Some(BODY));

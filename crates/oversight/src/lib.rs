@@ -23,6 +23,7 @@ pub mod gamepad;
 pub mod gpu;
 pub mod hotreload;
 pub mod input;
+pub mod light;
 pub mod particles;
 pub mod pathfind;
 #[cfg(feature = "physics")]

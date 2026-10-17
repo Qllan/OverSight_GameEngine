@@ -231,6 +231,20 @@ try { engine.SetEffects(new Effect { Kind = (EffectKind)42 }); Check(false, "a b
 catch (OverSightException) { }
 engine.Shake(4, 0.2f);
 
+// Lighting: one light in the dark
+engine.SetEffects(Effect.Lighting());
+var lamp = engine.Spawn();
+engine.Set(lamp, new Transform(new Vec2(32, 32)));
+engine.Set(lamp, new Light(40));
+engine.ShadowLayers = 1;
+engine.LookAt(new Vec2(32, 32));
+engine.BeginFrame(Color.White);
+engine.EndFrame();
+Check(engine.Pixel(32, 32).R > 200 && engine.Pixel(0, 0).R == 0, "Lighting");
+Check(Marshal.SizeOf<Light>() == 32, "Light layout");
+engine.SetEffects();
+engine.Despawn(lamp);
+
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }

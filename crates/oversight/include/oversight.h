@@ -354,6 +354,7 @@ void ov_world_clear(OvEngine *e); /* despawn everything; component types stay */
 #define OV_BODY 4
 #define OV_COLLIDER 5
 #define OV_RIGIDBODY 6
+#define OV_LIGHT 7
 
 typedef struct OvTransform {
     OvVec2 pos;
@@ -419,6 +420,20 @@ typedef struct OvRigidBody {
     uint8_t bullet;         /* fast: does not pass through thin walls */
     uint8_t pad_[2];
 } OvRigidBody;
+
+/* A light at the entity's position, seen by targets (or the screen) with
+ * the lighting effect. Colliders on the shadow layers and solid cells of
+ * shadow maps cast shadows behind them. */
+typedef struct OvLight {
+    OvVec2 offset;    /* from the position */
+    OvColor color;    /* default white */
+    float intensity;  /* default 1 */
+    float radius;     /* world units it reaches, default 160 */
+    float height;     /* above the ground, share of the radius (0.5): low lights bring out normal maps */
+    float softness;   /* shadow edge blur in pixels, default 4 (0: hard) */
+    uint8_t shadows;  /* default 1 */
+    uint8_t pad_[3];
+} OvLight;
 
 /* How two shapes overlap: move the second by normal * depth and they only touch */
 typedef struct OvOverlap {
@@ -543,6 +558,7 @@ OvVec2 ov_measure_text(OvEngine *e, uint32_t font, const char *text, float size)
 #define OV_EFFECT_GRADE 3  /* p: brightness (+-), contrast (1), saturation (1), gamma (1), tint r, g, b (1) */
 #define OV_EFFECT_CRT 4    /* p: scanlines 0..1, curvature 0..0.5, vignette 0..1, aberration px */
 #define OV_EFFECT_SHADER 5 /* shader from ov_create_shader; p goes to post.p */
+#define OV_EFFECT_LIGHTING 6 /* p: ambient r, g, b (0..1, more is brighter); lights are OvLight entities */
 typedef struct OvEffect {
     uint32_t kind;
     uint32_t shader;
@@ -557,6 +573,12 @@ bool ov_set_effects(OvEngine *e, uint32_t target, const OvEffect *effects, uint3
 uint32_t ov_create_shader(OvEngine *e, const char *wgsl); /* 0 and ov_last_error on a compile error */
 void ov_free_shader(OvEngine *e, uint32_t shader);
 void ov_shake(OvEngine *e, float strength, float duration); /* the world on screen, pixels; fades out */
+/* Lighting: a normal map (same size, red right, green up) gives a texture
+ * relief; colliders on these layers and solid cells of these maps cast
+ * shadows. */
+void ov_set_normal_map(OvEngine *e, uint32_t texture, uint32_t normal_map); /* 0: flat */
+void ov_set_shadow_layers(OvEngine *e, uint32_t layers);
+void ov_set_shadow_tilemap(OvEngine *e, uint32_t map, bool on);
 
 /* --- camera and draw state --- */
 OvCamera ov_get_camera(OvEngine *e);

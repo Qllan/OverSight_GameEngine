@@ -18,8 +18,12 @@ use std::sync::Arc;
 use tiny_skia::{Pixmap, Point, Transform};
 use wgpu::util::DeviceExt;
 
+use crate::light::LightPx;
 use crate::post::{self, Effect};
-use crate::render::{sprite_src, sprite_transform, visible, DrawCmd, DrawKind, Renderer, Shape};
+use crate::render::{
+    normal_map_of, normal_matrix, sprite_src, sprite_transform, visible, DrawCmd, DrawKind,
+    Renderer, Shape,
+};
 use crate::text::Font;
 use crate::texture::{Store, Texture};
 use crate::types::{Color, Rect, Vec2};
@@ -81,6 +85,21 @@ struct GpuPass {
     clear: Option<Color>,
     batches: std::ops::Range<usize>,
     effects: Vec<Effect>,
+    /// Sprites' normals for the lighting effect (empty: all flat)
+    normal_batches: std::ops::Range<usize>,
+    /// The lights it sees, each with its shadow triangles' vertices
+    lights: Vec<(LightPx, std::ops::Range<u32>)>,
+    /// Byte offset of its uniform block (picture size)
+    block: u64,
+}
+
+/// Pictures the lighting effect works in, per picture size
+struct LightTextures {
+    /// Shadow mask and the blur's other half
+    masks: [(wgpu::Texture, wgpu::TextureView); 2],
+    /// Light gathered per pixel (beyond 1 where lights add up)
+    lightmap: (wgpu::Texture, wgpu::TextureView),
+    normals: (wgpu::Texture, wgpu::TextureView),
 }
 
 /// Built-in effect passes, in the order of `FX_ENTRIES`
@@ -92,16 +111,24 @@ enum Fx {
     BlurB,
     Grade,
     Crt,
+    MaskBlurA,
+    MaskBlurB,
+    Lit,
 }
 
-const FX_ENTRIES: [&str; 6] = [
+const FX_ENTRIES: [&str; 9] = [
     "fx_glow_a",
     "fx_glow_b",
     "fx_blur_a",
     "fx_blur_b",
     "fx_grade",
     "fx_crt",
+    "fx_mask_blur_a",
+    "fx_mask_blur_b",
+    "fx_lit",
 ];
+/// Lightmap format: lights add up past 1
+const LIGHT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Which texture an effect pass reads or writes: the target itself or
 /// one of its two scratch textures
@@ -188,6 +215,11 @@ pub struct Gpu {
     shaders: HashMap<u32, wgpu::RenderPipeline>,
     /// Two scratch textures per picture size, for effect passes
     scratch: HashMap<(u32, u32), [(wgpu::Texture, wgpu::TextureView); 2]>,
+    light_textures: HashMap<(u32, u32), LightTextures>,
+    /// Sprites' normals turned to the screen
+    normal_pipeline: wgpu::RenderPipeline,
+    /// One light added into the lightmap
+    light_pipeline: wgpu::RenderPipeline,
     /// 1 sample (crisp) and MSAA (antialiased) versions
     pipelines: [wgpu::RenderPipeline; 2],
     nearest: wgpu::Sampler,
@@ -231,6 +263,29 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
     return textureSample(tex, samp, i.uv) * i.color;
 }
 
+// Normals for lighting: the colour is the 2x2 matrix turning the sprite's
+// directions to the screen (all zero: flat, only the texel's alpha
+// counts). Same maths as post::normal_texel.
+@fragment
+fn fs_normal(i: VOut) -> @location(0) vec4<f32> {
+    let t = textureSample(tex, samp, i.uv);
+    if t.a <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    let m = i.color;
+    var n = vec3<f32>(0.0, 0.0, 1.0);
+    if any(m != vec4<f32>(0.0)) {
+        let d = t.rgb / t.a * 2.0 - 1.0;
+        let l = vec2<f32>(d.x, -d.y);
+        let v = vec3<f32>(m.x * l.x + m.y * l.y, m.z * l.x + m.w * l.y, d.z);
+        let len = length(v);
+        if len > 1e-6 {
+            n = v / len;
+        }
+    }
+    return vec4<f32>((n * 0.5 + 0.5) * t.a, t.a);
+}
+
 // Scaling the canvas into the window, and effect passes: one triangle
 // covering the viewport
 struct BOut {
@@ -257,7 +312,7 @@ fn blit_fs(i: BOut) -> @location(0) vec4<f32> {
 
 /// What every effect shader (built-in or custom) starts with
 const FX_PRELUDE: &str = r#"
-struct Post { size: vec2<f32>, time: f32, pass_: f32, p: array<vec4<f32>, 2> };
+struct Post { size: vec2<f32>, time: f32, pass_: f32, p: array<vec4<f32>, 3> };
 @group(0) @binding(0) var<uniform> post: Post;
 @group(1) @binding(0) var source: texture_2d<f32>;
 @group(1) @binding(2) var samp: sampler;
@@ -369,6 +424,72 @@ fn sample_at(s: vec2<f32>) -> vec4<f32> {
     let top = mix(load(p), load(p + vec2<i32>(1, 0)), f.x);
     let bottom = mix(load(p + vec2<i32>(0, 1)), load(p + vec2<i32>(1, 1)), f.x);
     return mix(top, bottom, f.y);
+}
+
+// Lighting. Mask blur: p[0].x radius, p[2] the light's bounds (reads stay
+// inside them, like the software mask of just that area)
+fn load_in(p: vec2<i32>) -> vec4<f32> {
+    let b = vec4<i32>(post.p[2]);
+    return textureLoad(source, clamp(p, b.xy, b.zw - 1), 0);
+}
+
+fn mask_blur(p: vec2<i32>, dir: vec2<i32>) -> vec4<f32> {
+    let r = radius(post.p[0].x);
+    let sigma = f32(r) / 2.0;
+    var sum = vec4<f32>(0.0);
+    var total = 0.0;
+    for (var k = -r; k <= r; k++) {
+        let w = exp(-f32(k * k) / (2.0 * sigma * sigma));
+        sum += load_in(p + dir * k) * w;
+        total += w;
+    }
+    return sum / total;
+}
+
+@fragment
+fn fx_mask_blur_a(i: FxOut) -> @location(0) vec4<f32> {
+    return mask_blur(pixel(i.pos), vec2<i32>(1, 0));
+}
+
+@fragment
+fn fx_mask_blur_b(i: FxOut) -> @location(0) vec4<f32> {
+    return mask_blur(pixel(i.pos), vec2<i32>(0, 1));
+}
+
+// One light: p[0] position, radius, height; p[1] colour; source the
+// shadow mask, second the normals. Added into the lightmap.
+@fragment
+fn fx_light(i: FxOut) -> @location(0) vec4<f32> {
+    let p = pixel(i.pos);
+    let k = post.p[0];
+    let d2 = (k.xy - (vec2<f32>(p) + 0.5)) / k.z;
+    let d = length(d2);
+    if d >= 1.0 {
+        return vec4<f32>(0.0);
+    }
+    let nb = load2(p);
+    var n = vec3<f32>(0.0, 0.0, 1.0);
+    if nb.a > 0.0 {
+        let v = nb.rgb / nb.a * 2.0 - 1.0;
+        let len = length(v);
+        if len > 1e-6 {
+            n = v / len;
+        }
+    }
+    let l = normalize(vec3<f32>(d2, max(k.w, 0.01)));
+    let facing = clamp(dot(n, l) / l.z, 0.0, 2.0);
+    let v = (1.0 - d) * (1.0 - d) * facing * load(p).r;
+    return vec4<f32>(post.p[1].rgb * v, 0.0);
+}
+
+// The picture (source) times the light gathered (second), at most twice
+// as bright
+@fragment
+fn fx_lit(i: FxOut) -> @location(0) vec4<f32> {
+    let p = pixel(i.pos);
+    let c = load(p);
+    let l = min(load2(p).rgb, vec3<f32>(2.0));
+    return vec4<f32>(min(c.rgb * l, vec3<f32>(c.a)), c.a);
 }
 
 @fragment
@@ -604,6 +725,70 @@ impl Gpu {
             .iter()
             .map(|entry| fx_pipeline(&device, &fx_layout, &fx_module, entry))
             .collect();
+        let normal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("normals"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Vertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2, 1 => Float32x2, 2 => Float32x4
+                    ],
+                })],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_normal"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: FORMAT,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::One,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let light_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("light"),
+            layout: Some(&fx_layout),
+            vertex: wgpu::VertexState {
+                module: &fx_module,
+                entry_point: Some("fx_vs"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fx_module,
+                entry_point: Some("fx_light"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: LIGHT_FORMAT,
+                    blend: Some(wgpu::BlendState {
+                        color: add,
+                        alpha: add,
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let sampler = |filter: wgpu::FilterMode| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -669,6 +854,9 @@ impl Gpu {
             fx,
             shaders: HashMap::new(),
             scratch: HashMap::new(),
+            light_textures: HashMap::new(),
+            normal_pipeline,
+            light_pipeline,
             pipelines,
             nearest,
             linear,
@@ -800,16 +988,101 @@ impl Gpu {
                     }
                 }
             }
+            let batches = first..self.batches.len();
+            let effects = renderer.effects_of(pass.target).to_vec();
+            let (mut normal_batches, mut lights) = (0..0, Vec::new());
+            if effects.iter().any(|e| e.kind == post::EFFECT_LIGHTING) {
+                let cmds = &commands[pass.commands.clone()];
+                let world = renderer.space_transform(crate::types::Space::World, pass.target);
+                normal_batches = self.normal_batches(cmds, pass.target, pass.size, world, textures);
+                if let Some(scene) = renderer.light_scenes.get(&pass.target) {
+                    for light in &scene.lights {
+                        let start = self.vertices.len() as u32;
+                        for q in light.shadow_quads(&scene.edges) {
+                            let v = |p: Vec2| Vertex {
+                                pos: [p.x, p.y],
+                                uv: [0.5, 0.5],
+                                color: [0.0, 0.0, 0.0, 1.0],
+                            };
+                            let tri = [q[0], q[1], q[2], q[0], q[2], q[3]].map(v);
+                            self.vertices.extend_from_slice(&tri);
+                        }
+                        lights.push((*light, start..self.vertices.len() as u32));
+                    }
+                    // Raw vertices: the next batch must not grow over them
+                    self.split = true;
+                }
+            }
             self.passes.push(GpuPass {
                 target: pass.target,
                 size: pass.size,
                 clear: pass.clear,
-                batches: first..self.batches.len(),
-                effects: renderer.effects_of(pass.target).to_vec(),
+                batches,
+                effects,
+                normal_batches,
+                lights,
+                block: 0,
             });
         }
         self.draw(renderer.antialias, time);
         sprites
+    }
+
+    /// Batches drawing a pass's sprites' normals (see `fs_normal`); none
+    /// when no sprite has a normal map
+    fn normal_batches(
+        &mut self,
+        commands: &[DrawCmd],
+        target: u32,
+        size: (u32, u32),
+        world: Transform,
+        textures: &Store<Texture>,
+    ) -> std::ops::Range<usize> {
+        let has_maps = commands.iter().any(|c| match &c.kind {
+            DrawKind::Sprite { texture, .. } => textures
+                .get(*texture)
+                .is_some_and(|t| normal_map_of(textures, t).is_some()),
+            _ => false,
+        });
+        let first = self.batches.len();
+        if !has_maps {
+            return first..first;
+        }
+        self.split = true;
+        for cmd in commands {
+            let DrawKind::Sprite { texture, sprite } = &cmd.kind else {
+                continue;
+            };
+            let Some(tex) = textures.get(*texture).filter(|_| *texture != target) else {
+                continue;
+            };
+            let base = match cmd.space {
+                crate::types::Space::World => world,
+                crate::types::Space::Screen => Transform::identity(),
+            };
+            let (tw, th) = (tex.width(), tex.height());
+            let src = sprite_src(sprite, tw, th);
+            let transform = base.pre_concat(sprite_transform(sprite, src));
+            if !visible(size, Rect::new(0.0, 0.0, src.w, src.h), transform) {
+                continue;
+            }
+            let (source, m) = match normal_map_of(textures, tex) {
+                Some(n) => (n, normal_matrix(transform)),
+                None => (*texture, [0.0; 4]),
+            };
+            if !self.textures.contains_key(&source) {
+                continue;
+            }
+            let uv = Rect::new(
+                src.x / tw as f32,
+                src.y / th as f32,
+                src.w / tw as f32,
+                src.h / th as f32,
+            );
+            let local = Rect::new(0.0, 0.0, src.w, src.h);
+            self.quad_raw(Source::Texture(source), local, uv, transform, m);
+        }
+        first..self.batches.len()
     }
 
     /// Compile a custom effect shader (see `Engine::create_shader`)
@@ -924,7 +1197,19 @@ impl Gpu {
 
     /// Two triangles: `local` rectangle mapped by `transform`, sampling `uv`
     fn quad(&mut self, source: Source, local: Rect, uv: Rect, transform: Transform, tint: Color) {
-        let color = premultiplied(tint);
+        self.quad_raw(source, local, uv, transform, premultiplied(tint));
+    }
+
+    /// A quad with its vertex colour as given (the normal pass puts a
+    /// matrix there)
+    fn quad_raw(
+        &mut self,
+        source: Source,
+        local: Rect,
+        uv: Rect,
+        transform: Transform,
+        color: [f32; 4],
+    ) {
         let corner = |x: f32, y: f32, u: f32, v: f32| Vertex {
             pos: map(transform, x, y),
             uv: [u, v],
@@ -1096,7 +1381,13 @@ impl Gpu {
                 post::EFFECT_GLOW | post::EFFECT_BLUR => 2,
                 _ => 1,
             })
-            .sum();
+            .sum::<usize>()
+            + self
+                .passes
+                .iter()
+                .filter(|p| p.effects.iter().any(|e| e.kind == post::EFFECT_LIGHTING))
+                .map(|p| p.lights.len() * 3 * p.effects.len())
+                .sum::<usize>();
         let slots = (self.passes.len() + runs) as u64;
         if slots * SLOT > self.uniforms.size() {
             (self.uniforms, self.uniform_group) =
@@ -1119,6 +1410,28 @@ impl Gpu {
                 let pair = [make(), make()];
                 self.scratch.insert(pass.size, pair);
             }
+            let lit = pass.effects.iter().any(|e| e.kind == post::EFFECT_LIGHTING);
+            if lit && !self.light_textures.contains_key(&pass.size) {
+                let make = |format: wgpu::TextureFormat| {
+                    let t = self.device.create_texture(&wgpu::TextureDescriptor {
+                        format,
+                        ..texture_desc(
+                            pass.size.0,
+                            pass.size.1,
+                            wgpu::TextureUsages::RENDER_ATTACHMENT
+                                | wgpu::TextureUsages::TEXTURE_BINDING,
+                        )
+                    });
+                    let v = t.create_view(&Default::default());
+                    (t, v)
+                };
+                let textures = LightTextures {
+                    masks: [make(FORMAT), make(FORMAT)],
+                    lightmap: make(LIGHT_FORMAT),
+                    normals: make(FORMAT),
+                };
+                self.light_textures.insert(pass.size, textures);
+            }
             let (target, wants_msaa) = (pass.target, antialias && pass.clear.is_some());
             if let Some(t) = self.textures.get_mut(&target) {
                 if wants_msaa && t.msaa.is_none() {
@@ -1134,7 +1447,10 @@ impl Gpu {
             self.queue.write_buffer(&self.vertex_buffer, 0, bytes);
         }
         let mut blocks = vec![0u8; (slots * SLOT) as usize];
-        let mut slot = 0u64;
+        for (i, pass) in self.passes.iter_mut().enumerate() {
+            pass.block = i as u64 * SLOT;
+        }
+        let mut slot = self.passes.len() as u64;
         let mut encoder = self.device.create_command_encoder(&Default::default());
         for pass in &self.passes {
             let (view, msaa) = if pass.target == 0 {
@@ -1164,9 +1480,8 @@ impl Gpu {
                 }
                 None => wgpu::LoadOp::Load,
             };
-            let offset = slot * SLOT;
-            write_block(&mut blocks, offset, pass.size, time, &[0.0; 8]);
-            slot += 1;
+            let offset = pass.block;
+            write_block(&mut blocks, offset, pass.size, time, &[]);
             {
                 let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("frame"),
@@ -1202,30 +1517,79 @@ impl Gpu {
             } else {
                 &self.textures[&pass.target].texture
             };
-            self.effects(
-                &mut encoder,
-                pass,
-                (texture, view),
-                &mut blocks,
-                &mut slot,
+            let mut fx = FxRun {
+                encoder: &mut encoder,
+                blocks: &mut blocks,
+                slot: &mut slot,
+                size: pass.size,
                 time,
-            );
+            };
+            self.effects(&mut fx, pass, (texture, view));
         }
         self.queue.write_buffer(&self.uniforms, 0, &blocks);
         self.queue.submit([encoder.finish()]);
     }
 
+    /// One full-screen effect pass from `from` (and `second`) into `to`
+    #[allow(clippy::too_many_arguments)]
+    fn fx_pass(
+        &self,
+        fx: &mut FxRun,
+        pipeline: &wgpu::RenderPipeline,
+        from: &wgpu::TextureView,
+        second: &wgpu::TextureView,
+        to: &wgpu::TextureView,
+        load: wgpu::LoadOp<wgpu::Color>,
+        scissor: Option<[i32; 4]>,
+        p: &[f32],
+    ) {
+        let offset = *fx.slot * SLOT;
+        write_block(fx.blocks, offset, fx.size, fx.time, p);
+        *fx.slot += 1;
+        let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.post_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(from),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(second),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.linear),
+                },
+            ],
+        });
+        let mut rp = fx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("effect"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: to,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        if let Some(b) = scissor {
+            let (w, h) = ((b[2] - b[0]) as u32, (b[3] - b[1]) as u32);
+            rp.set_scissor_rect(b[0] as u32, b[1] as u32, w, h);
+        }
+        rp.set_pipeline(pipeline);
+        rp.set_bind_group(0, &self.uniform_group, &[offset as u32]);
+        rp.set_bind_group(1, &group, &[]);
+        rp.draw(0..3, 0..1);
+    }
+
     /// Run a pass's effect chain over its picture, ping-ponging between
     /// the picture and two scratch textures, and leave the result in it
-    fn effects(
-        &self,
-        encoder: &mut wgpu::CommandEncoder,
-        pass: &GpuPass,
-        main: (&wgpu::Texture, &wgpu::TextureView),
-        blocks: &mut [u8],
-        slot: &mut u64,
-        time: f32,
-    ) {
+    fn effects(&self, fx: &mut FxRun, pass: &GpuPass, main: (&wgpu::Texture, &wgpu::TextureView)) {
         let Some(scratch) = self.scratch.get(&pass.size) else {
             return;
         };
@@ -1234,74 +1598,42 @@ impl Gpu {
             Slot::A => &scratch[0].1,
             Slot::B => &scratch[1].1,
         };
-        let mut run =
-            |pipeline: &wgpu::RenderPipeline, from: Slot, second: Slot, to: Slot, p: &[f32; 8]| {
-                let offset = *slot * SLOT;
-                write_block(blocks, offset, pass.size, time, p);
-                *slot += 1;
-                let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: None,
-                    layout: &self.post_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(view(from)),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(view(second)),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: wgpu::BindingResource::Sampler(&self.linear),
-                        },
-                    ],
-                });
-                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("effect"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: view(to),
-                        depth_slice: None,
-                        resolve_target: None,
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    ..Default::default()
-                });
-                rp.set_pipeline(pipeline);
-                rp.set_bind_group(0, &self.uniform_group, &[offset as u32]);
-                rp.set_bind_group(1, &group, &[]);
-                rp.draw(0..3, 0..1);
-            };
-        let fx = |f: Fx| &self.fx[f as usize];
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        let builtin = |f: Fx| &self.fx[f as usize];
         let mut cur = Slot::Main;
         for e in &pass.effects {
             match e.kind {
                 post::EFFECT_GLOW => {
                     let a = Slot::other(cur, cur);
                     let b = Slot::other(cur, a);
-                    run(fx(Fx::GlowA), cur, cur, a, &e.p);
-                    run(fx(Fx::GlowB), a, cur, b, &e.p);
+                    let (vc, va, vb) = (view(cur), view(a), view(b));
+                    self.fx_pass(fx, builtin(Fx::GlowA), vc, vc, va, clear, None, &e.p);
+                    self.fx_pass(fx, builtin(Fx::GlowB), va, vc, vb, clear, None, &e.p);
                     cur = b;
                 }
                 post::EFFECT_BLUR => {
                     let a = Slot::other(cur, cur);
-                    run(fx(Fx::BlurA), cur, cur, a, &e.p);
-                    run(fx(Fx::BlurB), a, a, cur, &e.p);
+                    let (vc, va) = (view(cur), view(a));
+                    self.fx_pass(fx, builtin(Fx::BlurA), vc, vc, va, clear, None, &e.p);
+                    self.fx_pass(fx, builtin(Fx::BlurB), va, va, vc, clear, None, &e.p);
+                }
+                post::EFFECT_LIGHTING => {
+                    let to = Slot::other(cur, cur);
+                    self.lighting(fx, pass, &e.p, view(cur), view(to));
+                    cur = to;
                 }
                 post::EFFECT_GRADE | post::EFFECT_CRT | post::EFFECT_SHADER => {
                     let pipeline = match e.kind {
-                        post::EFFECT_GRADE => fx(Fx::Grade),
-                        post::EFFECT_CRT => fx(Fx::Crt),
+                        post::EFFECT_GRADE => builtin(Fx::Grade),
+                        post::EFFECT_CRT => builtin(Fx::Crt),
                         _ => match self.shaders.get(&e.shader) {
                             Some(p) => p,
                             None => continue,
                         },
                     };
                     let to = Slot::other(cur, cur);
-                    run(pipeline, cur, cur, to, &e.p);
+                    let vc = view(cur);
+                    self.fx_pass(fx, pipeline, vc, vc, view(to), clear, None, &e.p);
                     cur = to;
                 }
                 _ => {}
@@ -1312,7 +1644,7 @@ impl Gpu {
                 Slot::A => &scratch[0].0,
                 _ => &scratch[1].0,
             };
-            encoder.copy_texture_to_texture(
+            fx.encoder.copy_texture_to_texture(
                 from.as_image_copy(),
                 main.0.as_image_copy(),
                 wgpu::Extent3d {
@@ -1322,6 +1654,159 @@ impl Gpu {
                 },
             );
         }
+    }
+
+    /// A render pass into `view` that clears it and draws nothing
+    fn clear_pass(fx: &mut FxRun, view: &wgpu::TextureView, color: wgpu::Color) {
+        fx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("clear"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(color),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+
+    /// Triangles from the vertex buffer into `view`, after clearing it
+    #[allow(clippy::too_many_arguments)]
+    fn triangles_pass(
+        &self,
+        fx: &mut FxRun,
+        view: &wgpu::TextureView,
+        clear: wgpu::Color,
+        pipeline: &wgpu::RenderPipeline,
+        block: u64,
+        scissor: Option<[i32; 4]>,
+        draws: &[(&wgpu::BindGroup, std::ops::Range<u32>)],
+    ) {
+        let mut rp = fx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("triangles"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(clear),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        if draws.is_empty() {
+            return;
+        }
+        if let Some(b) = scissor {
+            let (w, h) = ((b[2] - b[0]) as u32, (b[3] - b[1]) as u32);
+            rp.set_scissor_rect(b[0] as u32, b[1] as u32, w, h);
+        }
+        rp.set_pipeline(pipeline);
+        rp.set_bind_group(0, &self.uniform_group, &[block as u32]);
+        rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        for (group, range) in draws {
+            rp.set_bind_group(1, *group, &[]);
+            rp.draw(range.clone(), 0..1);
+        }
+    }
+
+    /// The lighting effect, the same steps as `post::lighting`: normals,
+    /// then per light its shadow mask (blurred) and its light added into
+    /// the lightmap, then the picture times the lightmap
+    fn lighting(
+        &self,
+        fx: &mut FxRun,
+        pass: &GpuPass,
+        p: &[f32; 8],
+        from: &wgpu::TextureView,
+        to: &wgpu::TextureView,
+    ) {
+        let Some(lt) = self.light_textures.get(&pass.size) else {
+            return;
+        };
+        let flat = wgpu::Color {
+            r: 0.5,
+            g: 0.5,
+            b: 1.0,
+            a: 1.0,
+        };
+        let normals: Vec<_> = self.batches[pass.normal_batches.clone()]
+            .iter()
+            .filter_map(|b| match b.source {
+                Source::Texture(id) => self
+                    .textures
+                    .get(&id)
+                    .map(|t| (&t.bind_group, b.start..b.start + b.count)),
+                _ => None,
+            })
+            .collect();
+        let np = &self.normal_pipeline;
+        self.triangles_pass(fx, &lt.normals.1, flat, np, pass.block, None, &normals);
+        let ambient = wgpu::Color {
+            r: p[0] as f64,
+            g: p[1] as f64,
+            b: p[2] as f64,
+            a: 1.0,
+        };
+        Gpu::clear_pass(fx, &lt.lightmap.1, ambient);
+        let (mask, other) = (&lt.masks[0].1, &lt.masks[1].1);
+        let load = wgpu::LoadOp::Load;
+        for (light, shadows) in &pass.lights {
+            let Some(b) = light.bounds(pass.size) else {
+                continue;
+            };
+            let bounds = b.map(|v| v as f32);
+            let draws = if shadows.is_empty() {
+                Vec::new()
+            } else {
+                vec![(&self.white, shadows.clone())]
+            };
+            let white = wgpu::Color::WHITE;
+            let crisp = &self.pipelines[0];
+            self.triangles_pass(fx, mask, white, crisp, pass.block, Some(b), &draws);
+            let blur = light.blur();
+            if blur > 0 {
+                let mut mp = [0.0; 12];
+                mp[0] = blur as f32;
+                mp[8..].copy_from_slice(&bounds);
+                let (ba, bb) = (
+                    &self.fx[Fx::MaskBlurA as usize],
+                    &self.fx[Fx::MaskBlurB as usize],
+                );
+                self.fx_pass(fx, ba, mask, mask, other, load, Some(b), &mp);
+                self.fx_pass(fx, bb, other, other, mask, load, Some(b), &mp);
+            }
+            let c = light.color;
+            let mut lp = [0.0; 12];
+            lp[..7].copy_from_slice(&[
+                light.pos.x,
+                light.pos.y,
+                light.radius,
+                light.height,
+                c[0],
+                c[1],
+                c[2],
+            ]);
+            lp[8..].copy_from_slice(&bounds);
+            let lm = &lt.lightmap.1;
+            self.fx_pass(
+                fx,
+                &self.light_pipeline,
+                mask,
+                &lt.normals.1,
+                lm,
+                load,
+                Some(b),
+                &lp,
+            );
+        }
+        let clear = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
+        let lit = &self.fx[Fx::Lit as usize];
+        self.fx_pass(fx, lit, from, &lt.lightmap.1, to, clear, None, &[]);
     }
 
     /// Show the last frame in the window, scaled like the software
@@ -1548,14 +2033,24 @@ fn uniform_buffer(
     (buffer, group)
 }
 
-/// One uniform block: size, time, then the effect's numbers
-fn write_block(blocks: &mut [u8], offset: u64, size: (u32, u32), time: f32, p: &[f32; 8]) {
-    let mut values = [0f32; 12];
+/// What effect passes record into
+struct FxRun<'a> {
+    encoder: &'a mut wgpu::CommandEncoder,
+    blocks: &'a mut [u8],
+    slot: &'a mut u64,
+    size: (u32, u32),
+    time: f32,
+}
+
+/// One uniform block: size, time, then up to 12 numbers
+fn write_block(blocks: &mut [u8], offset: u64, size: (u32, u32), time: f32, p: &[f32]) {
+    let mut values = [0f32; 16];
     values[0] = size.0 as f32;
     values[1] = size.1 as f32;
     values[2] = time;
-    values[4..].copy_from_slice(p);
-    let at = &mut blocks[offset as usize..][..48];
+    let n = p.len().min(12);
+    values[4..4 + n].copy_from_slice(&p[..n]);
+    let at = &mut blocks[offset as usize..][..BLOCK as usize];
     for (dst, v) in at.chunks_exact_mut(4).zip(values) {
         dst.copy_from_slice(&v.to_le_bytes());
     }
@@ -1867,5 +2362,87 @@ mod tests {
             Some(Color::rgba(255, 0, 0, 255)),
             "skipped once freed"
         );
+    }
+
+    /// Two lights, a wall, a lit target and a normal-mapped sprite
+    fn lit_scene(e: &mut Engine) {
+        use crate::components::{write, Collider, Light, Transform, COLLIDER, LIGHT, TRANSFORM};
+        e.set_antialias(false);
+        e.set_camera(crate::camera::Camera {
+            center: Vec2::new(64.0, 48.0),
+            ..Default::default()
+        });
+        e.set_effects(0, &[Effect::lighting(Color::rgba(60, 60, 90, 255), 1.0)])
+            .unwrap();
+        e.set_shadow_layers(1);
+        let at = |x, y| Transform {
+            pos: Vec2::new(x, y),
+            ..Transform::default()
+        };
+        for (x, y, color, soft) in [
+            (30.0, 40.0, Color::rgba(255, 220, 160, 255), 3.0),
+            (100.0, 70.0, Color::rgba(120, 160, 255, 255), 0.0),
+        ] {
+            let lamp = e.world.spawn();
+            write(&mut e.world, lamp, TRANSFORM, &at(x, y));
+            let l = Light {
+                color,
+                radius: 70.0,
+                softness: soft,
+                ..Light::default()
+            };
+            write(&mut e.world, lamp, LIGHT, &l);
+        }
+        let wall = e.world.spawn();
+        write(&mut e.world, wall, TRANSFORM, &at(60.0, 45.0));
+        let c = Collider {
+            size: Vec2::new(6.0, 30.0),
+            ..Collider::default()
+        };
+        write(&mut e.world, wall, COLLIDER, &c);
+        // A sphere-ish normal map: x and y lean out from the middle
+        let mut normal = Vec::new();
+        for y in 0..16 {
+            for x in 0..16 {
+                let (nx, ny) = ((x as f32 - 7.5) / 8.0, -(y as f32 - 7.5) / 8.0);
+                let nz = (1.0 - (nx * nx + ny * ny).min(1.0)).sqrt();
+                let enc = |v: f32| ((v * 0.5 + 0.5) * 255.0).round() as u8;
+                normal.extend_from_slice(&[enc(nx), enc(ny), enc(nz), 255]);
+            }
+        }
+        let rock = e.texture_from_rgba(16, 16, &[200; 16 * 16 * 4]).unwrap();
+        let map = e.texture_from_rgba(16, 16, &normal).unwrap();
+        e.set_normal_map(rock, map);
+        e.begin_frame(Color::BLACK);
+        e.fill_rect(
+            Rect::new(0.0, 0.0, 128.0, 96.0),
+            Color::rgba(220, 220, 220, 255),
+        );
+        e.draw_sprite(
+            rock,
+            &Sprite {
+                pos: Vec2::new(40.0, 60.0),
+                rotation: 0.5,
+                scale: Vec2::new(2.0, 2.0),
+                ..Sprite::default()
+            },
+        );
+        e.end_frame();
+    }
+
+    #[test]
+    fn gpu_lighting_matches_software() {
+        let Some(mut gpu) = gpu_engine(128, 96) else {
+            return;
+        };
+        let mut soft = Engine::headless(128, 96).unwrap();
+        lit_scene(&mut soft);
+        lit_scene(&mut gpu);
+        let bad = differ(&mut soft, &mut gpu, 8);
+        if bad > 0.01 || std::env::var_os("OVERSIGHT_GPU_SHOTS").is_some() {
+            soft.save_screenshot("light_software.png").ok();
+            gpu.save_screenshot("light_gpu.png").ok();
+        }
+        assert!(bad <= 0.01, "{:.2}% pixels differ", bad * 100.0);
     }
 }

@@ -1015,6 +1015,21 @@ pub extern "C" fn ov_shake(e: *mut OvEngine, strength: f32, duration: f32) {
     engine!(e).shake(strength, duration);
 }
 
+#[no_mangle]
+pub extern "C" fn ov_set_normal_map(e: *mut OvEngine, texture: u32, normal_map: u32) {
+    engine!(e).set_normal_map(texture, normal_map);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_shadow_layers(e: *mut OvEngine, layers: u32) {
+    engine!(e).set_shadow_layers(layers);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_shadow_tilemap(e: *mut OvEngine, map: u32, on: bool) {
+    engine!(e).set_shadow_tilemap(map, on);
+}
+
 // --- camera and draw state ---------------------------------------------------
 
 #[no_mangle]
@@ -3014,6 +3029,25 @@ mod tests {
             assert!(id != 0);
             ov_free_shader(e, id);
             ov_shake(e, 4.0, 0.2);
+
+            // Lighting: a default light (white, radius 160) at the centre
+            let lit = crate::post::Effect::lighting(Color::BLACK, 1.0);
+            assert!(ov_set_effects(e, 0, &lit, 1));
+            let lamp = ov_spawn(e);
+            assert!(ov_set(
+                e,
+                lamp,
+                crate::components::TRANSFORM,
+                std::ptr::null()
+            ));
+            assert!(ov_set(e, lamp, crate::components::LIGHT, std::ptr::null()));
+            ov_set_shadow_layers(e, 1);
+            ov_set_shadow_tilemap(e, 1, true);
+            ov_set_normal_map(e, t, 0);
+            ov_set_space(e, 1);
+            ov_begin_frame(e, Color::WHITE);
+            ov_end_frame(e);
+            assert!(ov_pixel(e, 8, 8).r > 200, "lit near the light");
             ov_engine_destroy(e);
         }
     }

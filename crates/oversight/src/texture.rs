@@ -19,6 +19,8 @@ pub struct Texture {
     pub generation: u64,
     /// A render target: draw calls can go into it
     pub target: bool,
+    /// Its normal map (a texture of the same size), for lighting; 0: flat
+    pub normal: u32,
 }
 
 impl Texture {
@@ -29,6 +31,7 @@ impl Texture {
             tinted: HashMap::new(),
             generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             target: false,
+            normal: 0,
         }
     }
 

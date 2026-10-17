@@ -9,7 +9,39 @@ public sealed class Shader : Resource
     protected override void Free(IntPtr e, uint id) => Native.ov_free_shader(e, id);
 }
 
-public enum EffectKind : uint { Glow = 1, Blur = 2, Grade = 3, Crt = 4, Shader = 5 }
+public enum EffectKind : uint { Glow = 1, Blur = 2, Grade = 3, Crt = 4, Shader = 5, Lighting = 6 }
+
+/// <summary>A light at the entity's position, seen by targets (or the
+/// screen) with the lighting effect. Colliders on the shadow layers and
+/// solid cells of shadow maps cast shadows behind them.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Light
+{
+    /// <summary>From the position</summary>
+    public Vec2 Offset;
+    public Color Color;
+    public float Intensity;
+    /// <summary>World units it reaches</summary>
+    public float Radius;
+    /// <summary>Above the ground as a share of the radius: low lights bring out normal maps</summary>
+    public float Height;
+    /// <summary>Shadow edge blur in pixels (0: hard)</summary>
+    public float Softness;
+    private byte shadows, pad0, pad1, pad2;
+
+    public Light() : this(160f) { }
+    public Light(float radius, Color? color = null, float intensity = 1f)
+    {
+        Color = color ?? Color.White;
+        Intensity = intensity;
+        Radius = radius;
+        Height = 0.5f;
+        Softness = 4f;
+        shadows = 1;
+    }
+
+    public bool Shadows { readonly get => shadows != 0; set => shadows = (byte)(value ? 1 : 0); }
+}
 
 /// <summary>One post effect of a chain; build it with the static methods</summary>
 [StructLayout(LayoutKind.Sequential)]
@@ -39,6 +71,13 @@ public struct Effect
     public static Effect Crt(float scanlines = 0.3f, float curvature = 0.1f, float vignette = 0.5f,
                              float aberration = 1f) =>
         Make(EffectKind.Crt, scanlines, curvature, vignette, aberration);
+
+    /// <summary>Lights the picture with Light entities; ambient is the light everywhere</summary>
+    public static Effect Lighting(Color? ambient = null, float brightness = 1f)
+    {
+        var a = ambient ?? Color.Black;
+        return Make(EffectKind.Lighting, a.R / 255f * brightness, a.G / 255f * brightness, a.B / 255f * brightness);
+    }
 
     /// <summary>A custom shader; the numbers reach WGSL as post.p</summary>
     public static Effect Custom(Shader shader, params float[] p)
@@ -99,4 +138,13 @@ public sealed partial class Engine
 
     /// <summary>Shake the world on screen by up to strength pixels, fading out</summary>
     public void Shake(float strength, float duration) => Native.ov_shake(Handle, strength, duration);
+
+    /// <summary>Lighting: a normal map of the same size (red right, green up); null: flat</summary>
+    public void SetNormalMap(Texture texture, Texture? normalMap) =>
+        Native.ov_set_normal_map(Handle, texture.Id, normalMap?.Id ?? 0);
+
+    /// <summary>Colliders on these layers cast shadows</summary>
+    public uint ShadowLayers { set => Native.ov_set_shadow_layers(Handle, value); }
+
+    public void SetShadowTilemap(Tilemap map, bool on = true) => Native.ov_set_shadow_tilemap(Handle, map.Id, on);
 }

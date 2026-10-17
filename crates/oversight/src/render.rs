@@ -13,6 +13,7 @@ use std::ops::Range;
 use tiny_skia::{FillRule, Paint, PathBuilder, Pattern, Pixmap, SpreadMode, Stroke, Transform};
 
 use crate::camera::Camera;
+use crate::light::LightScene;
 use crate::post::{Effect, Shake};
 use crate::text::Font;
 use crate::texture::{Store, Texture};
@@ -127,6 +128,9 @@ pub struct Renderer {
     /// The screen's post effects
     pub effects: Vec<Effect>,
     pub shake: Shake,
+    /// Lights and shadow casters each lit target sees this frame (filled
+    /// by the engine before drawing)
+    pub light_scenes: BTreeMap<u32, LightScene>,
     /// Targets opened this frame, in order, with their clear colour
     opened: Vec<(u32, Option<Color>)>,
 }
@@ -147,6 +151,7 @@ impl Renderer {
             targets: BTreeMap::new(),
             effects: Vec::new(),
             shake: Shake::default(),
+            light_scenes: BTreeMap::new(),
             opened: Vec::new(),
         })
     }
@@ -363,7 +368,24 @@ impl Renderer {
                     }
                 }
             }
-            crate::post::apply(&mut canvas, self.effects_of(pass.target));
+            let effects = self.effects_of(pass.target);
+            let lit = effects
+                .iter()
+                .any(|e| e.kind == crate::post::EFFECT_LIGHTING);
+            let normals = lit
+                .then(|| {
+                    let cmds = &commands[pass.commands.clone()];
+                    normal_buffer(pass.size, cmds, pass.target, world, textures)
+                })
+                .flatten();
+            let light = self
+                .light_scenes
+                .get(&pass.target)
+                .map(|scene| crate::post::Lit {
+                    scene,
+                    normals: normals.as_ref(),
+                });
+            crate::post::apply(&mut canvas, effects, light);
             if pass.target == 0 {
                 self.canvas = canvas;
             } else if let Some(t) = textures.get_mut(pass.target) {
@@ -539,4 +561,81 @@ fn draw_text(
             canvas.fill_rect(rect, &paint, transform, None);
         }
     }
+}
+
+/// How a sprite's local directions turn on screen: the transform's 2x2
+/// part with the scale taken out (flips stay)
+pub(crate) fn normal_matrix(t: Transform) -> [f32; 4] {
+    let c0 = (t.sx * t.sx + t.ky * t.ky).sqrt().max(1e-6);
+    let c1 = (t.kx * t.kx + t.sy * t.sy).sqrt().max(1e-6);
+    [t.sx / c0, t.kx / c1, t.ky / c0, t.sy / c1]
+}
+
+/// The normal map a sprite's texture has, if it is usable
+pub(crate) fn normal_map_of(textures: &Store<Texture>, tex: &Texture) -> Option<u32> {
+    let n = textures.get(tex.normal)?;
+    ((n.width(), n.height()) == (tex.width(), tex.height())).then_some(tex.normal)
+}
+
+/// Screen-space normals of a pass's sprites, for the lighting effect;
+/// None when no sprite has a normal map (everything is flat)
+fn normal_buffer(
+    size: (u32, u32),
+    commands: &[DrawCmd],
+    target: u32,
+    world: Transform,
+    textures: &Store<Texture>,
+) -> Option<Pixmap> {
+    let has_maps = commands.iter().any(|c| match &c.kind {
+        DrawKind::Sprite { texture, .. } => textures
+            .get(*texture)
+            .is_some_and(|t| normal_map_of(textures, t).is_some()),
+        _ => false,
+    });
+    if !has_maps {
+        return None;
+    }
+    let mut canvas = Pixmap::new(size.0, size.1)?;
+    canvas.fill(tiny_skia::Color::from_rgba8(128, 128, 255, 255));
+    for cmd in commands {
+        let DrawKind::Sprite { texture, sprite } = &cmd.kind else {
+            continue;
+        };
+        let Some(tex) = textures.get(*texture).filter(|_| *texture != target) else {
+            continue;
+        };
+        let base = match cmd.space {
+            Space::World => world,
+            Space::Screen => Transform::identity(),
+        };
+        let src = sprite_src(sprite, tex.width(), tex.height());
+        let transform = base.pre_concat(sprite_transform(sprite, src));
+        if !visible(size, Rect::new(0.0, 0.0, src.w, src.h), transform) {
+            continue;
+        }
+        let (source, m) = match normal_map_of(textures, tex).and_then(|n| textures.get(n)) {
+            Some(n) => (&n.pixmap, normal_matrix(transform)),
+            None => (&tex.pixmap, [0.0; 4]),
+        };
+        let mut turned = source.clone();
+        for px in turned.data_mut().as_chunks_mut::<4>().0 {
+            *px = crate::post::normal_texel(*px, m);
+        }
+        let pattern = Pattern::new(
+            turned.as_ref(),
+            SpreadMode::Pad,
+            tex.quality(),
+            1.0,
+            Transform::from_translate(-src.x, -src.y),
+        );
+        let paint = Paint {
+            shader: pattern,
+            anti_alias: false,
+            ..Paint::default()
+        };
+        if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, src.w, src.h) {
+            canvas.fill_rect(rect, &paint, transform, None);
+        }
+    }
+    Some(canvas)
 }

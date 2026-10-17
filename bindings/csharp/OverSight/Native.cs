@@ -125,6 +125,9 @@ internal static class Native
     [DllImport(Lib)] internal static extern uint ov_create_shader(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string wgsl);
     [DllImport(Lib)] internal static extern void ov_free_shader(IntPtr e, uint shader);
     [DllImport(Lib)] internal static extern void ov_shake(IntPtr e, float strength, float duration);
+    [DllImport(Lib)] internal static extern void ov_set_normal_map(IntPtr e, uint texture, uint normal_map);
+    [DllImport(Lib)] internal static extern void ov_set_shadow_layers(IntPtr e, uint layers);
+    [DllImport(Lib)] internal static extern void ov_set_shadow_tilemap(IntPtr e, uint map, [MarshalAs(UnmanagedType.U1)] bool on);
     [DllImport(Lib)] internal static extern Camera ov_get_camera(IntPtr e);
     [DllImport(Lib)] internal static extern void ov_set_camera(IntPtr e, Camera camera);
     [DllImport(Lib)] internal static extern Vec2 ov_world_to_screen(IntPtr e, Vec2 p);

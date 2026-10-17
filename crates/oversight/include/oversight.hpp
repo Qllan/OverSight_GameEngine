@@ -141,6 +141,11 @@ struct RigidBody : OvRigidBody {
     static constexpr RigidBody fixed() { return RigidBody(OV_BODY_FIXED); }
     static constexpr RigidBody kinematic() { return RigidBody(OV_BODY_KINEMATIC); }
 };
+/// A light at the entity's position (see OvLight)
+struct Light : OvLight {
+    constexpr Light(float radius = 160.0f, Color color = Color::White, float intensity = 1.0f)
+        : OvLight{{0, 0}, color, intensity, radius, 0.5f, 4.0f, 1, {0, 0, 0}} {}
+};
 using Overlap = OvOverlap;
 using EntityHit = OvEntityHit;
 enum class ContactState : int32_t { Begin = OV_CONTACT_BEGIN, Stay = OV_CONTACT_STAY, End = OV_CONTACT_END };
@@ -162,6 +167,8 @@ template <>
 struct ComponentName<Collider> { static constexpr const char *value = "Collider"; };
 template <>
 struct ComponentName<RigidBody> { static constexpr const char *value = "RigidBody"; };
+template <>
+struct ComponentName<Light> { static constexpr const char *value = "Light"; };
 
 enum class Transition : int32_t { Cut = OV_TRANSITION_CUT, Fade = OV_TRANSITION_FADE, Wipe = OV_TRANSITION_WIPE };
 enum class Space : int32_t { World = OV_SPACE_WORLD, Screen = OV_SPACE_SCREEN };
@@ -422,6 +429,11 @@ struct Effect : OvEffect {
                       float aberration = 1.0f) {
         return make(OV_EFFECT_CRT, {scanlines, curvature, vignette, aberration});
     }
+    /// Lights the picture with Light entities; `ambient` everywhere
+    static Effect lighting(Color ambient = Color::Black, float brightness = 1.0f) {
+        return make(OV_EFFECT_LIGHTING, {ambient.r / 255.0f * brightness, ambient.g / 255.0f * brightness,
+                                         ambient.b / 255.0f * brightness});
+    }
     static Effect custom(const Shader &shader, std::array<float, 8> params = {}) {
         Effect e;
         e.kind = OV_EFFECT_SHADER;
@@ -675,6 +687,11 @@ public:
     }
     /// Shake the world on screen by up to `strength` pixels, fading out
     void shake(float strength, float duration) { ov_shake(e_, strength, duration); }
+    /// Lighting: a normal map of the same size (red right, green up)
+    void set_normal_map(const Texture &t, const Texture &normal_map) { ov_set_normal_map(e_, t.id(), normal_map.id()); }
+    /// Colliders on these layers cast shadows
+    void set_shadow_layers(uint32_t layers) { ov_set_shadow_layers(e_, layers); }
+    void set_shadow_tilemap(const Tilemap &map, bool on = true) { ov_set_shadow_tilemap(e_, map.id(), on); }
 
     // camera and draw state
     Camera camera() const { return ov_get_camera(e_); }

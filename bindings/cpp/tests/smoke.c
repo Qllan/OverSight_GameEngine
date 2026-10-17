@@ -155,7 +155,7 @@ int main(void) {
     CHECK(ov_bindings_save(e, text, sizeof text) == strlen("fire = mouse:Left\n"));
 
     /* Render targets and post effects */
-    CHECK(sizeof(OvEffect) == 40);
+    CHECK(sizeof(OvEffect) == 40 && sizeof(OvLight) == 32 && OV_LIGHT == 7);
     uint32_t target = ov_create_target(e, 4, 4);
     CHECK(target != 0 && !ov_set_target(e, 12345));
     ov_begin_frame(e, OV_RGBA(0, 0, 0, 255));
