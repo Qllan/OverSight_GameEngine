@@ -63,7 +63,7 @@ cargo build --release -p oversight
 
 Получатся `target\release\oversight.dll` и библиотека импорта `target\release\oversight.dll.lib`.
 
-Готовую DLL можно не собирать, а скачать: на GitHub во вкладке Actions откройте последний успешный запуск «OverSight 2D». Там есть артефакт `oversight-windows`: DLL, `.lib`, заголовки и привязка C#.
+Движок можно не собирать, а скачать готовым: архив `oversight-sdk-<версия>-windows-x64.zip` на странице [Releases](https://github.com/Qllan/OverSight_GameEngine/releases). В нём DLL, `.lib`, заголовки и пакет для CMake (`find_package(oversight)`), а `README.md` внутри объясняет, как подключить. Архивы собирает CI по тегу `oversight-v<версия>`; инструкцию по сборке SDK из исходников см. в `sdk/package.py`.
 
 ### Игра на C++
 

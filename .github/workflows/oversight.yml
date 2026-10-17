@@ -71,18 +71,18 @@ jobs:
             if ($a -ne $b) { Write-Error "$s differs between C++ and C#"; exit 1 }
           }
 
-      - name: Package the engine for Windows
+      - name: Package the SDK and build a game against it
         run: |
-          New-Item -ItemType Directory -Force dist/oversight-windows | Out-Null
-          Copy-Item target/release/oversight.dll, target/release/oversight.dll.lib dist/oversight-windows/
-          Copy-Item -Recurse crates/oversight/include dist/oversight-windows/include
-          Copy-Item -Recurse bindings/csharp/OverSight dist/oversight-windows/csharp
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue dist/oversight-windows/csharp/bin, dist/oversight-windows/csharp/obj
+          python crates/oversight/sdk/package.py --out dist
+          $sdk = (Get-ChildItem dist -Directory -Filter "oversight-sdk-*").FullName
+          cmake -S crates/oversight/sdk/test -B build/sdk -DCMAKE_PREFIX_PATH="$sdk"
+          cmake --build build/sdk --config Release
+          ctest --test-dir build/sdk -C Release --output-on-failure
 
       - uses: actions/upload-artifact@v4
         with:
-          name: oversight-windows
-          path: dist/oversight-windows
+          name: oversight-sdk-windows-x64
+          path: dist/*.zip
 
       - uses: actions/upload-artifact@v4
         with:
@@ -113,3 +113,11 @@ jobs:
         env:
           OVERSIGHT_REQUIRE_GPU: "1"
         run: cargo test -p oversight
+
+      - name: Package the SDK and build a game against it
+        run: |
+          cargo build --release -p oversight
+          python3 crates/oversight/sdk/package.py --out dist
+          cmake -S crates/oversight/sdk/test -B build/sdk -DCMAKE_PREFIX_PATH="$(echo $PWD/dist/oversight-sdk-*/)"
+          cmake --build build/sdk
+          ctest --test-dir build/sdk --output-on-failure
