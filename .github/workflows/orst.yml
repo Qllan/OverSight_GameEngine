@@ -40,6 +40,7 @@ jobs:
         run: |
           cargo test -p orst-studio
           cargo build --release -p orst-studio
+          dotnet build bindings/csharp/Scripting -c Release -nologo -o target/release/Scripting
 
       - name: C and C++ smoke tests (MSVC)
         run: |
@@ -111,7 +112,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: orst-studio-windows-x64
-          path: target/release/ORST.exe
+          path: |
+            target/release/ORST.exe
+            target/release/Scripting/
 
       - uses: actions/upload-artifact@v4
         with:
