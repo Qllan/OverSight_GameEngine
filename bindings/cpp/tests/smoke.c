@@ -42,6 +42,12 @@ int main(void) {
     CHECK(hit.cell_y == 3 && hit.normal.y == -1.0f);
 
     CHECK(ov_poll(e));
+    /* Headless frames last 1/60 s: one logic tick each */
+    CHECK(ov_ticks(e) == 1 && ov_tick_count(e) == 1);
+    ov_random_seed(e, 1);
+    CHECK(ov_random_u32(e) == 0x910A2DECu); /* the same on every machine */
+    int32_t die = ov_random_int(e, 1, 6);
+    CHECK(die >= 1 && die <= 6);
     ov_begin_frame(e, OV_BLACK);
     ov_set_space(e, OV_SPACE_SCREEN);
     OvSprite s = ov_default_sprite();

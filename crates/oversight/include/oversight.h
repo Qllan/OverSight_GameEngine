@@ -286,6 +286,25 @@ float ov_dt(OvEngine *e);
 double ov_time(OvEngine *e);
 float ov_fps(OvEngine *e);
 uint64_t ov_frame(OvEngine *e);
+
+/* Fixed logic ticks: run the game logic ov_ticks(e) times per frame with
+ * ov_tick_dt(e), so it plays the same at any frame rate (replays, network).
+ *     for (uint32_t i = 0; i < ov_ticks(e); ++i) update(ov_tick_dt(e));
+ * ov_tick_alpha (0..1) is how far the time is toward the next tick: draw
+ * moving things that far between their last two positions. */
+void ov_set_tick_rate(OvEngine *e, uint32_t ticks_per_second); /* 60 by default */
+uint32_t ov_ticks(OvEngine *e);
+float ov_tick_dt(OvEngine *e);
+float ov_tick_alpha(OvEngine *e);
+uint64_t ov_tick_count(OvEngine *e);
+
+/* Seeded random numbers: the same seed gives the same game on any machine.
+ * The seed is 1 until set. */
+void ov_random_seed(OvEngine *e, uint64_t seed);
+uint32_t ov_random_u32(OvEngine *e);
+float ov_random_float(OvEngine *e);                       /* 0 <= x < 1 */
+float ov_random_range(OvEngine *e, float min, float max); /* min <= x < max */
+int32_t ov_random_int(OvEngine *e, int32_t min, int32_t max); /* min <= x <= max */
 void ov_begin_frame(OvEngine *e, OvColor clear);
 void ov_end_frame(OvEngine *e);
 void ov_set_title(OvEngine *e, const char *title);

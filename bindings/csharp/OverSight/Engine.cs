@@ -253,6 +253,26 @@ public sealed class Engine : IDisposable
     public double Time => Native.ov_time(Handle);
     public float Fps => Native.ov_fps(Handle);
     public ulong Frame => Native.ov_frame(Handle);
+
+    // fixed logic ticks: for (int i = 0; i < engine.Ticks; i++) Update(engine.TickDt);
+    /// <summary>Logic ticks per second, 60 by default</summary>
+    public uint TickRate { set => Native.ov_set_tick_rate(Handle, value); }
+    /// <summary>Logic ticks to run this frame</summary>
+    public uint Ticks => Native.ov_ticks(Handle);
+    public float TickDt => Native.ov_tick_dt(Handle);
+    /// <summary>0..1: how far the time is toward the next tick, for smooth drawing</summary>
+    public float TickAlpha => Native.ov_tick_alpha(Handle);
+    public ulong TickCount => Native.ov_tick_count(Handle);
+
+    // seeded random numbers: the same seed gives the same game on any machine
+    public void RandomSeed(ulong seed) => Native.ov_random_seed(Handle, seed);
+    public uint RandomU32() => Native.ov_random_u32(Handle);
+    /// <summary>0 &lt;= x &lt; 1</summary>
+    public float RandomFloat() => Native.ov_random_float(Handle);
+    /// <summary>min &lt;= x &lt; max</summary>
+    public float RandomRange(float min, float max) => Native.ov_random_range(Handle, min, max);
+    /// <summary>min &lt;= x &lt;= max</summary>
+    public int RandomInt(int min, int max) => Native.ov_random_int(Handle, min, max);
     public void BeginFrame(Color clear) => Native.ov_begin_frame(Handle, clear);
     public void EndFrame() => Native.ov_end_frame(Handle);
     public string Title { set => Native.ov_set_title(Handle, value); }

@@ -443,6 +443,18 @@ public:
     double time() const { return ov_time(e_); }
     float fps() const { return ov_fps(e_); }
     uint64_t frame() const { return ov_frame(e_); }
+    // fixed logic ticks: for (uint32_t i = 0; i < engine.ticks(); ++i) update(engine.tick_dt());
+    void set_tick_rate(uint32_t ticks_per_second) { ov_set_tick_rate(e_, ticks_per_second); }
+    uint32_t ticks() const { return ov_ticks(e_); }
+    float tick_dt() const { return ov_tick_dt(e_); }
+    float tick_alpha() const { return ov_tick_alpha(e_); }
+    uint64_t tick_count() const { return ov_tick_count(e_); }
+    // seeded random numbers, the same on any machine
+    void random_seed(uint64_t seed) { ov_random_seed(e_, seed); }
+    uint32_t random_u32() { return ov_random_u32(e_); }
+    float random_float() { return ov_random_float(e_); }
+    float random_range(float min, float max) { return ov_random_range(e_, min, max); }
+    int32_t random_int(int32_t min, int32_t max) { return ov_random_int(e_, min, max); }
     void begin_frame(Color clear = Color::Black) { ov_begin_frame(e_, clear); }
     void end_frame() { ov_end_frame(e_); }
     void set_title(const std::string &t) { ov_set_title(e_, t.c_str()); }

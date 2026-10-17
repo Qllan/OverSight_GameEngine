@@ -39,6 +39,16 @@ internal static class Native
     [DllImport(Lib)] internal static extern double ov_time(IntPtr e);
     [DllImport(Lib)] internal static extern float ov_fps(IntPtr e);
     [DllImport(Lib)] internal static extern ulong ov_frame(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_set_tick_rate(IntPtr e, uint ticks_per_second);
+    [DllImport(Lib)] internal static extern uint ov_ticks(IntPtr e);
+    [DllImport(Lib)] internal static extern float ov_tick_dt(IntPtr e);
+    [DllImport(Lib)] internal static extern float ov_tick_alpha(IntPtr e);
+    [DllImport(Lib)] internal static extern ulong ov_tick_count(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_random_seed(IntPtr e, ulong seed);
+    [DllImport(Lib)] internal static extern uint ov_random_u32(IntPtr e);
+    [DllImport(Lib)] internal static extern float ov_random_float(IntPtr e);
+    [DllImport(Lib)] internal static extern float ov_random_range(IntPtr e, float min, float max);
+    [DllImport(Lib)] internal static extern int ov_random_int(IntPtr e, int min, int max);
     [DllImport(Lib)] internal static extern void ov_begin_frame(IntPtr e, Color clear);
     [DllImport(Lib)] internal static extern void ov_end_frame(IntPtr e);
     [DllImport(Lib)] internal static extern void ov_set_title(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string title);

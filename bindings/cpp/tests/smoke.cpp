@@ -72,6 +72,9 @@ int main() {
 
     engine.look_at({32, 32});
     CHECK(engine.poll());
+    CHECK(engine.ticks() == 1 && engine.tick_dt() == 1.0f / 60.0f);
+    engine.random_seed(1);
+    CHECK(engine.random_u32() == 0x910A2DECu);
     engine.begin_frame(ov::Color::Black);
     map.draw();
     engine.set_space(ov::Space::Screen);

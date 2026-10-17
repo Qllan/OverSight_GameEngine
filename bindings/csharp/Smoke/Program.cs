@@ -53,6 +53,9 @@ Check(Animation.Range(4, 4, 8f).FrameAt(0.3f) == 6, "animation");
 
 engine.LookAt(new Vec2(32, 32));
 Check(engine.Poll(), "poll");
+Check(engine.Ticks == 1 && engine.TickDt == 1f / 60f, "one tick per headless frame");
+engine.RandomSeed(1);
+Check(engine.RandomU32() == 0x910A2DECu, "seeded random numbers");
 engine.BeginFrame(Color.Black);
 map.Draw();
 engine.Space = Space.Screen;

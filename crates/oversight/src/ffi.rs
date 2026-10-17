@@ -251,6 +251,56 @@ pub extern "C" fn ov_frame(e: *mut OvEngine) -> u64 {
 }
 
 #[no_mangle]
+pub extern "C" fn ov_set_tick_rate(e: *mut OvEngine, rate: u32) {
+    engine!(e).time.set_tick_rate(rate);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_ticks(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).time.ticks
+}
+
+#[no_mangle]
+pub extern "C" fn ov_tick_dt(e: *mut OvEngine) -> f32 {
+    engine!(e, 0.0).time.tick_dt()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_tick_alpha(e: *mut OvEngine) -> f32 {
+    engine!(e, 0.0).time.tick_alpha()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_tick_count(e: *mut OvEngine) -> u64 {
+    engine!(e, 0).time.tick_count
+}
+
+#[no_mangle]
+pub extern "C" fn ov_random_seed(e: *mut OvEngine, seed: u64) {
+    engine!(e).rng = crate::rng::Rng::new(seed);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_random_u32(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).rng.next_u32()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_random_float(e: *mut OvEngine) -> f32 {
+    engine!(e, 0.0).rng.float()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_random_range(e: *mut OvEngine, min: f32, max: f32) -> f32 {
+    engine!(e, 0.0).rng.range(min, max)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_random_int(e: *mut OvEngine, min: i32, max: i32) -> i32 {
+    engine!(e, 0).rng.int(min, max)
+}
+
+#[no_mangle]
 pub extern "C" fn ov_begin_frame(e: *mut OvEngine, clear: Color) {
     engine!(e).begin_frame(clear);
 }

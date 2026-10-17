@@ -25,6 +25,7 @@ use crate::hotreload::{HotReload, MapFiles, Watched};
 use crate::input::{Input, Key, MouseButton};
 use crate::particles::{Emitter, EmitterConfig};
 use crate::render::{DrawKind, Renderer, Shape};
+use crate::rng::Rng;
 use crate::text::{Font, DEFAULT_FONT};
 use crate::texture::{Store, Texture};
 use crate::tilemap::{LayerDraw, Tilemap};
@@ -53,6 +54,8 @@ pub struct Engine {
     pub state: DrawState,
     pub input: Input,
     pub time: Time,
+    /// Seeded random numbers for game logic (same seed, same game)
+    pub rng: Rng,
     pub debug: DebugOverlay,
     pub hot_reload: HotReload,
     #[cfg(feature = "audio")]
@@ -104,6 +107,7 @@ impl Engine {
             state: DrawState::default(),
             input: Input::default(),
             time: Time::new(Some(1.0 / 60.0)),
+            rng: Rng::default(),
             debug: DebugOverlay::default(),
             hot_reload: HotReload::default(),
             #[cfg(feature = "audio")]

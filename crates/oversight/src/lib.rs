@@ -21,6 +21,7 @@ pub mod hotreload;
 pub mod input;
 pub mod particles;
 pub mod render;
+pub mod rng;
 pub mod text;
 pub mod texture;
 pub mod tiled;
