@@ -16,6 +16,7 @@ use crate::actions::Binding;
 use crate::anim::{AnimMode, Animation, SpriteSheet};
 use crate::camera::Camera;
 use crate::collision::{self, Contacts, MoveResult, RayHit};
+use crate::components::Transform;
 use crate::engine::{Engine, InputEvent};
 use crate::gamepad::{GamepadAxis, GamepadButton};
 use crate::input::{key_from_u32, Key, MouseButton};
@@ -2232,6 +2233,208 @@ pub extern "C" fn ov_update_emitters(e: *mut OvEngine, dt: f32) {
 #[no_mangle]
 pub extern "C" fn ov_draw_emitter(e: *mut OvEngine, emitter: u32) {
     engine!(e).draw_emitter(emitter);
+}
+
+// --- skeletons -----------------------------------------------------------------
+
+/// # Safety
+/// `path` is a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_load_skeleton(e: *mut OvEngine, path: *const c_char) -> u32 {
+    result(engine!(e, 0).load_skeleton(string(path)), 0)
+}
+
+/// # Safety
+/// `json` is a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_skeleton_from_json(e: *mut OvEngine, json: *const c_char) -> u32 {
+    result(engine!(e, 0).skeleton_from_json(string(json)), 0)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_free_skeleton_data(e: *mut OvEngine, data: u32) {
+    engine!(e).free_skeleton_data(data);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_create_skeleton(e: *mut OvEngine, data: u32) -> u32 {
+    result(engine!(e, 0).create_skeleton(data), 0)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_free_skeleton(e: *mut OvEngine, skeleton: u32) {
+    engine!(e).free_skeleton(skeleton);
+}
+
+fn skeleton(e: &mut Engine, id: u32) -> Result<&mut crate::skeleton::Skeleton, String> {
+    e.skeleton_mut(id)
+        .ok_or_else(|| format!("no skeleton {id}"))
+}
+
+/// # Safety
+/// `name` is a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_skeleton_play(
+    e: *mut OvEngine,
+    skeleton_id: u32,
+    name: *const c_char,
+    looped: bool,
+    mix: f32,
+) -> bool {
+    let r =
+        skeleton(engine!(e, false), skeleton_id).and_then(|s| s.play(string(name), looped, mix));
+    result(r.map(|_| true), false)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_skeleton_stop(e: *mut OvEngine, skeleton: u32) {
+    if let Some(s) = engine!(e).skeleton_mut(skeleton) {
+        s.stop();
+    }
+}
+
+/// Name of the current animation ("" for none)
+///
+/// # Safety
+/// `buf` is NULL or has room for `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn ov_skeleton_animation(
+    e: *mut OvEngine,
+    skeleton: u32,
+    buf: *mut c_char,
+    size: usize,
+) -> usize {
+    let name = engine!(e, 0)
+        .skeleton(skeleton)
+        .and_then(|s| s.current())
+        .unwrap_or("");
+    copy_out(name, buf, size)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_skeleton_done(e: *mut OvEngine, skeleton: u32) -> bool {
+    engine!(e, false)
+        .skeleton(skeleton)
+        .is_some_and(|s| s.done())
+}
+
+/// # Safety
+/// `event` is a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_skeleton_fired(
+    e: *mut OvEngine,
+    skeleton: u32,
+    event: *const c_char,
+) -> bool {
+    engine!(e, false)
+        .skeleton(skeleton)
+        .is_some_and(|s| s.fired(string(event)))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_update_skeletons(e: *mut OvEngine, dt: f32) {
+    engine!(e).update_skeletons(dt);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_skeleton_root(e: *mut OvEngine, skeleton: u32, root: Transform) {
+    if let Some(s) = engine!(e).skeleton_mut(skeleton) {
+        s.set_root(root.pos, root.rotation, root.scale);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_skeleton_tint(e: *mut OvEngine, skeleton: u32, tint: Color) {
+    if let Some(s) = engine!(e).skeleton_mut(skeleton) {
+        s.tint = tint;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_skeleton_speed(e: *mut OvEngine, skeleton: u32, speed: f32) {
+    if let Some(s) = engine!(e).skeleton_mut(skeleton) {
+        s.speed = speed;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_draw_skeleton(e: *mut OvEngine, skeleton: u32, texture: u32) {
+    engine!(e).draw_skeleton(skeleton, texture);
+}
+
+/// A bone's index, -1 if there is none by that name
+///
+/// # Safety
+/// `name` is a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_skeleton_bone(
+    e: *mut OvEngine,
+    skeleton: u32,
+    name: *const c_char,
+) -> i32 {
+    engine!(e, -1)
+        .skeleton(skeleton)
+        .and_then(|s| s.data.bone(string(name)))
+        .map_or(-1, |b| b as i32)
+}
+
+/// Where a bone is in the world (a default Transform for an unknown one)
+#[no_mangle]
+pub extern "C" fn ov_skeleton_bone_world(e: *mut OvEngine, skeleton: u32, bone: i32) -> Transform {
+    engine!(e, Transform::default())
+        .skeleton(skeleton)
+        .and_then(|s| s.bone_world(usize::try_from(bone).ok()?))
+        .map_or(Transform::default(), |(pos, rotation, scale)| Transform {
+            pos,
+            rotation,
+            scale,
+        })
+}
+
+/// A point in a bone's own space, in the world
+#[no_mangle]
+pub extern "C" fn ov_skeleton_bone_point(
+    e: *mut OvEngine,
+    skeleton: u32,
+    bone: i32,
+    local: Vec2,
+) -> Vec2 {
+    engine!(e, Vec2::default())
+        .skeleton(skeleton)
+        .and_then(|s| s.bone_point(usize::try_from(bone).ok()?, local))
+        .unwrap_or_default()
+}
+
+/// Turn a bone by code, blended over the animation by `weight`
+/// (0 gives it back)
+#[no_mangle]
+pub extern "C" fn ov_set_bone_override(
+    e: *mut OvEngine,
+    skeleton: u32,
+    bone: i32,
+    rotation: f32,
+    weight: f32,
+) {
+    if let (Some(s), Ok(b)) = (engine!(e).skeleton_mut(skeleton), usize::try_from(bone)) {
+        s.set_override(b, rotation, weight);
+    }
+}
+
+/// Show another attachment in a slot; NULL hides it
+///
+/// # Safety
+/// `slot` is a NUL-terminated string, `attachment` NULL or one
+#[no_mangle]
+pub unsafe extern "C" fn ov_skeleton_set_attachment(
+    e: *mut OvEngine,
+    skeleton_id: u32,
+    slot: *const c_char,
+    attachment: *const c_char,
+) -> bool {
+    let which = (!attachment.is_null()).then(|| string(attachment));
+    let r = skeleton(engine!(e, false), skeleton_id)
+        .and_then(|s| s.set_attachment(string(slot), which));
+    result(r.map(|_| true), false)
 }
 
 // --- sound ---------------------------------------------------------------------

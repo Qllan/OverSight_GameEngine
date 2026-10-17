@@ -36,6 +36,7 @@ pub mod render;
 pub mod rng;
 pub mod scenes;
 pub mod shapes;
+pub mod skeleton;
 pub mod text;
 pub mod texture;
 pub mod tiled;

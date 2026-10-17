@@ -28,6 +28,7 @@ use crate::particles::{Emitter, EmitterConfig};
 use crate::post::Effect;
 use crate::render::{DrawKind, Renderer, Shape};
 use crate::rng::Rng;
+use crate::skeleton::{Skeleton, SkeletonData};
 use crate::text::{Font, DEFAULT_FONT};
 use crate::texture::{Store, Texture};
 use crate::tilemap::{LayerDraw, Tilemap};
@@ -56,6 +57,9 @@ pub struct Engine {
     pub fonts: Store<Font>,
     pub tilemaps: Store<Tilemap>,
     pub emitters: Store<Emitter>,
+    /// Loaded skeleton files, shared by the skeletons made from them
+    pub skeleton_data: Store<std::sync::Arc<SkeletonData>>,
+    pub skeletons: Store<Skeleton>,
     /// Convex polygons for colliders, in local units
     pub polygons: Store<Vec<Vec2>>,
     /// WGSL sources of post effect shaders
@@ -127,6 +131,8 @@ impl Engine {
             fonts,
             tilemaps: Store::default(),
             emitters: Store::default(),
+            skeleton_data: Store::default(),
+            skeletons: Store::default(),
             polygons: Store::default(),
             shaders: Store::default(),
             shadow_layers: 0,
@@ -1191,6 +1197,63 @@ impl Engine {
         e.draw(&mut self.renderer, src, self.state.depth, self.state.space);
     }
 
+    // --- skeletons -------------------------------------------------------------
+
+    pub fn load_skeleton(&mut self, path: &str) -> Result<u32, String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+        self.skeleton_from_json(&text)
+            .map_err(|e| format!("{path}: {e}"))
+    }
+
+    pub fn skeleton_from_json(&mut self, json: &str) -> Result<u32, String> {
+        let data = SkeletonData::from_json(json)?;
+        Ok(self.skeleton_data.insert(std::sync::Arc::new(data)))
+    }
+
+    /// Skeletons made from it keep working
+    pub fn free_skeleton_data(&mut self, data: u32) {
+        self.skeleton_data.remove(data);
+    }
+
+    /// A skeleton in its setup pose
+    pub fn create_skeleton(&mut self, data: u32) -> Result<u32, String> {
+        let d = self
+            .skeleton_data
+            .get(data)
+            .ok_or_else(|| format!("no skeleton data {data}"))?;
+        Ok(self.skeletons.insert(Skeleton::new(d.clone())))
+    }
+
+    pub fn skeleton(&self, id: u32) -> Option<&Skeleton> {
+        self.skeletons.get(id)
+    }
+
+    pub fn skeleton_mut(&mut self, id: u32) -> Option<&mut Skeleton> {
+        self.skeletons.get_mut(id)
+    }
+
+    pub fn free_skeleton(&mut self, id: u32) {
+        self.skeletons.remove(id);
+    }
+
+    /// Advance every skeleton by `dt` seconds
+    pub fn update_skeletons(&mut self, dt: f32) {
+        for s in self.skeletons.iter_mut() {
+            s.update(dt);
+        }
+    }
+
+    /// A skeleton's attachments as sprites from `texture` (its atlas), at
+    /// the current layer, depth and space
+    pub fn draw_skeleton(&mut self, id: u32, texture: u32) {
+        let Some(s) = self.skeletons.get(id) else {
+            return;
+        };
+        for sprite in s.sprites(self.state.layer, self.state.depth) {
+            self.draw_sprite(texture, &sprite);
+        }
+    }
+
     // --- debug overlay (drawn only while it is on; F3 toggles it) ------------
 
     pub fn set_debug(&mut self, on: bool) {
@@ -1894,5 +1957,40 @@ mod tests {
         e.set_shadow_tilemap(map, true);
         assert_eq!(frame(&mut e), 0, "behind the wall");
         assert!(e.pixel(28, 8).unwrap().r > 0, "the wall's face is lit");
+    }
+
+    #[test]
+    fn skeletons_draw_their_attachments_where_the_bones_are() {
+        let mut e = Engine::headless(48, 48).unwrap();
+        e.set_space(Space::Screen);
+        let json = r#"{
+            "bones": [{"name": "root", "x": 10, "y": 10}, {"name": "arm", "parent": "root"}],
+            "slots": [{"name": "arm", "bone": "arm", "attachment": "arm",
+                       "attachments": {"arm": {"region": [0, 0, 20, 4], "origin": [0, 2]}}}],
+            "animations": {"down": {"bones": {"arm": {"rotate": [{"time": 0, "value": 90}]}}}}
+        }"#;
+        let data = e.skeleton_from_json(json).unwrap();
+        let red: Vec<u8> = [255, 0, 0, 255]
+            .iter()
+            .copied()
+            .cycle()
+            .take(20 * 4 * 4)
+            .collect();
+        let atlas = e.texture_from_rgba(20, 4, &red).unwrap();
+        let s = e.create_skeleton(data).unwrap();
+        e.free_skeleton_data(data);
+        assert!(e.create_skeleton(data).is_err());
+        let frame = |e: &mut Engine| {
+            e.begin_frame(Color::BLACK);
+            e.draw_skeleton(s, atlas);
+            e.end_frame();
+            (e.pixel(25, 10).unwrap().r, e.pixel(10, 25).unwrap().r)
+        };
+        assert_eq!(frame(&mut e), (255, 0), "the arm points right");
+        e.skeleton_mut(s).unwrap().play("down", true, 0.0).unwrap();
+        e.update_skeletons(0.1);
+        assert_eq!(frame(&mut e), (0, 255), "then down");
+        e.free_skeleton(s);
+        assert_eq!(frame(&mut e), (0, 0));
     }
 }

@@ -761,6 +761,47 @@ void ov_update_emitters(OvEngine *e, float dt);
 /* On the config's layer, at the current depth and space */
 void ov_draw_emitter(OvEngine *e, uint32_t emitter);
 
+/* --- skeletons ---
+ * A skeleton file (JSON) has bones, slots with attachments (regions of
+ * one atlas texture) and animations; angles are degrees, clockwise.
+ * See src/skeleton.rs for the format. Data is shared: many skeletons can
+ * be made from one file. At runtime angles are radians. */
+uint32_t ov_load_skeleton(OvEngine *e, const char *path);
+uint32_t ov_skeleton_from_json(OvEngine *e, const char *json);
+/* Skeletons made from it keep working */
+void ov_free_skeleton_data(OvEngine *e, uint32_t data);
+/* In the setup pose */
+uint32_t ov_create_skeleton(OvEngine *e, uint32_t data);
+void ov_free_skeleton(OvEngine *e, uint32_t skeleton);
+/* Fades from the current animation over mix seconds; the one already
+ * playing keeps going */
+bool ov_skeleton_play(OvEngine *e, uint32_t skeleton, const char *name, bool looped, float mix);
+void ov_skeleton_stop(OvEngine *e, uint32_t skeleton);
+/* The current animation's name ("" for none); returns its full length */
+size_t ov_skeleton_animation(OvEngine *e, uint32_t skeleton, char *buf, size_t size);
+/* A non-looping animation reached its end */
+bool ov_skeleton_done(OvEngine *e, uint32_t skeleton);
+/* The event was passed in the last update */
+bool ov_skeleton_fired(OvEngine *e, uint32_t skeleton, const char *event);
+void ov_update_skeletons(OvEngine *e, float dt);
+/* Where the skeleton stands */
+void ov_set_skeleton_root(OvEngine *e, uint32_t skeleton, OvTransform root);
+void ov_set_skeleton_tint(OvEngine *e, uint32_t skeleton, OvColor tint);
+void ov_set_skeleton_speed(OvEngine *e, uint32_t skeleton, float speed);
+/* Attachments as sprites of texture (the atlas), at the current layer,
+ * depth and space */
+void ov_draw_skeleton(OvEngine *e, uint32_t skeleton, uint32_t texture);
+/* A bone's index, -1 if none */
+int32_t ov_skeleton_bone(OvEngine *e, uint32_t skeleton, const char *name);
+OvTransform ov_skeleton_bone_world(OvEngine *e, uint32_t skeleton, int32_t bone);
+/* A point in a bone's own space, in the world (a muzzle's tip) */
+OvVec2 ov_skeleton_bone_point(OvEngine *e, uint32_t skeleton, int32_t bone, OvVec2 local);
+/* Turn a bone by code (radians, relative to its parent), blended over the
+ * animation by weight; 0 gives it back */
+void ov_set_bone_override(OvEngine *e, uint32_t skeleton, int32_t bone, float rotation, float weight);
+/* attachment NULL hides the slot */
+bool ov_skeleton_set_attachment(OvEngine *e, uint32_t skeleton, const char *slot, const char *attachment);
+
 /* --- sound (WAV, OGG, MP3) --- */
 uint32_t ov_load_sound(OvEngine *e, const char *path);
 void ov_free_sound(OvEngine *e, uint32_t sound);

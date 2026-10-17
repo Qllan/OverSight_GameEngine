@@ -481,6 +481,54 @@ public:
     void draw() { ov_draw_emitter(e_, id_); }
 };
 
+/// A loaded skeleton file; skeletons made from it keep working after it goes
+class SkeletonData : public detail::Handle<ov_free_skeleton_data> {
+public:
+    using Handle::Handle;
+};
+
+/// An animated skeleton; angles are radians, clockwise
+class Skeleton : public detail::Handle<ov_free_skeleton> {
+public:
+    using Handle::Handle;
+    /// Fades from the current animation over `mix` seconds
+    void play(const std::string &name, bool looped = true, float mix = 0.0f) {
+        if (!ov_skeleton_play(e_, id_, name.c_str(), looped, mix)) throw Error(ov_last_error());
+    }
+    void stop() { ov_skeleton_stop(e_, id_); }
+    std::string animation() const {
+        std::string s(ov_skeleton_animation(e_, id_, nullptr, 0), '\0');
+        ov_skeleton_animation(e_, id_, s.data(), s.size() + 1);
+        return s;
+    }
+    /// A non-looping animation reached its end
+    bool done() const { return ov_skeleton_done(e_, id_); }
+    /// The event was passed in the last update
+    bool fired(const std::string &event) const { return ov_skeleton_fired(e_, id_, event.c_str()); }
+    void set_root(const Transform &t) { ov_set_skeleton_root(e_, id_, t); }
+    void set_tint(Color c) { ov_set_skeleton_tint(e_, id_, c); }
+    void set_speed(float speed) { ov_set_skeleton_speed(e_, id_, speed); }
+    /// Attachments as sprites of the atlas, at the current layer, depth and space
+    void draw(const Texture &atlas) { ov_draw_skeleton(e_, id_, atlas.id()); }
+    /// A bone's index, -1 if none
+    int bone(const std::string &name) const { return ov_skeleton_bone(e_, id_, name.c_str()); }
+    Transform bone_world(int bone) const {
+        OvTransform t = ov_skeleton_bone_world(e_, id_, bone);
+        return {t.pos, t.rotation, t.scale};
+    }
+    /// A point in a bone's own space, in the world (a muzzle's tip)
+    Vec2 bone_point(int bone, Vec2 local) const { return ov_skeleton_bone_point(e_, id_, bone, local); }
+    /// Turn a bone by code, blended over the animation by `weight`; 0 gives it back
+    void set_override(int bone, float rotation, float weight = 1.0f) {
+        ov_set_bone_override(e_, id_, bone, rotation, weight);
+    }
+    /// An empty name hides the slot
+    void set_attachment(const std::string &slot, const std::string &attachment) {
+        const char *a = attachment.empty() ? nullptr : attachment.c_str();
+        if (!ov_skeleton_set_attachment(e_, id_, slot.c_str(), a)) throw Error(ov_last_error());
+    }
+};
+
 struct MapObject {
     uint32_t id = 0;
     std::string name, cls;
@@ -659,6 +707,17 @@ public:
     }
     /// Advance every emitter by dt seconds
     void update_emitters(float dt) { ov_update_emitters(e_, dt); }
+    SkeletonData load_skeleton(const std::string &path) {
+        return {e_, detail::check(ov_load_skeleton(e_, path.c_str()), path)};
+    }
+    SkeletonData skeleton_from_json(const std::string &json) {
+        return {e_, detail::check(ov_skeleton_from_json(e_, json.c_str()), "skeleton")};
+    }
+    Skeleton create_skeleton(const SkeletonData &data) {
+        return {e_, detail::check(ov_create_skeleton(e_, data.id()), "skeleton")};
+    }
+    /// Advance every skeleton by dt seconds
+    void update_skeletons(float dt) { ov_update_skeletons(e_, dt); }
     Sound load_sound(const std::string &path) { return {e_, detail::check(ov_load_sound(e_, path.c_str()), path)}; }
 
     // render targets, post effects and shake

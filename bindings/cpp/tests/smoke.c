@@ -174,6 +174,36 @@ int main(void) {
     ov_shake(e, 2, 0.1f);
     ov_free_texture(e, target);
 
+    /* Skeletons */
+    const char *rig = "{\"bones\": [{\"name\": \"root\"}, {\"name\": \"arm\", \"parent\": \"root\", \"x\": 10}],"
+                      " \"slots\": [{\"name\": \"arm\", \"bone\": \"arm\", \"attachment\": \"a\","
+                      " \"attachments\": {\"a\": {\"region\": [0, 0, 2, 2]}}}],"
+                      " \"animations\": {\"wave\": {\"bones\": {\"arm\": {\"rotate\": [{\"time\": 0, \"value\": 0},"
+                      " {\"time\": 1, \"value\": 90}]}}, \"events\": [{\"time\": 0.5, \"name\": \"half\"}]}}}";
+    CHECK(ov_skeleton_from_json(e, "{\"bones\": []}") == 0 && ov_skeleton_from_json(e, "nope") == 0);
+    uint32_t rig_data = ov_skeleton_from_json(e, rig);
+    uint32_t skel = ov_create_skeleton(e, rig_data);
+    CHECK(rig_data != 0 && skel != 0 && ov_create_skeleton(e, 999) == 0);
+    int32_t arm = ov_skeleton_bone(e, skel, "arm");
+    CHECK(arm == 1 && ov_skeleton_bone(e, skel, "leg") == -1);
+    CHECK(ov_skeleton_play(e, skel, "wave", false, 0) && !ov_skeleton_play(e, skel, "dance", false, 0));
+    ov_update_skeletons(e, 0.6f);
+    CHECK(ov_skeleton_fired(e, skel, "half") && !ov_skeleton_done(e, skel));
+    char anim[16];
+    CHECK(ov_skeleton_animation(e, skel, anim, sizeof anim) == 4 && strcmp(anim, "wave") == 0);
+    ov_update_skeletons(e, 1);
+    CHECK(ov_skeleton_done(e, skel));
+    OvTransform at = {{100, 0}, 0, {1, 1}};
+    ov_set_skeleton_root(e, skel, at);
+    OvVec2 tip = ov_skeleton_bone_point(e, skel, arm, (OvVec2){5, 0});
+    CHECK(ov_skeleton_bone_world(e, skel, arm).pos.x == 110 && tip.x > 109.9f && tip.y > 4.9f);
+    ov_set_bone_override(e, skel, arm, 0, 1);
+    CHECK(ov_skeleton_bone_point(e, skel, arm, (OvVec2){5, 0}).x > 114.9f);
+    CHECK(ov_skeleton_set_attachment(e, skel, "arm", NULL) && !ov_skeleton_set_attachment(e, skel, "arm", "b"));
+    ov_draw_skeleton(e, skel, 0);
+    ov_free_skeleton_data(e, rig_data);
+    ov_free_skeleton(e, skel);
+
     ov_engine_destroy(e);
     printf("smoke_c: ok\n");
     return 0;

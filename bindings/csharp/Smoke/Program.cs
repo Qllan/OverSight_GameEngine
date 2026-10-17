@@ -245,6 +245,27 @@ Check(Marshal.SizeOf<Light>() == 32, "Light layout");
 engine.SetEffects();
 engine.Despawn(lamp);
 
+// Skeletons
+using (var rig = engine.SkeletonFromJson("""
+    {"bones": [{"name": "root"}, {"name": "arm", "parent": "root", "x": 10}],
+     "slots": [{"name": "arm", "bone": "arm", "attachment": "a", "attachments": {"a": {"region": [0, 0, 2, 2]}}}],
+     "animations": {"wave": {"bones": {"arm": {"rotate": [{"time": 0, "value": 0}, {"time": 1, "value": 90}]}},
+                             "events": [{"time": 0.5, "name": "half"}]}}}
+    """))
+using (var skel = engine.CreateSkeleton(rig))
+{
+    skel.Play("wave", looped: false);
+    engine.UpdateSkeletons(0.6f);
+    Check(skel.Fired("half") && skel.Animation == "wave" && !skel.Done, "Skeleton events");
+    int arm = skel.Bone("arm");
+    skel.Root = new Transform(new Vec2(100, 0));
+    Check(arm == 1 && skel.BoneWorld(arm).Pos.X == 110, "Skeleton bones");
+    var noDance = false;
+    try { skel.Play("dance"); } catch (OverSightException) { noDance = true; }
+    Check(noDance, "Skeleton errors");
+    skel.SetAttachment("arm", null);
+}
+
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }

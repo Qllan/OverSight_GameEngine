@@ -16,7 +16,7 @@ OUT = os.path.join(HERE, "OverSight", "Native.cs")
 VALUES = {
     "void": "void", "bool": "bool", "float": "float", "double": "double",
     "uint32_t": "uint", "int32_t": "int", "uint64_t": "ulong", "int64_t": "long", "size_t": "nuint",
-    "OvColor": "Color", "OvVec2": "Vec2", "OvRect": "Rect", "OvCamera": "Camera",
+    "OvColor": "Color", "OvVec2": "Vec2", "OvRect": "Rect", "OvCamera": "Camera", "OvTransform": "Transform",
     "OvSpriteSheet": "SpriteSheet", "OvMoveResult": "MoveResult", "OvContacts": "Contacts",
     "OvEmitter": "EmitterConfig", "OvEntity": "ulong", "OvBinding": "Binding",
 }

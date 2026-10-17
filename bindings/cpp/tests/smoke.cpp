@@ -238,6 +238,28 @@ int main() {
     engine.set_effects({});
     engine.despawn(lamp);
 
+    // Skeletons
+    auto rig = engine.skeleton_from_json(R"({"bones": [{"name": "root"}, {"name": "arm", "parent": "root", "x": 10}],
+        "slots": [{"name": "arm", "bone": "arm", "attachment": "a", "attachments": {"a": {"region": [0, 0, 2, 2]}}}],
+        "animations": {"wave": {"bones": {"arm": {"rotate": [{"time": 0, "value": 0}, {"time": 1, "value": 90}]}},
+                                "events": [{"time": 0.5, "name": "half"}]}}})");
+    ov::Skeleton skel = engine.create_skeleton(rig);
+    skel.play("wave", false);
+    engine.update_skeletons(0.6f);
+    CHECK(skel.fired("half") && skel.animation() == "wave");
+    int arm = skel.bone("arm");
+    skel.set_root(ov::Transform{{100, 0}});
+    CHECK(arm == 1 && skel.bone_world(arm).pos.x == 110);
+    bool no_dance = false;
+    try {
+        skel.play("dance");
+    } catch (const ov::Error &) {
+        no_dance = true;
+    }
+    CHECK(no_dance);
+    skel.set_attachment("arm", "");
+    skel.draw(target);
+
     std::printf("smoke_cpp: ok\n");
     return 0;
 }
