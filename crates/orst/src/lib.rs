@@ -35,6 +35,7 @@ pub mod post;
 pub mod render;
 pub mod rng;
 pub mod scenes;
+pub mod schema;
 pub mod shapes;
 pub mod skeleton;
 pub mod text;

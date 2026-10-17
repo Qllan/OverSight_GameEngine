@@ -30,6 +30,7 @@ POINTERS = {
     "const void": "IntPtr", "OrstEntity": "[In, Out] ulong[]?", "uint8_t": "[In, Out] byte[]?", "OrstBinding": "out Binding",
     "const OrstVec2": "Vec2[]", "OrstOverlap": "out Overlap", "OrstContact": "out Contact", "OrstVec2": "[In, Out] Vec2[]?", "OrstEntityHit": "out EntityHit",
     "const OrstCamera": "Camera[]?", "const OrstEffect": "Effect[]?",
+    "const OrstField": "NativeField[]", "OrstField": "out NativeField",
 }
 KEYWORDS = {"base", "in", "out", "string", "object", "params", "fixed", "event", "lock"}
 
@@ -59,6 +60,15 @@ internal struct MapObjectData
     public byte Point, Visible;
     public float Rotation;
     public uint Gid, Layer;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeField
+{
+    public IntPtr Name;
+    public uint Type, Offset, Flags;
+    public float Min, Max;
+    public IntPtr Options;
 }
 
 internal static class Native

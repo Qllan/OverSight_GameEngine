@@ -5,6 +5,7 @@
 
 use crate::collision::Contacts;
 use crate::ecs::World;
+use crate::schema::{Field, FieldType, FLAG_ANGLE, FLAG_LAYERS};
 use crate::shapes::{rotate, Shape};
 use crate::types::{Color, Rect, Vec2};
 
@@ -285,6 +286,125 @@ pub fn register(world: &mut World) {
         ],
         "built-ins come first"
     );
+    for (id, fields) in builtin_fields() {
+        world.set_fields(id, fields).expect("built-in fields");
+    }
+}
+
+/// What the editor shows of the built-ins. Body contacts are left out:
+/// the engine works them out every move.
+fn builtin_fields() -> Vec<(u32, Vec<Field>)> {
+    use std::mem::offset_of;
+    use FieldType as T;
+    let at = |offset: usize| offset as u32;
+    vec![
+        (
+            TRANSFORM,
+            vec![
+                Field::new("pos", T::Vec2, at(offset_of!(Transform, pos))),
+                Field::new("rotation", T::F32, at(offset_of!(Transform, rotation)))
+                    .flags(FLAG_ANGLE),
+                Field::new("scale", T::Vec2, at(offset_of!(Transform, scale))),
+            ],
+        ),
+        (
+            VELOCITY,
+            vec![
+                Field::new("linear", T::Vec2, at(offset_of!(Velocity, linear))),
+                Field::new("angular", T::F32, at(offset_of!(Velocity, angular))).flags(FLAG_ANGLE),
+            ],
+        ),
+        (
+            SPRITE_RENDERER,
+            vec![
+                Field::new(
+                    "texture",
+                    T::Texture,
+                    at(offset_of!(SpriteRenderer, texture)),
+                ),
+                Field::new("src", T::Rect, at(offset_of!(SpriteRenderer, src))),
+                Field::new("origin", T::Vec2, at(offset_of!(SpriteRenderer, origin))),
+                Field::new("tint", T::Color, at(offset_of!(SpriteRenderer, tint))),
+                Field::new("layer", T::I32, at(offset_of!(SpriteRenderer, layer))),
+                Field::new("flip_x", T::Bool, at(offset_of!(SpriteRenderer, flip_x))),
+                Field::new("flip_y", T::Bool, at(offset_of!(SpriteRenderer, flip_y))),
+                Field::new("hidden", T::Bool, at(offset_of!(SpriteRenderer, hidden))),
+                Field::new("y_sort", T::Bool, at(offset_of!(SpriteRenderer, y_sort))),
+            ],
+        ),
+        (
+            BODY,
+            vec![
+                Field::new("bounds", T::Rect, at(offset_of!(Body, bounds))),
+                Field::new("tilemap", T::Tilemap, at(offset_of!(Body, tilemap))),
+            ],
+        ),
+        (
+            COLLIDER,
+            vec![
+                Field::new("kind", T::U32, at(offset_of!(Collider, kind)))
+                    .options(&["Box", "Circle", "Polygon"]),
+                Field::new("polygon", T::Polygon, at(offset_of!(Collider, polygon))),
+                Field::new("offset", T::Vec2, at(offset_of!(Collider, offset))),
+                Field::new("size", T::Vec2, at(offset_of!(Collider, size))),
+                Field::new("radius", T::F32, at(offset_of!(Collider, radius))),
+                Field::new("layer", T::U32, at(offset_of!(Collider, layer))).flags(FLAG_LAYERS),
+                Field::new("mask", T::U32, at(offset_of!(Collider, mask))).flags(FLAG_LAYERS),
+                Field::new("trigger", T::Bool, at(offset_of!(Collider, trigger))),
+            ],
+        ),
+        (
+            RIGIDBODY,
+            vec![
+                Field::new("kind", T::U32, at(offset_of!(RigidBody, kind))).options(&[
+                    "Dynamic",
+                    "Fixed",
+                    "Kinematic",
+                ]),
+                Field::new("density", T::F32, at(offset_of!(RigidBody, density))),
+                Field::new("friction", T::F32, at(offset_of!(RigidBody, friction))).range(0.0, 1.0),
+                Field::new(
+                    "restitution",
+                    T::F32,
+                    at(offset_of!(RigidBody, restitution)),
+                )
+                .range(0.0, 1.0),
+                Field::new(
+                    "linear_damping",
+                    T::F32,
+                    at(offset_of!(RigidBody, linear_damping)),
+                ),
+                Field::new(
+                    "angular_damping",
+                    T::F32,
+                    at(offset_of!(RigidBody, angular_damping)),
+                ),
+                Field::new(
+                    "gravity_scale",
+                    T::F32,
+                    at(offset_of!(RigidBody, gravity_scale)),
+                ),
+                Field::new(
+                    "fixed_rotation",
+                    T::Bool,
+                    at(offset_of!(RigidBody, fixed_rotation)),
+                ),
+                Field::new("bullet", T::Bool, at(offset_of!(RigidBody, bullet))),
+            ],
+        ),
+        (
+            LIGHT,
+            vec![
+                Field::new("offset", T::Vec2, at(offset_of!(Light, offset))),
+                Field::new("color", T::Color, at(offset_of!(Light, color))),
+                Field::new("intensity", T::F32, at(offset_of!(Light, intensity))),
+                Field::new("radius", T::F32, at(offset_of!(Light, radius))),
+                Field::new("height", T::F32, at(offset_of!(Light, height))).range(0.0, 1.0),
+                Field::new("softness", T::F32, at(offset_of!(Light, softness))),
+                Field::new("shadows", T::Bool, at(offset_of!(Light, shadows))),
+            ],
+        ),
+    ]
 }
 
 /// The default value of a built-in component as bytes (scale 1, white
@@ -339,5 +459,39 @@ mod tests {
         let mut w = World::new();
         register(&mut w);
         assert_eq!(w.component_id("Body"), Some(BODY));
+    }
+
+    #[test]
+    fn built_ins_describe_their_fields() {
+        use crate::schema::Value;
+        let mut w = World::new();
+        register(&mut w);
+        let e = w.spawn();
+        write(&mut w, e, COLLIDER, &Collider::default());
+        assert!(w.set_field(e, COLLIDER, "kind", Value::U32(COLLIDER_CIRCLE)));
+        assert!(w.set_field(e, COLLIDER, "radius", Value::F32(6.0)));
+        let c: Collider = read(&w, e, COLLIDER).unwrap();
+        assert_eq!((c.kind, c.radius, c.mask), (COLLIDER_CIRCLE, 6.0, u32::MAX));
+        write(&mut w, e, SPRITE_RENDERER, &SpriteRenderer::default());
+        assert_eq!(
+            w.field(e, SPRITE_RENDERER, "tint"),
+            Some(Value::Color(Color::WHITE))
+        );
+        assert!(!w.set_field(e, SPRITE_RENDERER, "tint", Value::F32(1.0)));
+        assert!(!w.set_field(e, SPRITE_RENDERER, "nope", Value::F32(1.0)));
+        let mut saved = Vec::new();
+        w.save(&mut saved);
+        w.load(&saved).unwrap();
+        assert_eq!(w.fields(LIGHT).len(), 7, "a restore keeps the fields");
+        // Every byte is described but padding and Body's contacts
+        let left = [0, 0, 0, 4, 3, 2, 3];
+        for (id, left) in (TRANSFORM..=LIGHT).zip(left) {
+            let described: u32 = w.fields(id).iter().map(|f| f.ty.size()).sum();
+            assert_eq!(
+                w.storage(id).unwrap().size - described,
+                left,
+                "component {id}"
+            );
+        }
     }
 }

@@ -343,6 +343,43 @@ bool orst_remove(OrstEngine *e, OrstEntity entity, uint32_t component);
 uint32_t orst_query(OrstEngine *e, const uint32_t *components, uint32_t count, OrstEntity *out, uint32_t capacity);
 void orst_world_clear(OrstEngine *e); /* despawn everything; component types stay */
 
+/* What is inside a component, for tools: the editor's inspector shows a
+ * widget per field, scene files store fields by name, undo changes one
+ * field. Built-ins come described; a game's component works without it,
+ * tools then see bytes. Setting fields again replaces them. Fields must
+ * lie inside the component without overlapping.
+ *     OrstField f[] = {{"speed", ORST_FIELD_F32, offsetof(Enemy, speed), 0, 0, 10},
+ *                      {"mode", ORST_FIELD_U32, offsetof(Enemy, mode), 0, 0, 0, "Walk|Run"}};
+ *     orst_set_fields(e, enemy, f, 2); */
+#define ORST_FIELD_F32 1
+#define ORST_FIELD_I32 2
+#define ORST_FIELD_U32 3
+#define ORST_FIELD_BOOL 4    /* one byte */
+#define ORST_FIELD_VEC2 5
+#define ORST_FIELD_COLOR 6
+#define ORST_FIELD_RECT 7
+#define ORST_FIELD_ENTITY 8  /* OrstEntity */
+#define ORST_FIELD_TEXTURE 9 /* resource ids (uint32_t); scenes store asset paths */
+#define ORST_FIELD_TILEMAP 10
+#define ORST_FIELD_POLYGON 11
+#define ORST_FIELD_U8 12
+#define ORST_FIELD_ANGLE 1  /* flags: an f32 in radians, shown in degrees */
+#define ORST_FIELD_LAYERS 2 /* a u32 of layer bits */
+
+typedef struct OrstField {
+    const char *name;
+    uint32_t type;   /* ORST_FIELD_... */
+    uint32_t offset; /* offsetof(Component, field) */
+    uint32_t flags;
+    float min, max;      /* a slider when min < max */
+    const char *options; /* a number that is a choice: "Walk|Run" names 0, 1; NULL: none */
+} OrstField;
+
+bool orst_set_fields(OrstEngine *e, uint32_t component, const OrstField *fields, uint32_t count);
+uint32_t orst_field_count(OrstEngine *e, uint32_t component);
+/* The strings stay valid until the next orst_get_field */
+bool orst_get_field(OrstEngine *e, uint32_t component, uint32_t index, OrstField *out);
+
 /* Built-in components: every engine registers them first, so these ids
  * are fixed. orst_update_motion moves entities with a Transform and a
  * Velocity; with a Body on a tile map they slide along walls instead.

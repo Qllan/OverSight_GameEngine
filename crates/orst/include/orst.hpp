@@ -13,6 +13,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
@@ -912,6 +913,36 @@ public:
         for (Entity en : query<Ts...>()) each_one<Ts...>(f, en, ids, std::index_sequence_for<Ts...>{});
     }
     void clear_world() { orst_world_clear(e_); }
+
+    /// What is inside T, for tools (see orst_set_fields):
+    ///     engine.set_fields<Enemy>({{"speed", ORST_FIELD_F32, offsetof(Enemy, speed), 0, 0, 10}});
+    template <class T>
+    void set_fields(std::initializer_list<OrstField> fields) {
+        if (!orst_set_fields(e_, component<T>(), fields.begin(), uint32_t(fields.size())))
+            throw Error(orst_last_error());
+    }
+    struct FieldInfo {
+        std::string name;
+        uint32_t type, offset, flags;
+        float min, max;
+        std::vector<std::string> options;
+    };
+    std::vector<FieldInfo> fields(uint32_t component) {
+        std::vector<FieldInfo> out;
+        uint32_t n = orst_field_count(e_, component);
+        for (uint32_t i = 0; i < n; ++i) {
+            OrstField f;
+            if (!orst_get_field(e_, component, i, &f)) break;
+            FieldInfo info{f.name, f.type, f.offset, f.flags, f.min, f.max, {}};
+            for (std::string rest = f.options ? f.options : ""; !rest.empty();) {
+                size_t bar = rest.find('|');
+                info.options.push_back(rest.substr(0, bar));
+                rest = bar == std::string::npos ? "" : rest.substr(bar + 1);
+            }
+            out.push_back(std::move(info));
+        }
+        return out;
+    }
     /// Move entities with Transform + Velocity by dt; with a Body on a tile
     /// map they slide along walls
     void update_motion(float dt) { orst_update_motion(e_, dt); }

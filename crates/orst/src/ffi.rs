@@ -21,6 +21,7 @@ use crate::engine::{Engine, InputEvent};
 use crate::gamepad::{GamepadAxis, GamepadButton};
 use crate::input::{key_from_u32, Key, MouseButton};
 use crate::particles::EmitterConfig;
+use crate::schema::{Field, FieldType};
 use crate::tilemap::{LayerDraw, Orientation, Property, Tilemap};
 use crate::tween::{self, Ease, Repeat};
 use crate::types::{Color, Rect, Space, Sprite, Vec2};
@@ -29,6 +30,8 @@ use crate::types::{Color, Rect, Space, Sprite, Vec2};
 pub struct OrstEngine {
     engine: Engine,
     text: CString,
+    /// Name and options of the field orst_get_field returned last
+    field_text: (CString, CString),
 }
 
 #[repr(C)]
@@ -199,6 +202,7 @@ pub unsafe extern "C" fn orst_engine_create(config: *const OrstConfig) -> *mut O
         Ok(engine) => Box::into_raw(Box::new(OrstEngine {
             engine,
             text: CString::default(),
+            field_text: Default::default(),
         })),
         Err(e) => {
             set_error(e);
@@ -790,6 +794,89 @@ pub extern "C" fn orst_debug_colliders(e: *mut OrstEngine) {
 #[no_mangle]
 pub extern "C" fn orst_world_clear(e: *mut OrstEngine) {
     engine!(e).world.clear();
+}
+
+#[repr(C)]
+pub struct OrstField {
+    pub name: *const c_char,
+    pub ty: u32,
+    pub offset: u32,
+    pub flags: u32,
+    pub min: f32,
+    pub max: f32,
+    pub options: *const c_char,
+}
+
+/// # Safety
+/// `fields` points at `count` fields whose strings are NULL or
+/// NUL-terminated
+#[no_mangle]
+pub unsafe extern "C" fn orst_set_fields(
+    e: *mut OrstEngine,
+    component: u32,
+    fields: *const OrstField,
+    count: u32,
+) -> bool {
+    let engine = engine!(e, false);
+    let fields = if fields.is_null() || count == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(fields, count as usize)
+    };
+    let mut out = Vec::with_capacity(fields.len());
+    for f in fields {
+        let Some(ty) = FieldType::from_u32(f.ty) else {
+            set_error(format!("field {:?}: unknown type {}", string(f.name), f.ty));
+            return false;
+        };
+        let mut field = Field::new(string(f.name), ty, f.offset)
+            .flags(f.flags)
+            .range(f.min, f.max);
+        let options = string(f.options);
+        if !options.is_empty() {
+            field.options = options.split('|').map(str::to_string).collect();
+        }
+        out.push(field);
+    }
+    result(engine.world.set_fields(component, out).map(|_| true), false)
+}
+
+#[no_mangle]
+pub extern "C" fn orst_field_count(e: *mut OrstEngine, component: u32) -> u32 {
+    engine!(e, 0).world.fields(component).len() as u32
+}
+
+/// # Safety
+/// `out` is NULL or points at a field to fill
+#[no_mangle]
+pub unsafe extern "C" fn orst_get_field(
+    e: *mut OrstEngine,
+    component: u32,
+    index: u32,
+    out: *mut OrstField,
+) -> bool {
+    let Some(h) = e.as_mut() else { return false };
+    let Some(f) = h.engine.world.fields(component).get(index as usize) else {
+        return false;
+    };
+    let text = |s: &str| CString::new(s.replace('\0', "")).unwrap_or_default();
+    h.field_text = (text(&f.name), text(&f.options.join("|")));
+    if let Some(out) = out.as_mut() {
+        *out = OrstField {
+            name: h.field_text.0.as_ptr(),
+            ty: f.ty as u32,
+            offset: f.offset,
+            flags: f.flags,
+            min: f.min,
+            max: f.max,
+            options: if f.options.is_empty() {
+                std::ptr::null()
+            } else {
+                h.field_text.1.as_ptr()
+            },
+        };
+    }
+    true
 }
 
 #[no_mangle]

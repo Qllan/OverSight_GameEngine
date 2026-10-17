@@ -67,6 +67,7 @@ public sealed partial class Engine
         uint size = (uint)sizeof(T);
         uint align = (uint)(sizeof(AlignOf<T>) - sizeof(T));
         id = Check(Native.orst_component(Handle, name, size, align), "component " + name);
+        DescribeFields<T>(id);
         components[typeof(T)] = id;
         return id;
     }

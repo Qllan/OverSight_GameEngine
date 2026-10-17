@@ -1,4 +1,5 @@
 /* Headless smoke test of the C API: draws, collides and checks pixels. */
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -107,6 +108,17 @@ int main(void) {
     CHECK(orst_query(e, both, 2, found, 4) == 1 && found[0] == ents[1]);
     CHECK(orst_despawn(e, ents[1]) && !orst_alive(e, ents[1]) && orst_get(e, ents[1], pos) == NULL);
     CHECK(orst_query(e, &pos, 1, NULL, 0) == 2 && orst_entity_count(e) == 2);
+
+    /* Fields: what is inside a component, for tools */
+    OrstField pos_fields[] = {{"x", ORST_FIELD_F32, offsetof(Pos, x), 0, 0, 100, NULL},
+                              {"y", ORST_FIELD_U32, offsetof(Pos, y), 0, 0, 0, "Up|Down"}};
+    CHECK(orst_set_fields(e, pos, pos_fields, 2) && orst_field_count(e, pos) == 2);
+    OrstField got;
+    CHECK(orst_get_field(e, pos, 1, &got) && strcmp(got.name, "y") == 0 && strcmp(got.options, "Up|Down") == 0);
+    CHECK(orst_get_field(e, ORST_TRANSFORM, 0, &got) && strcmp(got.name, "pos") == 0 && got.type == ORST_FIELD_VEC2);
+    CHECK(!orst_get_field(e, pos, 2, &got) && orst_field_count(e, tag) == 0);
+    OrstField past = {"z", ORST_FIELD_F32, sizeof(Pos), 0, 0, 0, NULL};
+    CHECK(!orst_set_fields(e, pos, &past, 1) && orst_field_count(e, pos) == 2); /* past the end: refused */
 
     /* Snapshot, change the world, restore: back as it was */
     size_t size = orst_snapshot(e, NULL, 0);

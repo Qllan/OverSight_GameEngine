@@ -26,6 +26,15 @@ internal struct MapObjectData
     public uint Gid, Layer;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeField
+{
+    public IntPtr Name;
+    public uint Type, Offset, Flags;
+    public float Min, Max;
+    public IntPtr Options;
+}
+
 internal static class Native
 {
     private const string Lib = "orst";
@@ -70,6 +79,9 @@ internal static class Native
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_remove(IntPtr e, ulong entity, uint component);
     [DllImport(Lib)] internal static extern uint orst_query(IntPtr e, uint[] components, uint count, [In, Out] ulong[]? @out, uint capacity);
     [DllImport(Lib)] internal static extern void orst_world_clear(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_set_fields(IntPtr e, uint component, NativeField[] fields, uint count);
+    [DllImport(Lib)] internal static extern uint orst_field_count(IntPtr e, uint component);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_get_field(IntPtr e, uint component, uint index, out NativeField @out);
     [DllImport(Lib)] internal static extern void orst_update_motion(IntPtr e, float dt);
     [DllImport(Lib)] internal static extern void orst_draw_entities(IntPtr e);
     [DllImport(Lib)] internal static extern uint orst_create_polygon(IntPtr e, Vec2[] points, uint count);

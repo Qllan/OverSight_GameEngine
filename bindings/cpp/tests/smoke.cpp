@@ -135,6 +135,11 @@ int main() {
     CHECK(engine.get<Pos>(b)->x == 5 && engine.get<Vel>(b) == nullptr);
     CHECK((engine.query<Pos>().size() == 2 && engine.query<Pos, Vel>().size() == 1));
     CHECK(engine.remove<Vel>(a) && !engine.has<Vel>(a));
+    engine.set_fields<Vel>({{"x", ORST_FIELD_F32, offsetof(Vel, x), ORST_FIELD_ANGLE, 0, 0, nullptr}});
+    auto vel_fields = engine.fields(engine.component<Vel>());
+    CHECK(vel_fields.size() == 1 && vel_fields[0].name == "x" && vel_fields[0].flags == ORST_FIELD_ANGLE);
+    auto collider = engine.fields(ORST_COLLIDER);
+    CHECK(collider[0].name == "kind" && collider[0].options.size() == 3 && collider[0].options[2] == "Polygon");
     auto saved = engine.snapshot();
     engine.despawn(b);
     engine.restore(saved);

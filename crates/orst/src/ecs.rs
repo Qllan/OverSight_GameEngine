@@ -12,6 +12,7 @@
 //! order. Every operation is deterministic: the same calls in the same
 //! order give the same ids and the same iteration order.
 
+use crate::schema::{Field, Value};
 use std::collections::HashMap;
 
 /// `(generation << 32) | index`. Never 0, so 0 means "no entity". A
@@ -49,6 +50,8 @@ pub struct Storage {
     pub name: String,
     pub size: u32,
     pub align: u32,
+    /// What is inside, for tools; empty: unknown
+    pub fields: Vec<Field>,
     /// Bytes from one row to the next: size rounded up to the alignment
     stride: usize,
     data: Vec<Block>,
@@ -65,6 +68,7 @@ impl Storage {
             name: name.to_string(),
             size,
             align,
+            fields: Vec::new(),
             stride,
             data: Vec::new(),
             dense: Vec::new(),
@@ -226,6 +230,48 @@ impl World {
         self.storages.get_mut((component as usize).wrapping_sub(1))
     }
 
+    /// Describe what is inside a component (see schema.rs), replacing
+    /// what was said before
+    pub fn set_fields(&mut self, component: u32, fields: Vec<Field>) -> Result<(), String> {
+        let s = self
+            .storage_mut(component)
+            .ok_or_else(|| format!("no component {component}"))?;
+        crate::schema::check(&s.name, s.size, &fields)?;
+        s.fields = fields;
+        Ok(())
+    }
+
+    /// The fields of a component; empty when unknown
+    pub fn fields(&self, component: u32) -> &[Field] {
+        self.storage(component).map_or(&[], |s| &s.fields[..])
+    }
+
+    /// One field of an entity's component by name
+    pub fn field(&self, e: Entity, component: u32, name: &str) -> Option<Value> {
+        let f = self.fields(component).iter().find(|f| f.name == name)?;
+        Some(f.read(self.get(e, component)?))
+    }
+
+    /// Change one field of an entity's component; false when the entity,
+    /// component or field is missing or the value is of another type
+    pub fn set_field(&mut self, e: Entity, component: u32, name: &str, value: Value) -> bool {
+        let Some(f) = self
+            .fields(component)
+            .iter()
+            .find(|f| f.name == name)
+            .cloned()
+        else {
+            return false;
+        };
+        let size = self.storage(component).map_or(0, |s| s.size as usize);
+        let Some(p) = self.ptr(e, component) else {
+            return false;
+        };
+        // Safety: ptr points at this entity's row of `size` bytes
+        let bytes = unsafe { std::slice::from_raw_parts_mut(p, size) };
+        f.write(bytes, value)
+    }
+
     pub fn spawn(&mut self) -> Entity {
         let index = match self.free.pop() {
             Some(i) => i,
@@ -385,7 +431,10 @@ impl World {
             storages: self
                 .storages
                 .iter()
-                .map(|s| Storage::new(&s.name, s.size, s.align))
+                .map(|s| Storage {
+                    fields: s.fields.clone(),
+                    ..Storage::new(&s.name, s.size, s.align)
+                })
                 .collect(),
             by_name: self.by_name.clone(),
             ..World::default()

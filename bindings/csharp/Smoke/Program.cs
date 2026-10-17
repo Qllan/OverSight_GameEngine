@@ -109,6 +109,12 @@ engine.ForEach((Entity _, ref Pos p, ref Vel v) => { p.X += v.X; p.Y += v.Y; });
 Check(engine.Get<Pos>(a).X == 1 && engine.Get<Pos>(a).Y == 2, "ForEach writes in place");
 engine.Get<Pos>(b).X = 7;
 Check(engine.Get<Pos>(b).X == 7 && !engine.Has<Vel>(b), "Get by ref");
+var enemyFields = engine.Fields<Enemy>();
+Check(string.Join(",", enemyFields.Select(f => $"{f.Name}@{f.Offset}")) == "Awake@0,Speed@4,Mood@8,Facing@12,Target@16",
+      $"C# fields describe themselves: {string.Join(",", enemyFields.Select(f => $"{f.Name}@{f.Offset}"))}");
+Check(enemyFields[1].Max == 10 && enemyFields[2].Options.SequenceEqual(["Calm", "Angry"]) && enemyFields[3].Flags == FieldFlags.Angle,
+      "field hints");
+Check(engine.Fields<Transform>()[0].Name == "pos", "built-ins keep the engine's field names");
 Check(engine.Query<Pos>().Length == 2 && engine.Query<Pos, Vel>().Single() == a, "queries");
 var saved = engine.Snapshot();
 ulong hash = engine.StateHash;
@@ -275,5 +281,18 @@ using (var skel = engine.CreateSkeleton(rig))
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }
+enum Mood { Calm, Angry }
+#pragma warning disable CS0649
+struct Enemy
+{
+    public bool Awake;
+    [Range(0, 10)] public float Speed;
+    public Mood Mood;
+    [Angle] public float Facing;
+    public Entity Target;
+    [Hidden] public int Secret;
+    public double NotDescribed;
+}
+#pragma warning restore CS0649
 struct Vel { public float X, Y; }
 [Component("Renamed")] struct Named { public double D; public byte B; }
