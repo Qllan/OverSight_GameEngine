@@ -128,6 +128,9 @@ engine.Set(cam, new Camera2D(2f));
 engine.Step(0.5f);
 Check(engine.Component<Camera2D>() == 10 && engine.Component<SpriteAnimator>() == 9
       && Marshal.SizeOf<SpriteAnimator>() == 36 && engine.Camera.Center.X == 30f && engine.Camera.Zoom == 2f, "Step and Camera2D");
+engine.Set(cam, new ParticleEmitter());
+engine.Step(0.5f);
+Check(engine.Component<ParticleEmitter>() == 11 && Marshal.SizeOf<ParticleEmitter>() == 108, "ParticleEmitter");
 engine.Despawn(cam);
 Check(engine.Query<Pos>().Length == 2 && engine.Query<Pos, Vel>().Single() == a, "queries");
 var saved = engine.Snapshot();

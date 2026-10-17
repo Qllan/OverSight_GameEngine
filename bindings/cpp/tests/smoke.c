@@ -128,7 +128,7 @@ int main(void) {
         OrstTransform t = {{0, 0}, 0, {1, 1}};
         OrstVelocity v = {{60, 0}, 0};
         OrstCamera2D c = {2.0f, 1, {0, 0, 0}};
-        CHECK(sizeof(OrstSpriteAnimator) == 36 && sizeof(OrstCamera2D) == 8);
+        CHECK(sizeof(OrstSpriteAnimator) == 36 && sizeof(OrstCamera2D) == 8 && sizeof(OrstParticleEmitter) == 108);
         orst_set(e, cam, ORST_TRANSFORM, &t);
         orst_set(e, cam, ORST_VELOCITY, &v);
         orst_set(e, cam, ORST_CAMERA_2D, &c);

@@ -149,6 +149,9 @@ int main() {
         engine.set(cam, orst::Camera2D(2.0f));
         engine.step(0.5f);
         CHECK(engine.camera().center.x == 30.0f && engine.camera().zoom == 2.0f);
+        engine.set(cam, orst::ParticleEmitter());
+        engine.step(0.1f);
+        CHECK(sizeof(orst::ParticleEmitter) == 108);
         engine.despawn(cam);
         engine.set_camera(before);
     }

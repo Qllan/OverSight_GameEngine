@@ -357,6 +357,21 @@ public struct SpriteAnimator
     public bool Playing { readonly get => playing != 0; set => playing = (byte)(value ? 1 : 0); }
 }
 
+/// <summary>Particles that follow the entity: Step runs an emitter at its
+/// position (Config.Angle turned with it), DrawEntities draws them. Living
+/// particles are looks, not game state: snapshots leave them out.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct ParticleEmitter
+{
+    public EmitterConfig Config;
+    private byte emitting, pad0, pad1, pad2;
+
+    public ParticleEmitter() : this(new EmitterConfig()) { }
+    public ParticleEmitter(EmitterConfig config) { Config = config; emitting = 1; }
+
+    public bool Emitting { readonly get => emitting != 0; set => emitting = (byte)(value ? 1 : 0); }
+}
+
 /// <summary>Makes the entity the camera: Step centres the view on it,
 /// turned with it, at this zoom. The first current one wins.</summary>
 [StructLayout(LayoutKind.Sequential)]

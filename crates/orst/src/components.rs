@@ -19,6 +19,7 @@ pub const LIGHT: u32 = 7;
 pub const NAME: u32 = 8;
 pub const SPRITE_ANIMATOR: u32 = 9;
 pub const CAMERA_2D: u32 = 10;
+pub const PARTICLE_EMITTER: u32 = 11;
 
 pub const BODY_DYNAMIC: u32 = 0;
 pub const BODY_FIXED: u32 = 1;
@@ -379,6 +380,28 @@ impl Default for Camera2D {
     }
 }
 
+/// Particles that follow the entity: Engine::step runs an emitter at its
+/// position, its direction turned with the entity, and draw_entities
+/// draws them. Living particles are not part of the world (they are
+/// looks, not game state), so a restore does not bring them back.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ParticleEmitter {
+    pub config: crate::particles::EmitterConfig,
+    pub emitting: u8,
+    pub _pad: [u8; 3],
+}
+
+impl Default for ParticleEmitter {
+    fn default() -> Self {
+        ParticleEmitter {
+            config: Default::default(),
+            emitting: 1,
+            _pad: [0; 3],
+        }
+    }
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -401,6 +424,11 @@ pub fn register(world: &mut World) {
             4,
         ),
         world.component("Camera2D", size(std::mem::size_of::<Camera2D>()), 4),
+        world.component(
+            "ParticleEmitter",
+            size(std::mem::size_of::<ParticleEmitter>()),
+            4,
+        ),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -418,7 +446,8 @@ pub fn register(world: &mut World) {
             LIGHT,
             NAME,
             SPRITE_ANIMATOR,
-            CAMERA_2D
+            CAMERA_2D,
+            PARTICLE_EMITTER
         ],
         "built-ins come first"
     );
@@ -563,6 +592,43 @@ fn builtin_fields() -> Vec<(u32, Vec<Field>)> {
                 Field::new("current", T::Bool, at(offset_of!(Camera2D, current))),
             ],
         ),
+        (PARTICLE_EMITTER, emitter_fields()),
+    ]
+}
+
+fn emitter_fields() -> Vec<Field> {
+    use crate::particles::EmitterConfig as C;
+    use std::mem::offset_of;
+    use FieldType as T;
+    let base = offset_of!(ParticleEmitter, config);
+    let at = |offset: usize| (base + offset) as u32;
+    vec![
+        Field::new(
+            "emitting",
+            T::Bool,
+            offset_of!(ParticleEmitter, emitting) as u32,
+        ),
+        Field::new("texture", T::Texture, at(offset_of!(C, texture))),
+        Field::new("src", T::Rect, at(offset_of!(C, src))),
+        Field::new("rate", T::F32, at(offset_of!(C, rate))),
+        Field::new("max", T::U32, at(offset_of!(C, max))),
+        Field::new("life_min", T::F32, at(offset_of!(C, life_min))),
+        Field::new("life_max", T::F32, at(offset_of!(C, life_max))),
+        Field::new("speed_min", T::F32, at(offset_of!(C, speed_min))),
+        Field::new("speed_max", T::F32, at(offset_of!(C, speed_max))),
+        Field::new("angle", T::F32, at(offset_of!(C, angle))).flags(FLAG_ANGLE),
+        Field::new("spread", T::F32, at(offset_of!(C, spread))).flags(FLAG_ANGLE),
+        Field::new("gravity", T::Vec2, at(offset_of!(C, gravity))),
+        Field::new("drag", T::F32, at(offset_of!(C, drag))).range(0.0, 10.0),
+        Field::new("size_start", T::F32, at(offset_of!(C, size_start))),
+        Field::new("size_end", T::F32, at(offset_of!(C, size_end))),
+        Field::new("spin_min", T::F32, at(offset_of!(C, spin_min))).flags(FLAG_ANGLE),
+        Field::new("spin_max", T::F32, at(offset_of!(C, spin_max))).flags(FLAG_ANGLE),
+        Field::new("color_start", T::Color, at(offset_of!(C, color_start))),
+        Field::new("color_end", T::Color, at(offset_of!(C, color_end))),
+        Field::new("area", T::Vec2, at(offset_of!(C, area))),
+        Field::new("layer", T::I32, at(offset_of!(C, layer))),
+        Field::new("seed", T::U32, at(offset_of!(C, seed))),
     ]
 }
 
@@ -585,6 +651,7 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         NAME => Some(bytes(Name::default())),
         SPRITE_ANIMATOR => Some(bytes(SpriteAnimator::default())),
         CAMERA_2D => Some(bytes(Camera2D::default())),
+        PARTICLE_EMITTER => Some(bytes(ParticleEmitter::default())),
         _ => None,
     }
 }
@@ -653,6 +720,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<Name>(), 64);
         assert_eq!(std::mem::size_of::<SpriteAnimator>(), 36);
         assert_eq!(std::mem::size_of::<Camera2D>(), 8);
+        assert_eq!(std::mem::size_of::<ParticleEmitter>(), 108);
         let mut w = World::new();
         register(&mut w);
         assert_eq!(w.component_id("Body"), Some(BODY));
@@ -686,8 +754,8 @@ mod tests {
         let long = "я".repeat(40); // 80 bytes: cut to 32 letters
         assert_eq!(Name::new(&long).as_str(), "я".repeat(32));
         // Every byte is described but padding and Body's contacts
-        let left = [0, 0, 0, 4, 3, 2, 3, 0, 3, 3];
-        for (id, left) in (TRANSFORM..=CAMERA_2D).zip(left) {
+        let left = [0, 0, 0, 4, 3, 2, 3, 0, 3, 3, 3];
+        for (id, left) in (TRANSFORM..=PARTICLE_EMITTER).zip(left) {
             let described: u32 = w.fields(id).iter().map(|f| f.ty.size()).sum();
             assert_eq!(
                 w.storage(id).unwrap().size - described,

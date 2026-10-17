@@ -57,6 +57,8 @@ pub struct Engine {
     pub fonts: Store<Font>,
     pub tilemaps: Store<Tilemap>,
     pub emitters: Store<Emitter>,
+    /// The particles of ParticleEmitter entities, by entity
+    pub entity_emitters: std::collections::BTreeMap<u64, Emitter>,
     pub gpu_emitters: Store<GpuEmitter>,
     /// Loaded skeleton files, shared by the skeletons made from them
     pub skeleton_data: Store<std::sync::Arc<SkeletonData>>,
@@ -132,6 +134,7 @@ impl Engine {
             fonts,
             tilemaps: Store::default(),
             emitters: Store::default(),
+            entity_emitters: Default::default(),
             gpu_emitters: Store::default(),
             skeleton_data: Store::default(),
             skeletons: Store::default(),
@@ -447,7 +450,36 @@ impl Engine {
         self.physics_step(dt);
         self.update_collisions();
         self.animate_sprites(dt);
+        self.update_entity_particles(dt);
         self.follow_camera();
+    }
+
+    /// Run the emitter of every ParticleEmitter entity for dt at its
+    /// position; emitters of entities that lost the component go
+    pub fn update_entity_particles(&mut self, dt: f32) {
+        use crate::components::{read, ParticleEmitter, Transform, PARTICLE_EMITTER, TRANSFORM};
+        let ents = self.world.query(&[PARTICLE_EMITTER, TRANSFORM]);
+        for &ent in &ents {
+            let (Some(p), Some(t)) = (
+                read::<ParticleEmitter>(&self.world, ent, PARTICLE_EMITTER),
+                read::<Transform>(&self.world, ent, TRANSFORM),
+            ) else {
+                continue;
+            };
+            let mut config = p.config;
+            config.angle += t.rotation;
+            let em = self
+                .entity_emitters
+                .entry(ent)
+                .or_insert_with(|| Emitter::new(config, t.pos));
+            if em.config != config {
+                em.set_config(config);
+            }
+            em.pos = t.pos;
+            em.emitting = p.emitting != 0;
+            em.update(dt);
+        }
+        self.entity_emitters.retain(|e, _| ents.contains(e));
     }
 
     /// Advance every playing SpriteAnimator by dt and set the src of its
@@ -608,6 +640,12 @@ impl Engine {
                 depth: if s.y_sort != 0 { t.pos.y } else { 0.0 },
             };
             self.draw_sprite(s.texture, &sprite);
+        }
+        for (&ent, em) in &self.entity_emitters {
+            if self.world.alive(ent) {
+                let src = particle_src(&self.textures, &em.config);
+                em.draw(&mut self.renderer, src, self.state.depth, self.state.space);
+            }
         }
     }
 
@@ -1306,14 +1344,7 @@ impl Engine {
     /// The texture region particles show (the whole texture when the
     /// config's is empty)
     fn particle_src(&self, c: &EmitterConfig) -> Rect {
-        if c.src.w > 0.0 && c.src.h > 0.0 {
-            return c.src;
-        }
-        let (w, h) = self
-            .textures
-            .get(c.texture)
-            .map_or((0, 0), |t| (t.width(), t.height()));
-        Rect::new(0.0, 0.0, w as f32, h as f32)
+        particle_src(&self.textures, c)
     }
 
     /// An emitter for huge numbers of particles: only their births are
@@ -1542,6 +1573,18 @@ impl Engine {
         self.sync_canvas();
         self.renderer.pixel(x, y)
     }
+}
+
+/// The texture region particles show (the whole texture when the
+/// config's is empty)
+fn particle_src(textures: &Store<Texture>, c: &EmitterConfig) -> Rect {
+    if c.src.w > 0.0 && c.src.h > 0.0 {
+        return c.src;
+    }
+    let (w, h) = textures
+        .get(c.texture)
+        .map_or((0, 0), |t| (t.width(), t.height()));
+    Rect::new(0.0, 0.0, w as f32, h as f32)
 }
 
 #[cfg(test)]

@@ -397,6 +397,7 @@ bool orst_get_field(OrstEngine *e, uint32_t component, uint32_t index, OrstField
 #define ORST_NAME 8
 #define ORST_SPRITE_ANIMATOR 9
 #define ORST_CAMERA_2D 10
+#define ORST_PARTICLE_EMITTER 11
 
 typedef struct OrstTransform {
     OrstVec2 pos;
@@ -505,6 +506,15 @@ typedef struct OrstCamera2D {
     uint8_t pad_[3];
 } OrstCamera2D;
 
+/* Particles that follow the entity: orst_step runs an emitter at its
+ * position (config.angle turned with it), orst_draw_entities draws them.
+ * Living particles are looks, not game state: snapshots leave them out. */
+typedef struct OrstParticleEmitter {
+    OrstEmitter config;
+    uint8_t emitting;
+    uint8_t pad_[3];
+} OrstParticleEmitter;
+
 /* How two shapes overlap: move the second by normal * depth and they only touch */
 typedef struct OrstOverlap {
     OrstVec2 normal; /* from the first towards the second */
@@ -513,7 +523,7 @@ typedef struct OrstOverlap {
 
 void orst_update_motion(OrstEngine *e, float dt); /* dt: orst_tick_dt in fixed ticks */
 /* One tick of every built-in system: motion, bodies with mass, collisions,
- * sprite animators, then the camera follows the current OrstCamera2D. Call
+ * sprite animators, entity particles, then the camera follows the current OrstCamera2D. Call
  * it once per fixed tick after the game's own logic. */
 void orst_step(OrstEngine *e, float dt);
 void orst_draw_entities(OrstEngine *e);
