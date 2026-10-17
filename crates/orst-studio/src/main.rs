@@ -5,6 +5,8 @@
 mod app;
 mod console;
 mod editor;
+mod history;
+mod inspector;
 mod project;
 mod scene_view;
 

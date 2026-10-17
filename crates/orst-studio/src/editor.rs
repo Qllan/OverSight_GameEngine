@@ -4,6 +4,8 @@
 
 use crate::console::Console;
 use crate::egui;
+use crate::history::History;
+use crate::inspector::{self, Action};
 use crate::project::Project;
 use crate::scene_view::{self, SceneView};
 use orst::components::{write, Name, Transform, NAME, TRANSFORM};
@@ -32,8 +34,7 @@ pub struct Editor {
     /// The edited scene; Err when the engine could not start
     pub scene: Result<SceneView, String>,
     pub selected: Option<Entity>,
-    /// The Name field while it is being typed
-    name_edit: String,
+    pub history: History,
 }
 
 impl Editor {
@@ -55,7 +56,7 @@ impl Editor {
             selected_asset: None,
             scene,
             selected: None,
-            name_edit: String::new(),
+            history: History::default(),
         }
     }
 
@@ -63,6 +64,8 @@ impl Editor {
     pub fn create_entity(&mut self) {
         let Ok(view) = &mut self.scene else { return };
         let engine = &mut view.engine;
+        self.history.record(&engine.world);
+        self.history.close();
         let e = engine.world.spawn();
         let t = Transform {
             pos: engine.camera().center,
@@ -75,6 +78,8 @@ impl Editor {
 
     pub fn delete_selected(&mut self) {
         if let (Ok(view), Some(e)) = (&mut self.scene, self.selected) {
+            self.history.record(&view.engine.world);
+            self.history.close();
             view.engine.world.despawn(e);
         }
         self.select(None);
@@ -82,12 +87,23 @@ impl Editor {
 
     fn select(&mut self, e: Option<Entity>) {
         self.selected = e;
-        self.name_edit = match (&self.scene, e) {
-            (Ok(view), Some(e)) => orst::components::read::<Name>(&view.engine.world, e, NAME)
-                .map(|n| n.as_str().to_string())
-                .unwrap_or_default(),
-            _ => String::new(),
+    }
+
+    /// Undo (or redo) the last change to the scene
+    pub fn undo(&mut self, redo: bool) {
+        let Ok(view) = &mut self.scene else { return };
+        let world = &mut view.engine.world;
+        let done = if redo {
+            self.history.redo(world)
+        } else {
+            self.history.undo(world)
         };
+        if let Err(e) = done {
+            self.console.error(format!("Undo failed: {e}"));
+        }
+        if self.selected.is_some_and(|e| !world.alive(e)) {
+            self.selected = None;
+        }
     }
 
     /// One frame of the editor; `close` asks to go back to the hub
@@ -105,6 +121,26 @@ impl Editor {
                     }
                     if ui.button("Close project").clicked() {
                         *close = true;
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add_enabled(
+                            self.history.can_undo(),
+                            egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                        )
+                        .clicked()
+                    {
+                        self.undo(false);
+                    }
+                    if ui
+                        .add_enabled(
+                            self.history.can_redo(),
+                            egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                        )
+                        .clicked()
+                    {
+                        self.undo(true);
                     }
                 });
                 ui.menu_button("Entity", |ui| {
@@ -202,8 +238,32 @@ impl Editor {
             }
         });
         let typing = ui.ctx().egui_wants_keyboard_input();
-        if !typing && self.selected.is_some() && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
-            self.delete_selected();
+        if !typing {
+            let (undo, redo, delete) = ui.input_mut(|i| {
+                let z = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
+                let y = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+                let shift_z = egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Z,
+                );
+                let redo = i.consume_shortcut(&y) || i.consume_shortcut(&shift_z);
+                (
+                    i.consume_shortcut(&z),
+                    redo,
+                    i.key_pressed(egui::Key::Delete),
+                )
+            });
+            if undo || redo {
+                self.undo(redo);
+            }
+            if delete && self.selected.is_some() {
+                self.delete_selected();
+            }
+        }
+        // A drag or a field being typed in is one step of undo
+        let busy = ui.input(|i| i.pointer.any_down()) || ui.memory(|m| m.focused().is_some());
+        if !busy {
+            self.history.close();
         }
     }
 
@@ -236,21 +296,33 @@ impl Editor {
         let (Ok(view), Some(e)) = (&mut self.scene, self.selected) else {
             return;
         };
-        let world = &mut view.engine.world;
-        if !world.alive(e) {
+        if !view.engine.world.alive(e) {
             self.selected = None;
             return;
         }
-        ui.horizontal(|ui| {
-            ui.label("Name");
-            if ui.text_edit_singleline(&mut self.name_edit).changed() {
-                write(world, e, NAME, &Name::new(&self.name_edit));
-            }
-        });
-        ui.separator();
-        for id in 1..=world.component_types() {
-            if id != NAME && world.has(e, id) {
-                ui.label(world.storage(id).map_or("?", |s| s.name.as_str()));
+        let actions = inspector::ui(ui, &view.engine, e);
+        if actions.is_empty() {
+            return;
+        }
+        let world = &mut view.engine.world;
+        self.history.record(world);
+        for action in actions {
+            match action {
+                Action::Set {
+                    component,
+                    field,
+                    value,
+                } => {
+                    world.set_field(e, component, &field, value);
+                }
+                Action::Add(id) => {
+                    inspector::add_component(world, e, id);
+                    self.history.close();
+                }
+                Action::Remove(id) => {
+                    world.remove(e, id);
+                    self.history.close();
+                }
             }
         }
     }
@@ -326,6 +398,63 @@ impl Tree {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn editor(name: &str) -> Editor {
+        let root = crate::project::temp_dir(name);
+        let project = Project::create(&root, "Test", crate::project::Language::CSharp).unwrap();
+        Editor::new(project, Console::default(), None)
+    }
+
+    fn frame(ctx: &egui::Context, editor: &mut Editor) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut close = false;
+        let mut out = ctx.run_ui(input, |ui| editor.ui(ui, None, &mut close));
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn every_component_shows_in_the_inspector() {
+        let mut ed = editor("inspector");
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        for id in 1..=world.component_types() {
+            inspector::add_component(world, e, id);
+        }
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            frame(&ctx, &mut ed);
+        }
+        assert!(
+            !ed.console
+                .lines
+                .iter()
+                .any(|l| l.level == crate::console::Level::Error),
+            "the scene view started"
+        );
+    }
+
+    #[test]
+    fn creating_and_deleting_entities_undo() {
+        let mut ed = editor("undo");
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        ed.delete_selected();
+        let alive = |ed: &Editor| ed.scene.as_ref().unwrap().engine.world.alive(e);
+        assert!(!alive(&ed));
+        ed.undo(false);
+        assert!(alive(&ed));
+        ed.undo(false);
+        assert!(!alive(&ed) && ed.scene.as_ref().unwrap().engine.world.count() == 0);
+        ed.undo(true);
+        assert!(alive(&ed));
+    }
 
     #[test]
     fn asset_paths_become_a_tree() {
