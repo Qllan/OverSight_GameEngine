@@ -7,6 +7,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../OverSight/OverSight.csproj" />
+    <ProjectReference Include="../ORST/ORST.csproj" />
   </ItemGroup>
 </Project>

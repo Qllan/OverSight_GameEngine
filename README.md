@@ -1,6 +1,6 @@
 # Visual Novel Engine - 2D Game Engine with Block-based Visual Logic
 
-> This repository also holds **OverSight 2D**, a 2D game runtime for C++ and C# games: see [crates/oversight/README.md](crates/oversight/README.md).
+> This repository also holds **ORST Game Engine**, a 2D game engine for C++ and C# games: see [crates/orst/README.md](crates/orst/README.md).
 
 ## Architecture Overview
 

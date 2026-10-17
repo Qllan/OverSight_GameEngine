@@ -1,9 +1,9 @@
 // Platformer: run, jump, land on one-way planks, reach the flag.
 // A/D or arrows to run, Space/W/Up to jump; or a gamepad: stick and A. Falling into a pit respawns.
-using OverSight;
+using ORST;
 
 var opt = Sample.Parse(args);
-using var engine = new Engine(Sample.Window("OverSight: платформер", opt));
+using var engine = new Engine(Sample.Window("ORST: платформер", opt));
 using var map = engine.LoadTilemap(Path.Combine(opt.Assets, "platformer.tmj"));
 using var hero = engine.LoadTexture(Path.Combine(opt.Assets, "hero.png"));
 var frames = hero.Sheet(16, 16);

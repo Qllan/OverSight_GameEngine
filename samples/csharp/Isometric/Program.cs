@@ -1,10 +1,10 @@
 // Isometric: step from cell to cell around stone blocks; the mouse shows
 // the cell under it. WASD or arrows move one cell (W/Up is up-right on
 // screen, A/Left up-left). Blocks and the hero are y-sorted together.
-using OverSight;
+using ORST;
 
 var opt = Sample.Parse(args);
-using var engine = new Engine(Sample.Window("OverSight: изометрия", opt));
+using var engine = new Engine(Sample.Window("ORST: изометрия", opt));
 using var map = engine.LoadTilemap(Path.Combine(opt.Assets, "iso.tmj"));
 using var hero = engine.LoadTexture(Path.Combine(opt.Assets, "hero.png"));
 var frames = hero.Sheet(16, 16);

@@ -1,5 +1,5 @@
 using System.Runtime.InteropServices;
-using OverSight;
+using ORST;
 
 static void Check(bool ok, string what)
 {
@@ -9,7 +9,7 @@ static void Check(bool ok, string what)
 using var engine = new Engine(new Config("Smoke", 64, 64) { Headless = true, TargetFps = 0 });
 
 try { engine.LoadTexture("missing.png"); Check(false, "missing texture throws"); }
-catch (OverSightException e) { Check(e.Message.Contains("missing.png"), "error names the file"); }
+catch (OrstException e) { Check(e.Message.Contains("missing.png"), "error names the file"); }
 
 var white = new byte[8 * 8 * 4];
 Array.Fill(white, (byte)255);
@@ -117,7 +117,7 @@ Check(engine.StateHash != hash, "the hash follows the state");
 engine.Restore(saved);
 Check(engine.Alive(a) && engine.Get<Pos>(a).X == 1 && engine.StateHash == hash, "restore");
 try { engine.Restore(new byte[] { 1, 2, 3 }); Check(false, "bad snapshot throws"); }
-catch (OverSightException) { Check(engine.Alive(a), "a failed restore changes nothing"); }
+catch (OrstException) { Check(engine.Alive(a), "a failed restore changes nothing"); }
 engine.Despawn(a);
 var n = engine.Spawn();
 engine.Set(n, new Named { D = 1.5, B = 2 }); // 16 bytes aligned to 8
@@ -205,7 +205,7 @@ engine.LoadBindings("jump = pad1:LeftY-");
 Check(engine.Bindings(jump).Single() == Binding.Axis(PadAxis.LeftY, -1, 1), "LoadBindings");
 Check(engine.BindingText(engine.Bindings(jump)[0]) == "pad1:LeftY-", "BindingText");
 try { engine.LoadBindings("jump = nope"); Check(false, "a bad line throws"); }
-catch (OverSightException) { Check(engine.Bindings(jump).Length == 1, "a bad line changes nothing"); }
+catch (OrstException) { Check(engine.Bindings(jump).Length == 1, "a bad line changes nothing"); }
 
 // Render targets and post effects: a red target on screen, then greyed
 engine.Debug = false;
@@ -232,9 +232,9 @@ using (var shader = engine.CreateShader(
     "fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> { return load(vec2<i32>(pixel)); }"))
     Check(shader.Id != 0, "CreateShader");
 try { engine.CreateShader("fn effect() {}"); Check(false, "a bad shader throws"); }
-catch (OverSightException) { }
+catch (OrstException) { }
 try { engine.SetEffects(new Effect { Kind = (EffectKind)42 }); Check(false, "a bad effect throws"); }
-catch (OverSightException) { }
+catch (OrstException) { }
 engine.Shake(4, 0.2f);
 
 // Lighting: one light in the dark
@@ -267,7 +267,7 @@ using (var skel = engine.CreateSkeleton(rig))
     skel.Root = new Transform(new Vec2(100, 0));
     Check(arm == 1 && skel.BoneWorld(arm).Pos.X == 110, "Skeleton bones");
     var noDance = false;
-    try { skel.Play("dance"); } catch (OverSightException) { noDance = true; }
+    try { skel.Play("dance"); } catch (OrstException) { noDance = true; }
     Check(noDance, "Skeleton errors");
     skel.SetAttachment("arm", null);
 }

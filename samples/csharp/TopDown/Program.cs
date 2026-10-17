@@ -1,9 +1,9 @@
 // Top-down: walk around a garden, bump into walls and crates, read a sign.
 // WASD, arrows or a gamepad stick to walk. Tiles and the hero are y-sorted together.
-using OverSight;
+using ORST;
 
 var opt = Sample.Parse(args);
-using var engine = new Engine(Sample.Window("OverSight: вид сверху", opt));
+using var engine = new Engine(Sample.Window("ORST: вид сверху", opt));
 using var map = engine.LoadTilemap(Path.Combine(opt.Assets, "topdown.tmj"));
 using var hero = engine.LoadTexture(Path.Combine(opt.Assets, "hero.png"));
 var frames = hero.Sheet(16, 16);

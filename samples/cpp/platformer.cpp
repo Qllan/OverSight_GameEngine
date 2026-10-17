@@ -4,27 +4,27 @@
 
 int main(int argc, char **argv) try {
     Options opt = parse_options(argc, argv);
-    ov::Engine engine(window("OverSight: платформер", opt));
-    ov::Tilemap map = engine.load_tilemap(opt.assets + "/platformer.tmj");
-    ov::Texture hero = engine.load_texture(opt.assets + "/hero.png");
-    ov::SpriteSheet frames = hero.sheet(16, 16);
-    OvTilemapInfo info = map.info();
+    orst::Engine engine(window("ORST: платформер", opt));
+    orst::Tilemap map = engine.load_tilemap(opt.assets + "/platformer.tmj");
+    orst::Texture hero = engine.load_texture(opt.assets + "/hero.png");
+    orst::SpriteSheet frames = hero.sheet(16, 16);
+    OrstTilemapInfo info = map.info();
     const float map_w = float(info.width * info.tile_w), map_h = float(info.height * info.tile_h);
 
-    ov::Vec2 spawn{40, 190};
+    orst::Vec2 spawn{40, 190};
     if (auto p = map.find_object("player")) spawn = {p->rect.x, p->rect.y};
-    ov::Rect goal{};
+    orst::Rect goal{};
     if (auto g = map.find_object("goal")) goal = g->rect;
 
     const float gravity = 900, run_speed = 110, jump_speed = 300;
-    ov::Rect box{spawn.x - 5, spawn.y - 14, 10, 14};
-    ov::Vec2 vel{};
+    orst::Rect box{spawn.x - 5, spawn.y - 14, 10, 14};
+    orst::Vec2 vel{};
     float since_ground = 1, jump_buffer = 1, run_time = 0;
     bool left = false, won = false;
-    ov::Animation run = ov::Animation::range(8, 4, 10.0f);
+    orst::Animation run = orst::Animation::range(8, 4, 10.0f);
 
     // Dust from the feet: a trail while running, a puff on landing
-    ov::EmitterConfig dust_cfg;
+    orst::EmitterConfig dust_cfg;
     dust_cfg.rate = 14;
     dust_cfg.max = 80;
     dust_cfg.life_min = 0.25f;
@@ -36,20 +36,20 @@ int main(int argc, char **argv) try {
     dust_cfg.drag = 3;
     dust_cfg.size_start = 4;
     dust_cfg.size_end = 1;
-    dust_cfg.color_start = ov::Color(235, 225, 205, 200);
-    dust_cfg.color_end = ov::Color(235, 225, 205, 0);
+    dust_cfg.color_start = orst::Color(235, 225, 205, 200);
+    dust_cfg.color_end = orst::Color(235, 225, 205, 0);
     dust_cfg.area = {3, 0};
     dust_cfg.layer = 4;
-    ov::Emitter dust = engine.create_emitter(dust_cfg);
+    orst::Emitter dust = engine.create_emitter(dust_cfg);
 
     // Run right, hop over the crate, then over the pit
-    Script script{{{5, ov::Key::D, true}, {66, ov::Key::Space, true}, {82, ov::Key::Space, false},
-                   {100, ov::Key::Space, true}, {116, ov::Key::Space, false}}};
+    Script script{{{5, orst::Key::D, true}, {66, orst::Key::Space, true}, {82, orst::Key::Space, false},
+                   {100, orst::Key::Space, true}, {116, orst::Key::Space, false}}};
     int frame = 0;
     while (next_frame(engine, opt, script, frame)) {
         float dt = engine.dt();
-        float dir = engine.axis(ov::Key::A, ov::Key::D) + engine.axis(ov::Key::Left, ov::Key::Right) +
-                    engine.pad_axis(0, ov::PadAxis::LeftX);
+        float dir = engine.axis(orst::Key::A, orst::Key::D) + engine.axis(orst::Key::Left, orst::Key::Right) +
+                    engine.pad_axis(0, orst::PadAxis::LeftX);
         dir = clampf(dir, -1, 1);
         vel.x = dir * run_speed;
         if (dir != 0) left = dir < 0;
@@ -58,20 +58,20 @@ int main(int argc, char **argv) try {
         // Forgiving jumps: a little after leaving a ledge, a little before landing
         since_ground += dt;
         jump_buffer += dt;
-        if (engine.key_pressed(ov::Key::Space) || engine.key_pressed(ov::Key::W) || engine.key_pressed(ov::Key::Up) ||
-            engine.pad_pressed(0, ov::Pad::South))
+        if (engine.key_pressed(orst::Key::Space) || engine.key_pressed(orst::Key::W) || engine.key_pressed(orst::Key::Up) ||
+            engine.pad_pressed(0, orst::Pad::South))
             jump_buffer = 0;
         if (jump_buffer < 0.12f && since_ground < 0.1f) {
             vel.y = -jump_speed;
             jump_buffer = since_ground = 1;
         }
         // Short hop when the button is let go early
-        bool held = engine.key_down(ov::Key::Space) || engine.key_down(ov::Key::W) || engine.key_down(ov::Key::Up) ||
-                    engine.pad_down(0, ov::Pad::South);
+        bool held = engine.key_down(orst::Key::Space) || engine.key_down(orst::Key::W) || engine.key_down(orst::Key::Up) ||
+                    engine.pad_down(0, orst::Pad::South);
         if (!held && vel.y < -jump_speed / 3) vel.y = -jump_speed / 3;
 
         vel.y = std::fmin(vel.y + gravity * dt, 500.0f);
-        ov::MoveResult r = map.move_box(box, vel * dt);
+        orst::MoveResult r = map.move_box(box, vel * dt);
         box = r.rect;
         if (r.contacts.ground) {
             if (since_ground > 0.2f) dust.burst(8);
@@ -85,15 +85,15 @@ int main(int argc, char **argv) try {
         }
         if (box.overlaps(goal)) won = true;
 
-        ov::Vec2 feet{box.x + box.w / 2, box.bottom()};
+        orst::Vec2 feet{box.x + box.w / 2, box.bottom()};
         dust.set_pos(feet);
         dust.set_emitting(since_ground == 0 && dir != 0);
         engine.update_emitters(dt);
         engine.look_at(follow(feet, map_w, map_h, 320, 180));
-        engine.begin_frame(ov::Color(90, 150, 210));
+        engine.begin_frame(orst::Color(90, 150, 210));
         map.draw();
         dust.draw();
-        ov::Sprite s;
+        orst::Sprite s;
         s.pos = feet;
         s.origin = {8, 16};
         s.flip_x = left;
@@ -102,16 +102,16 @@ int main(int argc, char **argv) try {
         uint32_t f = airborne ? 9 : (dir != 0 ? run.frame_at(run_time) : 8);
         engine.draw_frame(hero, frames, f, s);
 
-        engine.set_space(ov::Space::Screen);
+        engine.set_space(orst::Space::Screen);
         engine.set_layer(10);
-        engine.draw_text("A/D: бег, Space: прыжок", {4, 2}, 10, ov::Color::White);
-        if (won) engine.draw_text("Победа!", {120, 70}, 24, ov::Color(255, 230, 90));
-        engine.set_space(ov::Space::World);
+        engine.draw_text("A/D: бег, Space: прыжок", {4, 2}, 10, orst::Color::White);
+        if (won) engine.draw_text("Победа!", {120, 70}, 24, orst::Color(255, 230, 90));
+        engine.set_space(orst::Space::World);
         engine.set_layer(0);
         engine.end_frame();
     }
     return finish(engine, opt, "platformer");
-} catch (const ov::Error &e) {
+} catch (const orst::Error &e) {
     std::fprintf(stderr, "error: %s\n", e.what());
     return 1;
 }

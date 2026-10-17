@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="$(MSBuildThisFileDirectory)../../bindings/csharp/OverSight/OverSight.csproj" />
+    <ProjectReference Include="$(MSBuildThisFileDirectory)../../bindings/csharp/ORST/ORST.csproj" />
     <Compile Include="$(MSBuildThisFileDirectory)Common.cs" Link="Common.cs" />
     <None Include="$(MSBuildThisFileDirectory)../assets/*.png;$(MSBuildThisFileDirectory)../assets/*.tmj" LinkBase="assets" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
