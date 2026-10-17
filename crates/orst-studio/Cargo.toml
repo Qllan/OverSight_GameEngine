@@ -1,0 +1,16 @@
+[package]
+name = "orst-studio"
+version = "0.1.0"
+edition = "2021"
+description = "ORST Studio: the editor of ORST Game Engine"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "ORST"
+path = "src/main.rs"
+
+[dependencies]
+orst = { path = "../orst" }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

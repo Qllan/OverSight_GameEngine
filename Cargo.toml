@@ -23,4 +23,4 @@ default = []
 extension-module = ["pyo3/extension-module"]
 
 [workspace]
-members = [".", "crates/orst"]
+members = [".", "crates/orst", "crates/orst-studio"]

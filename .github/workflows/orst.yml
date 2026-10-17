@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - "crates/orst/**"
+      - "crates/orst-studio/**"
       - "bindings/**"
       - "samples/**"
       - ".github/workflows/orst.yml"
@@ -28,6 +29,11 @@ jobs:
 
       - name: Build orst.dll
         run: cargo build --release -p orst
+
+      - name: ORST Studio tests and ORST.exe
+        run: |
+          cargo test -p orst-studio
+          cargo build --release -p orst-studio
 
       - name: C and C++ smoke tests (MSVC)
         run: |
@@ -102,6 +108,11 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
+          name: orst-studio-windows-x64
+          path: target/release/ORST.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
           name: sample-screenshots
           path: shots
 
@@ -120,15 +131,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Format
-        run: cargo fmt -p orst --check
+        run: cargo fmt -p orst -p orst-studio --check
 
       - name: Clippy
-        run: cargo clippy -p orst --all-targets -- -D warnings
+        run: cargo clippy -p orst -p orst-studio --all-targets -- -D warnings
 
       - name: Rust tests
         env:
           ORST_REQUIRE_GPU: "1"
-        run: cargo test -p orst
+        run: cargo test -p orst -p orst-studio
 
       - uses: actions/setup-dotnet@v4
         with:
