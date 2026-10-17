@@ -1,5 +1,5 @@
 // Platformer: run, jump, land on one-way planks, reach the flag.
-// A/D or arrows to run, Space/W/Up to jump. Falling into a pit respawns.
+// A/D or arrows to run, Space/W/Up to jump; or a gamepad: stick and A. Falling into a pit respawns.
 #include "common.hpp"
 
 int main(int argc, char **argv) try {
@@ -48,7 +48,8 @@ int main(int argc, char **argv) try {
     int frame = 0;
     while (next_frame(engine, opt, script, frame)) {
         float dt = engine.dt();
-        float dir = engine.axis(ov::Key::A, ov::Key::D) + engine.axis(ov::Key::Left, ov::Key::Right);
+        float dir = engine.axis(ov::Key::A, ov::Key::D) + engine.axis(ov::Key::Left, ov::Key::Right) +
+                    engine.pad_axis(0, ov::PadAxis::LeftX);
         dir = clampf(dir, -1, 1);
         vel.x = dir * run_speed;
         if (dir != 0) left = dir < 0;
@@ -57,14 +58,16 @@ int main(int argc, char **argv) try {
         // Forgiving jumps: a little after leaving a ledge, a little before landing
         since_ground += dt;
         jump_buffer += dt;
-        if (engine.key_pressed(ov::Key::Space) || engine.key_pressed(ov::Key::W) || engine.key_pressed(ov::Key::Up))
+        if (engine.key_pressed(ov::Key::Space) || engine.key_pressed(ov::Key::W) || engine.key_pressed(ov::Key::Up) ||
+            engine.pad_pressed(0, ov::Pad::South))
             jump_buffer = 0;
         if (jump_buffer < 0.12f && since_ground < 0.1f) {
             vel.y = -jump_speed;
             jump_buffer = since_ground = 1;
         }
         // Short hop when the button is let go early
-        bool held = engine.key_down(ov::Key::Space) || engine.key_down(ov::Key::W) || engine.key_down(ov::Key::Up);
+        bool held = engine.key_down(ov::Key::Space) || engine.key_down(ov::Key::W) || engine.key_down(ov::Key::Up) ||
+                    engine.pad_down(0, ov::Pad::South);
         if (!held && vel.y < -jump_speed / 3) vel.y = -jump_speed / 3;
 
         vel.y = std::fmin(vel.y + gravity * dt, 500.0f);

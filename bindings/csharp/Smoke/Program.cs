@@ -70,6 +70,14 @@ engine.InjectKey(Key.Space, true);
 engine.Poll();
 Check(engine.KeyPressed(Key.Space), "injected key");
 
+engine.InjectGamepadConnected(1, true);
+engine.InjectPadButton(1, Pad.South, true);
+engine.InjectPadAxis(1, PadAxis.LeftY, -1f);
+engine.Poll();
+Check(engine.GamepadConnected(1) && engine.GamepadName(1) == "Injected", "gamepad connected");
+Check(engine.PadPressed(1, Pad.South) && !engine.PadDown(0, Pad.South), "gamepad button");
+Check(engine.PadStick(1).Y == -1f, "gamepad stick");
+
 engine.Debug = true;
 Check(engine.Debug, "debug on");
 engine.BeginFrame(Color.Black);

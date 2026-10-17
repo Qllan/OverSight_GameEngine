@@ -4,6 +4,7 @@
 //! "Pressed" and "released" are true only in the frame the change
 //! happened; "down" is true while held.
 
+use crate::gamepad::Gamepads;
 use crate::types::Vec2;
 
 /// Physical keys. Values are stable: they are part of the C API.
@@ -118,6 +119,7 @@ pub struct Input {
     pub wheel: f32,
     /// Text typed this frame (for name entry etc.)
     pub text: String,
+    pub gamepads: Gamepads,
 }
 
 impl Default for Input {
@@ -132,6 +134,7 @@ impl Default for Input {
             mouse: Vec2::default(),
             wheel: 0.0,
             text: String::new(),
+            gamepads: Gamepads::default(),
         }
     }
 }
@@ -145,6 +148,7 @@ impl Input {
         self.mouse_released = [false; 3];
         self.wheel = 0.0;
         self.text.clear();
+        self.gamepads.next_frame();
     }
 
     pub fn set_key(&mut self, key: Key, down: bool) {

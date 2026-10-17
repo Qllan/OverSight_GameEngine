@@ -86,6 +86,14 @@ int main() {
     engine.poll();
     CHECK(engine.key_pressed(ov::Key::Space));
 
+    engine.inject_gamepad_connected(1, true);
+    engine.inject_pad_button(1, ov::Pad::South, true);
+    engine.inject_pad_axis(1, ov::PadAxis::LeftY, -1.0f);
+    engine.poll();
+    CHECK(engine.gamepad_connected(1) && engine.gamepad_name(1) == "Injected");
+    CHECK(engine.pad_pressed(1, ov::Pad::South) && !engine.pad_down(0, ov::Pad::South));
+    CHECK(engine.pad_stick(1).y == -1.0f);
+
     // Debug overlay: drawn only while on, above the game
     engine.set_debug(true);
     CHECK(engine.debug());

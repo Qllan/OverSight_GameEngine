@@ -1,5 +1,5 @@
 // Top-down: walk around a garden, bump into walls and crates, read a sign.
-// WASD or arrows to walk. Tiles and the hero are y-sorted together.
+// WASD, arrows or a gamepad stick to walk. Tiles and the hero are y-sorted together.
 #include "common.hpp"
 
 int main(int argc, char **argv) try {
@@ -30,6 +30,7 @@ int main(int argc, char **argv) try {
         float dt = engine.dt();
         ov::Vec2 dir{engine.axis(ov::Key::A, ov::Key::D) + engine.axis(ov::Key::Left, ov::Key::Right),
                      engine.axis(ov::Key::W, ov::Key::S) + engine.axis(ov::Key::Up, ov::Key::Down)};
+        dir = dir + engine.pad_stick(0);  // first gamepad's left stick
         dir = {clampf(dir.x, -1, 1), clampf(dir.y, -1, 1)};
         float len = std::sqrt(dir.x * dir.x + dir.y * dir.y);
         if (len > 0) {

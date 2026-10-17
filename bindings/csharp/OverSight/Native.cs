@@ -87,6 +87,16 @@ internal static class Native
     [DllImport(Lib)] internal static extern void ov_inject_key(IntPtr e, int key, [MarshalAs(UnmanagedType.U1)] bool down);
     [DllImport(Lib)] internal static extern void ov_inject_mouse_button(IntPtr e, int button, [MarshalAs(UnmanagedType.U1)] bool down);
     [DllImport(Lib)] internal static extern void ov_inject_mouse_move(IntPtr e, Vec2 pos);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_gamepad_connected(IntPtr e, int gamepad);
+    [DllImport(Lib)] internal static extern nuint ov_gamepad_name(IntPtr e, int gamepad, byte[]? buf, nuint size);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_gamepad_down(IntPtr e, int gamepad, int button);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_gamepad_pressed(IntPtr e, int gamepad, int button);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_gamepad_released(IntPtr e, int gamepad, int button);
+    [DllImport(Lib)] internal static extern float ov_gamepad_axis(IntPtr e, int gamepad, int axis);
+    [DllImport(Lib)] internal static extern void ov_set_gamepad_deadzone(IntPtr e, float deadzone);
+    [DllImport(Lib)] internal static extern void ov_inject_gamepad_connected(IntPtr e, int gamepad, [MarshalAs(UnmanagedType.U1)] bool connected);
+    [DllImport(Lib)] internal static extern void ov_inject_gamepad_button(IntPtr e, int gamepad, int button, [MarshalAs(UnmanagedType.U1)] bool down);
+    [DllImport(Lib)] internal static extern void ov_inject_gamepad_axis(IntPtr e, int gamepad, int axis, float value);
     [DllImport(Lib)] internal static extern SpriteSheet ov_sheet_grid(uint texture_w, uint texture_h, uint frame_w, uint frame_h, uint margin, uint spacing);
     [DllImport(Lib)] internal static extern Rect ov_sheet_frame(SpriteSheet sheet, uint index);
     [DllImport(Lib)] internal static extern uint ov_anim_frame_at(uint[] frames, uint count, float fps, int mode, float time);

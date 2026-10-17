@@ -80,6 +80,15 @@ enum class Orientation : int32_t { Orthogonal = OV_ORTHOGONAL, Isometric = OV_IS
 enum class Mouse : int32_t { Left = OV_MOUSE_LEFT, Right = OV_MOUSE_RIGHT, Middle = OV_MOUSE_MIDDLE };
 enum class AnimMode : int32_t { Loop = OV_ANIM_LOOP, Once = OV_ANIM_ONCE, PingPong = OV_ANIM_PING_PONG };
 
+enum class Pad : int32_t {
+    South = OV_PAD_SOUTH, East, West, North,
+    LeftBumper, RightBumper,
+    Back, Start, Guide,
+    LeftStick, RightStick,
+    DPadUp, DPadDown, DPadLeft, DPadRight,
+};
+enum class PadAxis : int32_t { LeftX = OV_PAD_LEFT_X, LeftY, RightX, RightY, LeftTrigger, RightTrigger };
+
 enum class Key : int32_t {
     Unknown = OV_KEY_UNKNOWN,
     A = OV_KEY_A,
@@ -520,6 +529,26 @@ public:
     void inject_key(Key k, bool down) { ov_inject_key(e_, static_cast<int32_t>(k), down); }
     void inject_mouse_button(Mouse b, bool down) { ov_inject_mouse_button(e_, static_cast<int32_t>(b), down); }
     void inject_mouse_move(Vec2 p) { ov_inject_mouse_move(e_, p); }
+
+    // gamepads 0..3; sticks have y down, triggers are 0..1
+    bool gamepad_connected(int pad) const { return ov_gamepad_connected(e_, pad); }
+    std::string gamepad_name(int pad) const {
+        std::string s(ov_gamepad_name(e_, pad, nullptr, 0), '\0');
+        ov_gamepad_name(e_, pad, s.data(), s.size() + 1);
+        return s;
+    }
+    bool pad_down(int pad, Pad b) const { return ov_gamepad_down(e_, pad, static_cast<int32_t>(b)); }
+    bool pad_pressed(int pad, Pad b) const { return ov_gamepad_pressed(e_, pad, static_cast<int32_t>(b)); }
+    bool pad_released(int pad, Pad b) const { return ov_gamepad_released(e_, pad, static_cast<int32_t>(b)); }
+    float pad_axis(int pad, PadAxis a) const { return ov_gamepad_axis(e_, pad, static_cast<int32_t>(a)); }
+    /// Left stick as a vector (y down)
+    Vec2 pad_stick(int pad) const { return {pad_axis(pad, PadAxis::LeftX), pad_axis(pad, PadAxis::LeftY)}; }
+    void set_gamepad_deadzone(float dz) { ov_set_gamepad_deadzone(e_, dz); }
+    void inject_gamepad_connected(int pad, bool on) { ov_inject_gamepad_connected(e_, pad, on); }
+    void inject_pad_button(int pad, Pad b, bool down) {
+        ov_inject_gamepad_button(e_, pad, static_cast<int32_t>(b), down);
+    }
+    void inject_pad_axis(int pad, PadAxis a, float v) { ov_inject_gamepad_axis(e_, pad, static_cast<int32_t>(a), v); }
 
     // debug overlay: drawn on top only while on; F3 toggles it
     void set_debug(bool on) { ov_set_debug(e_, on); }

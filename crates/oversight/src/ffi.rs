@@ -16,6 +16,7 @@ use crate::anim::{AnimMode, Animation, SpriteSheet};
 use crate::camera::Camera;
 use crate::collision::{self, Contacts, MoveResult, RayHit};
 use crate::engine::{Engine, InputEvent};
+use crate::gamepad::{GamepadAxis, GamepadButton};
 use crate::input::{key_from_u32, MouseButton};
 use crate::particles::EmitterConfig;
 use crate::tilemap::{LayerDraw, Orientation, Property, Tilemap};
@@ -609,6 +610,89 @@ pub extern "C" fn ov_inject_mouse_button(e: *mut OvEngine, button: i32, down: bo
 #[no_mangle]
 pub extern "C" fn ov_inject_mouse_move(e: *mut OvEngine, pos: Vec2) {
     engine!(e).inject(InputEvent::MouseMove(pos));
+}
+
+// --- gamepads -------------------------------------------------------------------
+
+/// Slot from C; a negative one maps past the end, which reads as "off"
+fn pad(v: i32) -> usize {
+    usize::try_from(v).unwrap_or(usize::MAX)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gamepad_connected(e: *mut OvEngine, gamepad: i32) -> bool {
+    engine!(e, false).input.gamepads.connected(pad(gamepad))
+}
+
+/// # Safety
+/// `buf` is NULL or has room for `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn ov_gamepad_name(
+    e: *mut OvEngine,
+    gamepad: i32,
+    buf: *mut c_char,
+    size: usize,
+) -> usize {
+    let pads = &engine!(e, 0).input.gamepads;
+    let name = pads.pads.get(pad(gamepad)).map_or("", |p| p.name.as_str());
+    copy_out(name, buf, size)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gamepad_down(e: *mut OvEngine, gamepad: i32, button: i32) -> bool {
+    let pads = &engine!(e, false).input.gamepads;
+    GamepadButton::from_i32(button).is_some_and(|b| pads.down(pad(gamepad), b))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gamepad_pressed(e: *mut OvEngine, gamepad: i32, button: i32) -> bool {
+    let pads = &engine!(e, false).input.gamepads;
+    GamepadButton::from_i32(button).is_some_and(|b| pads.pressed(pad(gamepad), b))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gamepad_released(e: *mut OvEngine, gamepad: i32, button: i32) -> bool {
+    let pads = &engine!(e, false).input.gamepads;
+    GamepadButton::from_i32(button).is_some_and(|b| pads.released(pad(gamepad), b))
+}
+
+/// Stick -1..1 (y down) or trigger 0..1, after the dead zone
+#[no_mangle]
+pub extern "C" fn ov_gamepad_axis(e: *mut OvEngine, gamepad: i32, axis: i32) -> f32 {
+    let pads = &engine!(e, 0.0).input.gamepads;
+    GamepadAxis::from_i32(axis).map_or(0.0, |a| pads.axis(pad(gamepad), a))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_gamepad_deadzone(e: *mut OvEngine, deadzone: f32) {
+    engine!(e).input.gamepads.deadzone = deadzone;
+}
+
+#[no_mangle]
+pub extern "C" fn ov_inject_gamepad_connected(e: *mut OvEngine, gamepad: i32, connected: bool) {
+    engine!(e).inject(InputEvent::GamepadConnected(pad(gamepad), connected));
+}
+
+#[no_mangle]
+pub extern "C" fn ov_inject_gamepad_button(
+    e: *mut OvEngine,
+    gamepad: i32,
+    button: i32,
+    down: bool,
+) {
+    let engine = engine!(e);
+    if let Some(b) = GamepadButton::from_i32(button) {
+        engine.inject(InputEvent::GamepadButton(pad(gamepad), b, down));
+    }
+}
+
+/// Raw value before the dead zone: stick -1..1 with y down, trigger 0..1
+#[no_mangle]
+pub extern "C" fn ov_inject_gamepad_axis(e: *mut OvEngine, gamepad: i32, axis: i32, value: f32) {
+    let engine = engine!(e);
+    if let Some(a) = GamepadAxis::from_i32(axis) {
+        engine.inject(InputEvent::GamepadAxis(pad(gamepad), a, value));
+    }
 }
 
 // --- sprite sheets and animations --------------------------------------------
@@ -1484,6 +1568,20 @@ mod tests {
             ov_poll(e);
             assert!(ov_key_pressed(e, 1));
             assert_eq!(ov_axis(e, 1, 4), -1.0);
+
+            ov_inject_gamepad_connected(e, 2, true);
+            ov_inject_gamepad_button(e, 2, 0, true);
+            ov_inject_gamepad_axis(e, 2, 0, 1.0);
+            ov_poll(e);
+            assert!(ov_gamepad_connected(e, 2) && !ov_gamepad_connected(e, 0));
+            assert!(ov_gamepad_pressed(e, 2, 0) && ov_gamepad_down(e, 2, 0));
+            assert_eq!(ov_gamepad_axis(e, 2, 0), 1.0);
+            assert!(!ov_gamepad_down(e, -1, 0) && !ov_gamepad_down(e, 2, 99));
+            let mut name = [0 as c_char; 4];
+            assert_eq!(ov_gamepad_name(e, 2, name.as_mut_ptr(), 4), 8, "Injected");
+            ov_inject_gamepad_connected(e, 2, false);
+            ov_poll(e);
+            assert!(ov_gamepad_released(e, 2, 0) && ov_gamepad_axis(e, 2, 0) == 0.0);
             ov_engine_destroy(e);
         }
     }

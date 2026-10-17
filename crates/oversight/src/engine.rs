@@ -20,6 +20,7 @@ use crate::audio::Audio;
 use crate::camera::Camera;
 use crate::collision::{self, MoveResult, RayHit};
 use crate::debug::{DebugOverlay, Stats};
+use crate::gamepad::{GamepadAxis, GamepadButton};
 use crate::input::{Input, Key, MouseButton};
 use crate::particles::{Emitter, EmitterConfig};
 use crate::render::{DrawKind, Renderer, Shape};
@@ -56,6 +57,10 @@ pub struct Engine {
     pub audio: Audio,
     #[cfg(feature = "window")]
     pub window: Option<Window>,
+    /// Real controllers; only a windowed engine reads them, so tests and
+    /// headless runs depend on injected input alone
+    #[cfg(feature = "gamepad")]
+    gamepads: Option<crate::gamepad::Backend>,
     /// Input events injected by code, applied at the next poll
     injected: Vec<InputEvent>,
     quit: bool,
@@ -69,6 +74,11 @@ pub enum InputEvent {
     MouseButton(MouseButton, bool),
     MouseMove(Vec2),
     Wheel(f32),
+    /// Slot 0..3 plugged in or unplugged
+    GamepadConnected(usize, bool),
+    GamepadButton(usize, GamepadButton, bool),
+    /// Raw value, before the dead zone (y down, triggers 0..1)
+    GamepadAxis(usize, GamepadAxis, f32),
 }
 
 impl Engine {
@@ -91,6 +101,8 @@ impl Engine {
             audio: Audio::silent(),
             #[cfg(feature = "window")]
             window: None,
+            #[cfg(feature = "gamepad")]
+            gamepads: None,
             injected: Vec::new(),
             quit: false,
             last_error: None,
@@ -110,6 +122,14 @@ impl Engine {
             Ok(audio) => engine.audio = audio,
             Err(e) => engine.last_error = Some(format!("no sound: {}", e)),
         }
+        #[cfg(feature = "gamepad")]
+        match crate::gamepad::Backend::new(&mut engine.input.gamepads) {
+            Ok(b) => engine.gamepads = Some(b),
+            Err(e) => {
+                let msg = format!("no gamepads: {}", e);
+                engine.last_error.get_or_insert(msg);
+            }
+        }
         Ok(engine)
     }
 
@@ -125,8 +145,17 @@ impl Engine {
                 self.quit = true;
             }
         }
+        #[cfg(feature = "gamepad")]
+        if let Some(b) = self.gamepads.as_mut() {
+            b.pump(&mut self.input.gamepads);
+        }
         for event in std::mem::take(&mut self.injected) {
+            let pads = &mut self.input.gamepads;
             match event {
+                InputEvent::GamepadConnected(pad, true) => pads.connect(pad, "Injected"),
+                InputEvent::GamepadConnected(pad, false) => pads.disconnect(pad),
+                InputEvent::GamepadButton(pad, b, down) => pads.set_button(pad, b, down),
+                InputEvent::GamepadAxis(pad, axis, v) => pads.set_axis(pad, axis, v),
                 InputEvent::Key(key, down) => self.input.set_key(key, down),
                 InputEvent::MouseButton(b, down) => self.input.set_mouse_button(b, down),
                 InputEvent::MouseMove(p) => self.input.mouse = p,

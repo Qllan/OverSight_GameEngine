@@ -322,6 +322,26 @@ public sealed class Engine : IDisposable
     public void InjectMouseButton(MouseButton b, bool down) => Native.ov_inject_mouse_button(Handle, (int)b, down);
     public void InjectMouseMove(Vec2 p) => Native.ov_inject_mouse_move(Handle, p);
 
+    // gamepads 0..3; sticks have y down, triggers are 0..1
+    public bool GamepadConnected(int pad) => Native.ov_gamepad_connected(Handle, pad);
+    public string GamepadName(int pad)
+    {
+        var n = Native.ov_gamepad_name(Handle, pad, null, 0);
+        var buf = new byte[(int)n + 1];
+        Native.ov_gamepad_name(Handle, pad, buf, (nuint)buf.Length);
+        return Encoding.UTF8.GetString(buf, 0, (int)n);
+    }
+    public bool PadDown(int pad, Pad b) => Native.ov_gamepad_down(Handle, pad, (int)b);
+    public bool PadPressed(int pad, Pad b) => Native.ov_gamepad_pressed(Handle, pad, (int)b);
+    public bool PadReleased(int pad, Pad b) => Native.ov_gamepad_released(Handle, pad, (int)b);
+    public float PadAxis(int pad, PadAxis a) => Native.ov_gamepad_axis(Handle, pad, (int)a);
+    /// <summary>Left stick as a vector (y down)</summary>
+    public Vec2 PadStick(int pad) => new(PadAxis(pad, OverSight.PadAxis.LeftX), PadAxis(pad, OverSight.PadAxis.LeftY));
+    public float GamepadDeadzone { set => Native.ov_set_gamepad_deadzone(Handle, value); }
+    public void InjectGamepadConnected(int pad, bool on) => Native.ov_inject_gamepad_connected(Handle, pad, on);
+    public void InjectPadButton(int pad, Pad b, bool down) => Native.ov_inject_gamepad_button(Handle, pad, (int)b, down);
+    public void InjectPadAxis(int pad, PadAxis a, float v) => Native.ov_inject_gamepad_axis(Handle, pad, (int)a, v);
+
     // debug overlay: drawn on top only while on; F3 toggles it
     public bool Debug { get => Native.ov_debug_enabled(Handle); set => Native.ov_set_debug(Handle, value); }
     /// <summary>Key that toggles the overlay; null for none</summary>

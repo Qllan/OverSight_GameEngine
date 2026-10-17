@@ -1,5 +1,5 @@
 // Top-down: walk around a garden, bump into walls and crates, read a sign.
-// WASD or arrows to walk. Tiles and the hero are y-sorted together.
+// WASD, arrows or a gamepad stick to walk. Tiles and the hero are y-sorted together.
 using OverSight;
 
 var opt = Sample.Parse(args);
@@ -27,9 +27,10 @@ var script = new Sample.Script((10, Key.D, true), (70, Key.D, false), (70, Key.W
 while (script.Next(engine, opt))
 {
     float dt = engine.Dt;
+    var stick = engine.PadStick(0); // first gamepad's left stick
     var dir = new Vec2(
-        Math.Clamp(engine.Axis(Key.A, Key.D) + engine.Axis(Key.Left, Key.Right), -1, 1),
-        Math.Clamp(engine.Axis(Key.W, Key.S) + engine.Axis(Key.Up, Key.Down), -1, 1));
+        Math.Clamp(engine.Axis(Key.A, Key.D) + engine.Axis(Key.Left, Key.Right) + stick.X, -1, 1),
+        Math.Clamp(engine.Axis(Key.W, Key.S) + engine.Axis(Key.Up, Key.Down) + stick.Y, -1, 1));
     float len = MathF.Sqrt(dir.X * dir.X + dir.Y * dir.Y);
     if (len > 0)
     {

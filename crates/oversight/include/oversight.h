@@ -116,6 +116,20 @@ typedef enum OvSpace { OV_SPACE_WORLD = 0, OV_SPACE_SCREEN = 1 } OvSpace;
 typedef enum OvOrientation { OV_ORTHOGONAL = 0, OV_ISOMETRIC = 1 } OvOrientation;
 typedef enum OvMouseButton { OV_MOUSE_LEFT = 0, OV_MOUSE_RIGHT = 1, OV_MOUSE_MIDDLE = 2 } OvMouseButton;
 
+/* Gamepad buttons by position: SOUTH is A on Xbox, Cross on PlayStation */
+typedef enum OvGamepadButton {
+    OV_PAD_SOUTH = 0, OV_PAD_EAST, OV_PAD_WEST, OV_PAD_NORTH,
+    OV_PAD_LEFT_BUMPER, OV_PAD_RIGHT_BUMPER,
+    OV_PAD_BACK, OV_PAD_START, OV_PAD_GUIDE,
+    OV_PAD_LEFT_STICK, OV_PAD_RIGHT_STICK,
+    OV_PAD_DPAD_UP, OV_PAD_DPAD_DOWN, OV_PAD_DPAD_LEFT, OV_PAD_DPAD_RIGHT
+} OvGamepadButton;
+/* Sticks -1..1 with y pointing down (up is -1); triggers 0..1 */
+typedef enum OvGamepadAxis {
+    OV_PAD_LEFT_X = 0, OV_PAD_LEFT_Y, OV_PAD_RIGHT_X, OV_PAD_RIGHT_Y,
+    OV_PAD_LEFT_TRIGGER, OV_PAD_RIGHT_TRIGGER
+} OvGamepadAxis;
+
 /* Physical keys (WASD works on any layout) */
 typedef enum OvKey {
     OV_KEY_UNKNOWN = 0,
@@ -322,6 +336,18 @@ const char *ov_text_input(OvEngine *e); /* typed this frame; valid until the nex
 void ov_inject_key(OvEngine *e, int32_t key, bool down); /* applied at the next poll */
 void ov_inject_mouse_button(OvEngine *e, int32_t button, bool down);
 void ov_inject_mouse_move(OvEngine *e, OvVec2 pos);
+
+/* --- gamepads: up to 4, in slots 0..3 that a controller keeps until unplugged --- */
+bool ov_gamepad_connected(OvEngine *e, int32_t gamepad);
+size_t ov_gamepad_name(OvEngine *e, int32_t gamepad, char *buf, size_t size);
+bool ov_gamepad_down(OvEngine *e, int32_t gamepad, int32_t button);
+bool ov_gamepad_pressed(OvEngine *e, int32_t gamepad, int32_t button);  /* this frame only */
+bool ov_gamepad_released(OvEngine *e, int32_t gamepad, int32_t button);
+float ov_gamepad_axis(OvEngine *e, int32_t gamepad, int32_t axis);    /* after the dead zone */
+void ov_set_gamepad_deadzone(OvEngine *e, float deadzone);             /* default 0.15 */
+void ov_inject_gamepad_connected(OvEngine *e, int32_t gamepad, bool connected);
+void ov_inject_gamepad_button(OvEngine *e, int32_t gamepad, int32_t button, bool down);
+void ov_inject_gamepad_axis(OvEngine *e, int32_t gamepad, int32_t axis, float value); /* raw */
 
 /* --- sprite sheets and animations --- */
 OvSpriteSheet ov_sheet_grid(uint32_t texture_w, uint32_t texture_h, uint32_t frame_w, uint32_t frame_h,

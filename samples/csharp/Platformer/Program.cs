@@ -1,5 +1,5 @@
 // Platformer: run, jump, land on one-way planks, reach the flag.
-// A/D or arrows to run, Space/W/Up to jump. Falling into a pit respawns.
+// A/D or arrows to run, Space/W/Up to jump; or a gamepad: stick and A. Falling into a pit respawns.
 using OverSight;
 
 var opt = Sample.Parse(args);
@@ -28,7 +28,8 @@ using var dust = engine.CreateEmitter(new EmitterConfig
     ColorStart = new Color(235, 225, 205, 200), ColorEnd = new Color(235, 225, 205, 0),
     Area = new Vec2(3, 0), Layer = 4,
 });
-bool JumpKey(Func<Key, bool> state) => state(Key.Space) || state(Key.W) || state(Key.Up);
+bool JumpKey(Func<Key, bool> state, Func<int, Pad, bool> pad)
+    => state(Key.Space) || state(Key.W) || state(Key.Up) || pad(0, Pad.South);
 
 // Run right, hop over the crate, then over the pit
 var script = new Sample.Script((5, Key.D, true), (66, Key.Space, true), (82, Key.Space, false),
@@ -36,7 +37,7 @@ var script = new Sample.Script((5, Key.D, true), (66, Key.Space, true), (82, Key
 while (script.Next(engine, opt))
 {
     float dt = engine.Dt;
-    float dir = Math.Clamp(engine.Axis(Key.A, Key.D) + engine.Axis(Key.Left, Key.Right), -1, 1);
+    float dir = Math.Clamp(engine.Axis(Key.A, Key.D) + engine.Axis(Key.Left, Key.Right) + engine.PadAxis(0, PadAxis.LeftX), -1, 1);
     vel.X = dir * runSpeed;
     if (dir != 0) left = dir < 0;
     runTime = dir != 0 ? runTime + dt : 0;
@@ -44,14 +45,14 @@ while (script.Next(engine, opt))
     // Forgiving jumps: a little after leaving a ledge, a little before landing
     sinceGround += dt;
     jumpBuffer += dt;
-    if (JumpKey(engine.KeyPressed)) jumpBuffer = 0;
+    if (JumpKey(engine.KeyPressed, engine.PadPressed)) jumpBuffer = 0;
     if (jumpBuffer < 0.12f && sinceGround < 0.1f)
     {
         vel.Y = -jumpSpeed;
         jumpBuffer = sinceGround = 1;
     }
     // Short hop when the button is let go early
-    if (!JumpKey(engine.KeyDown) && vel.Y < -jumpSpeed / 3) vel.Y = -jumpSpeed / 3;
+    if (!JumpKey(engine.KeyDown, engine.PadDown) && vel.Y < -jumpSpeed / 3) vel.Y = -jumpSpeed / 3;
 
     vel.Y = MathF.Min(vel.Y + gravity * dt, 500);
     var r = map.MoveBox(box, vel * dt);

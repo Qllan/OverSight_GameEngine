@@ -148,6 +148,17 @@ public enum Repeat { Once = 0, Loop = 1, PingPong = 2 }
 public enum Space { World = 0, Screen = 1 }
 public enum Orientation { Orthogonal = 0, Isometric = 1 }
 public enum MouseButton { Left = 0, Right = 1, Middle = 2 }
+/// <summary>Gamepad buttons by position: South is A on Xbox, Cross on PlayStation</summary>
+public enum Pad
+{
+    South, East, West, North,
+    LeftBumper, RightBumper,
+    Back, Start, Guide,
+    LeftStick, RightStick,
+    DPadUp, DPadDown, DPadLeft, DPadRight,
+}
+/// <summary>Sticks -1..1 with y down (up is -1); triggers 0..1</summary>
+public enum PadAxis { LeftX, LeftY, RightX, RightY, LeftTrigger, RightTrigger }
 
 [StructLayout(LayoutKind.Sequential)]
 public struct Contacts
