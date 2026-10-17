@@ -1,0 +1,132 @@
+// P/Invoke declarations for oversight.h (generated from the header; keep
+// them in the same order).
+using System.Runtime.InteropServices;
+
+namespace OverSight;
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct NativeConfig
+{
+    public IntPtr Title;
+    public uint Width, Height;
+    public float Scale;
+    public byte Resizable, Fullscreen, IntegerScale;
+    public uint TargetFps;
+    public byte Headless;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct MapObjectData
+{
+    public uint Id;
+    public Rect Rect;
+    public byte Point, Visible;
+    public float Rotation;
+    public uint Gid, Layer;
+}
+
+internal static class Native
+{
+    private const string Lib = "oversight";
+
+    [DllImport(Lib)] internal static extern IntPtr ov_last_error();
+    [DllImport(Lib)] internal static extern IntPtr ov_engine_create(in NativeConfig config);
+    [DllImport(Lib)] internal static extern void ov_engine_destroy(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_poll(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_quit(IntPtr e);
+    [DllImport(Lib)] internal static extern float ov_dt(IntPtr e);
+    [DllImport(Lib)] internal static extern double ov_time(IntPtr e);
+    [DllImport(Lib)] internal static extern float ov_fps(IntPtr e);
+    [DllImport(Lib)] internal static extern ulong ov_frame(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_begin_frame(IntPtr e, Color clear);
+    [DllImport(Lib)] internal static extern void ov_end_frame(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_set_title(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string title);
+    [DllImport(Lib)] internal static extern void ov_set_fullscreen(IntPtr e, [MarshalAs(UnmanagedType.U1)] bool on);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_is_fullscreen(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_set_target_fps(IntPtr e, uint fps);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_has_window(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_canvas_size(IntPtr e, out uint w, out uint h);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_save_screenshot(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+    [DllImport(Lib)] internal static extern Color ov_pixel(IntPtr e, uint x, uint y);
+    [DllImport(Lib)] internal static extern uint ov_load_texture(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+    [DllImport(Lib)] internal static extern uint ov_texture_from_rgba(IntPtr e, uint width, uint height, byte[] rgba);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_texture_size(IntPtr e, uint texture, out uint w, out uint h);
+    [DllImport(Lib)] internal static extern void ov_set_texture_smooth(IntPtr e, uint texture, [MarshalAs(UnmanagedType.U1)] bool smooth);
+    [DllImport(Lib)] internal static extern void ov_free_texture(IntPtr e, uint texture);
+    [DllImport(Lib)] internal static extern uint ov_load_font(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+    [DllImport(Lib)] internal static extern void ov_free_font(IntPtr e, uint font);
+    [DllImport(Lib)] internal static extern Vec2 ov_measure_text(IntPtr e, uint font, [MarshalAs(UnmanagedType.LPUTF8Str)] string text, float size);
+    [DllImport(Lib)] internal static extern Camera ov_get_camera(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_set_camera(IntPtr e, Camera camera);
+    [DllImport(Lib)] internal static extern Vec2 ov_world_to_screen(IntPtr e, Vec2 p);
+    [DllImport(Lib)] internal static extern Vec2 ov_screen_to_world(IntPtr e, Vec2 p);
+    [DllImport(Lib)] internal static extern void ov_set_layer(IntPtr e, int layer);
+    [DllImport(Lib)] internal static extern void ov_set_depth(IntPtr e, float depth);
+    [DllImport(Lib)] internal static extern void ov_set_space(IntPtr e, int space);
+    [DllImport(Lib)] internal static extern void ov_set_antialias(IntPtr e, [MarshalAs(UnmanagedType.U1)] bool on);
+    [DllImport(Lib)] internal static extern void ov_draw_sprite(IntPtr e, uint texture, in Sprite sprite);
+    [DllImport(Lib)] internal static extern void ov_draw_texture(IntPtr e, uint texture, float x, float y);
+    [DllImport(Lib)] internal static extern void ov_draw_frame(IntPtr e, uint texture, in SpriteSheet sheet, uint frame, in Sprite sprite);
+    [DllImport(Lib)] internal static extern void ov_fill_rect(IntPtr e, Rect rect, Color color);
+    [DllImport(Lib)] internal static extern void ov_draw_rect(IntPtr e, Rect rect, float thickness, Color color);
+    [DllImport(Lib)] internal static extern void ov_draw_line(IntPtr e, Vec2 from, Vec2 to, float thickness, Color color);
+    [DllImport(Lib)] internal static extern void ov_fill_circle(IntPtr e, Vec2 center, float radius, Color color);
+    [DllImport(Lib)] internal static extern void ov_draw_circle(IntPtr e, Vec2 center, float radius, float thickness, Color color);
+    [DllImport(Lib)] internal static extern void ov_draw_text(IntPtr e, uint font, [MarshalAs(UnmanagedType.LPUTF8Str)] string text, Vec2 pos, float size, Color color);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_key_down(IntPtr e, int key);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_key_pressed(IntPtr e, int key);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_key_released(IntPtr e, int key);
+    [DllImport(Lib)] internal static extern float ov_axis(IntPtr e, int negative, int positive);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_mouse_down(IntPtr e, int button);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_mouse_pressed(IntPtr e, int button);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_mouse_released(IntPtr e, int button);
+    [DllImport(Lib)] internal static extern Vec2 ov_mouse_pos(IntPtr e);
+    [DllImport(Lib)] internal static extern Vec2 ov_mouse_world(IntPtr e);
+    [DllImport(Lib)] internal static extern float ov_mouse_wheel(IntPtr e);
+    [DllImport(Lib)] internal static extern IntPtr ov_text_input(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_inject_key(IntPtr e, int key, [MarshalAs(UnmanagedType.U1)] bool down);
+    [DllImport(Lib)] internal static extern void ov_inject_mouse_button(IntPtr e, int button, [MarshalAs(UnmanagedType.U1)] bool down);
+    [DllImport(Lib)] internal static extern void ov_inject_mouse_move(IntPtr e, Vec2 pos);
+    [DllImport(Lib)] internal static extern SpriteSheet ov_sheet_grid(uint texture_w, uint texture_h, uint frame_w, uint frame_h, uint margin, uint spacing);
+    [DllImport(Lib)] internal static extern Rect ov_sheet_frame(SpriteSheet sheet, uint index);
+    [DllImport(Lib)] internal static extern uint ov_anim_frame_at(uint[] frames, uint count, float fps, int mode, float time);
+    [DllImport(Lib)] internal static extern uint ov_load_tilemap(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+    [DllImport(Lib)] internal static extern uint ov_create_tilemap(IntPtr e, int orientation, uint width, uint height, uint tile_w, uint tile_h, uint layers);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_tilemap_add_tileset(IntPtr e, uint map, uint first_gid, uint texture, SpriteSheet sheet);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_tilemap_set_tile_flag(IntPtr e, uint map, uint gid, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, [MarshalAs(UnmanagedType.U1)] bool value);
+    [DllImport(Lib)] internal static extern void ov_free_tilemap(IntPtr e, uint map);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_tilemap_info(IntPtr e, uint map, out TilemapInfo info);
+    [DllImport(Lib)] internal static extern int ov_tilemap_layer_index(IntPtr e, uint map, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+    [DllImport(Lib)] internal static extern uint ov_tilemap_get_tile(IntPtr e, uint map, uint layer, int x, int y);
+    [DllImport(Lib)] internal static extern void ov_tilemap_set_tile(IntPtr e, uint map, uint layer, int x, int y, uint gid);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_tilemap_is_solid(IntPtr e, uint map, int x, int y);
+    [DllImport(Lib)] internal static extern Vec2 ov_tilemap_tile_to_world(IntPtr e, uint map, Vec2 tile);
+    [DllImport(Lib)] internal static extern Vec2 ov_tilemap_world_to_tile(IntPtr e, uint map, Vec2 p);
+    [DllImport(Lib)] internal static extern Vec2 ov_tilemap_cell_center(IntPtr e, uint map, int x, int y);
+    [DllImport(Lib)] internal static extern void ov_draw_tilemap(IntPtr e, uint map, int base_layer);
+    [DllImport(Lib)] internal static extern void ov_draw_tilemap_layer(IntPtr e, uint map, uint layer, int draw_layer, float depth, [MarshalAs(UnmanagedType.U1)] bool y_sort, Color tint);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_tilemap_object(IntPtr e, uint map, uint index, out MapObjectData @out);
+    [DllImport(Lib)] internal static extern int ov_tilemap_find_object(IntPtr e, uint map, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+    [DllImport(Lib)] internal static extern nuint ov_tilemap_object_name(IntPtr e, uint map, uint index, byte[]? buf, nuint size);
+    [DllImport(Lib)] internal static extern nuint ov_tilemap_object_class(IntPtr e, uint map, uint index, byte[]? buf, nuint size);
+    [DllImport(Lib)] internal static extern double ov_tilemap_object_number(IntPtr e, uint map, uint index, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, double fallback);
+    [DllImport(Lib)] internal static extern long ov_tilemap_object_string(IntPtr e, uint map, uint index, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, byte[]? buf, nuint size);
+    [DllImport(Lib)] internal static extern MoveResult ov_move_box(IntPtr e, uint map, Rect rect, Vec2 delta);
+    [DllImport(Lib)] internal static extern Contacts ov_touching(IntPtr e, uint map, Rect rect);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_raycast(IntPtr e, uint map, Vec2 from, Vec2 to, out RayHit hit);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_point_solid(IntPtr e, uint map, Vec2 p);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_rect_solid(IntPtr e, uint map, Rect rect);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_rects_overlap(Rect a, Rect b);
+    [DllImport(Lib)] internal static extern uint ov_load_sound(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+    [DllImport(Lib)] internal static extern void ov_free_sound(IntPtr e, uint sound);
+    [DllImport(Lib)] internal static extern uint ov_play_sound(IntPtr e, uint sound, float volume, float pitch);
+    [DllImport(Lib)] internal static extern void ov_stop_voice(IntPtr e, uint voice);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_voice_playing(IntPtr e, uint voice);
+    [DllImport(Lib)] internal static extern void ov_stop_all_sounds(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_play_music(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path, float volume, [MarshalAs(UnmanagedType.U1)] bool looped);
+    [DllImport(Lib)] internal static extern void ov_stop_music(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_pause_music(IntPtr e, [MarshalAs(UnmanagedType.U1)] bool paused);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_music_playing(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_set_music_volume(IntPtr e, float volume);
+    [DllImport(Lib)] internal static extern void ov_set_master_volume(IntPtr e, float volume);
+}

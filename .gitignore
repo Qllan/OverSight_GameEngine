@@ -73,3 +73,7 @@ htmlcov/
 .coverage.xml
 coverage.xml
 .nyc_output
+
+# .NET
+bin/
+obj/

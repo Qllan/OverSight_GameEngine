@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- OverSight 2D for C#: P/Invoke over the Rust-built oversight library.
+       Build the library first (cargo build -release -p oversight); it is
+       copied next to your game from OverSightLibDir. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>OverSight</RootNamespace>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <OverSightLibDir Condition="'$(OverSightLibDir)' == ''">$(MSBuildThisFileDirectory)../../../target/release/</OverSightLibDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(OverSightLibDir)oversight.dll" Condition="Exists('$(OverSightLibDir)oversight.dll')" CopyToOutputDirectory="PreserveNewest" Link="oversight.dll" />
+    <None Include="$(OverSightLibDir)liboversight.so" Condition="Exists('$(OverSightLibDir)liboversight.so')" CopyToOutputDirectory="PreserveNewest" Link="liboversight.so" />
+    <None Include="$(OverSightLibDir)liboversight.dylib" Condition="Exists('$(OverSightLibDir)liboversight.dylib')" CopyToOutputDirectory="PreserveNewest" Link="liboversight.dylib" />
+  </ItemGroup>
+</Project>
