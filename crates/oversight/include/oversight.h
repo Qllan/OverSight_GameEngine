@@ -625,6 +625,12 @@ int64_t ov_tilemap_object_string(OvEngine *e, uint32_t map, uint32_t index, cons
 OvMoveResult ov_move_box(OvEngine *e, uint32_t map, OvRect rect, OvVec2 delta);
 OvContacts ov_touching(OvEngine *e, uint32_t map, OvRect rect);
 bool ov_raycast(OvEngine *e, uint32_t map, OvVec2 from, OvVec2 to, OvRayHit *hit);
+/* A path around solid cells (A*): cell centres from the cell of `from` to
+ * the cell of `to`. A number property `cost` on a tile or layer makes it
+ * slower to cross; diagonal steps never cut a wall's corner. max_cost stops
+ * early (0: no limit). Fills up to capacity, returns the length (0: no way). */
+uint32_t ov_find_path(OvEngine *e, uint32_t map, OvVec2 from, OvVec2 to, bool diagonal, float max_cost,
+                      OvVec2 *out, uint32_t capacity);
 bool ov_point_solid(OvEngine *e, uint32_t map, OvVec2 p);
 bool ov_rect_solid(OvEngine *e, uint32_t map, OvRect rect);
 bool ov_rects_overlap(OvRect a, OvRect b);

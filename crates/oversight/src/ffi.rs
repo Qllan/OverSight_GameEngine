@@ -558,6 +558,28 @@ pub unsafe extern "C" fn ov_entity_overlap(
     true
 }
 
+/// # Safety
+/// `out` is NULL or has room for `capacity` points
+#[no_mangle]
+pub unsafe extern "C" fn ov_find_path(
+    e: *mut OvEngine,
+    map: u32,
+    from: Vec2,
+    to: Vec2,
+    diagonal: bool,
+    max_cost: f32,
+    out: *mut Vec2,
+    capacity: u32,
+) -> u32 {
+    let Some(path) = engine!(e, 0).find_path(map, from, to, diagonal, max_cost) else {
+        return 0;
+    };
+    if !out.is_null() {
+        std::ptr::copy_nonoverlapping(path.as_ptr(), out, path.len().min(capacity as usize));
+    }
+    path.len() as u32
+}
+
 #[no_mangle]
 pub extern "C" fn ov_update_collisions(e: *mut OvEngine) {
     engine!(e).update_collisions();
@@ -2522,6 +2544,47 @@ mod tests {
                 &mut hit
             ));
             assert_eq!(hit.entity, hero);
+            ov_engine_destroy(e);
+        }
+    }
+
+    #[test]
+    fn paths_go_around_solid_tiles() {
+        let e = headless(8, 8);
+        unsafe {
+            let white = ov_texture_from_rgba(e, 8, 8, [255u8; 256].as_ptr());
+            let map = ov_create_tilemap(e, 0, 5, 3, 8, 8, 1);
+            ov_tilemap_add_tileset(e, map, 1, white, ov_sheet_grid(8, 8, 8, 8, 0, 0));
+            ov_tilemap_set_tile_flag(e, map, 1, c"solid".as_ptr(), true);
+            for y in 0..2 {
+                ov_tilemap_set_tile(e, map, 0, 2, y, 1);
+            }
+            let (from, to) = (Vec2::new(4.0, 4.0), Vec2::new(36.0, 4.0));
+            let n = ov_find_path(e, map, from, to, false, 0.0, std::ptr::null_mut(), 0);
+            assert_eq!(n, 9, "down to the gap in row 2 and back up");
+            let mut path = vec![Vec2::default(); n as usize];
+            ov_find_path(e, map, from, to, false, 0.0, path.as_mut_ptr(), n);
+            assert_eq!((path[0], path[8]), (from, to));
+            assert!(path.contains(&Vec2::new(20.0, 20.0)));
+            assert_eq!(
+                ov_find_path(
+                    e,
+                    map,
+                    from,
+                    Vec2::new(20.0, 4.0),
+                    true,
+                    0.0,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                0,
+                "a wall"
+            );
+            assert_eq!(
+                ov_find_path(e, 99, from, to, true, 0.0, std::ptr::null_mut(), 0),
+                0,
+                "no such map"
+            );
             ov_engine_destroy(e);
         }
     }

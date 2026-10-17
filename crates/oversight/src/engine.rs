@@ -703,6 +703,19 @@ impl Engine {
         }
     }
 
+    /// Cell centres from `from` to `to` around solid cells (A*); None when
+    /// there is no way or no such map
+    pub fn find_path(
+        &self,
+        map: u32,
+        from: Vec2,
+        to: Vec2,
+        diagonal: bool,
+        max_cost: f32,
+    ) -> Option<Vec<Vec2>> {
+        crate::pathfind::find_world_path(self.tilemaps.get(map)?, from, to, diagonal, max_cost)
+    }
+
     pub fn raycast(&self, map: u32, from: Vec2, to: Vec2) -> Option<RayHit> {
         collision::raycast(self.tilemaps.get(map)?, from, to)
     }

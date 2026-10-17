@@ -181,6 +181,15 @@ public sealed class Tilemap : Resource
 
     public MoveResult MoveBox(Rect rect, Vec2 delta) => Native.ov_move_box(E, Id, rect, delta);
     public Contacts Touching(Rect rect) => Native.ov_touching(E, Id, rect);
+    /// <summary>Cell centres around solid cells, from the cell of from to that of to;
+    /// empty when there is no way. A number property "cost" makes a tile slower.</summary>
+    public Vec2[] FindPath(Vec2 from, Vec2 to, bool diagonal = true, float maxCost = 0)
+    {
+        var path = new Vec2[Native.ov_find_path(E, Id, from, to, diagonal, maxCost, null, 0)];
+        Native.ov_find_path(E, Id, from, to, diagonal, maxCost, path, (uint)path.Length);
+        return path;
+    }
+
     public RayHit? Raycast(Vec2 from, Vec2 to) => Native.ov_raycast(E, Id, from, to, out var hit) ? hit : null;
     public bool PointSolid(Vec2 p) => Native.ov_point_solid(E, Id, p);
     public bool RectSolid(Rect r) => Native.ov_rect_solid(E, Id, r);

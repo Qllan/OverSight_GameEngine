@@ -43,6 +43,7 @@ int main() {
     CHECK(map.add_tileset(1, tiles, tiles.sheet(8, 8)));
     CHECK(map.set_tile_flag(1, "solid"));
     for (int x = 0; x < 8; ++x) map.set_tile(0, x, 7, 1);
+    CHECK(map.find_path({4, 52}, {60, 52}).size() == 8 && map.find_path({4, 52}, {4, 60}).empty());
     CHECK(map.solid(3, 7) && !map.solid(3, 6));
 
     // Gravity until landing

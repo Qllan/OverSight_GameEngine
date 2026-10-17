@@ -491,6 +491,13 @@ public:
 
     MoveResult move_box(Rect rect, Vec2 delta) const { return ov_move_box(e_, id_, rect, delta); }
     Contacts touching(Rect rect) const { return ov_touching(e_, id_, rect); }
+    /// Cell centres around solid cells, from the cell of `from` to that of
+    /// `to`; empty when there is no way
+    std::vector<Vec2> find_path(Vec2 from, Vec2 to, bool diagonal = true, float max_cost = 0) const {
+        std::vector<Vec2> out(ov_find_path(e_, id_, from, to, diagonal, max_cost, nullptr, 0));
+        ov_find_path(e_, id_, from, to, diagonal, max_cost, out.data(), uint32_t(out.size()));
+        return out;
+    }
     std::optional<RayHit> raycast(Vec2 from, Vec2 to) const {
         RayHit hit{};
         if (!ov_raycast(e_, id_, from, to, &hit)) return std::nullopt;

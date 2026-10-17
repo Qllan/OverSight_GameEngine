@@ -26,9 +26,9 @@ POINTERS = {
     "const OvSpriteSheet": "in SpriteSheet", "const OvEmitter": "in EmitterConfig",
     "uint32_t": "out uint", "float": "out float",
     "OvTilemapInfo": "out TilemapInfo", "OvMapObject": "out MapObjectData", "OvRayHit": "out RayHit",
-    "const uint8_t": "byte[]", "const uint32_t": "uint[]", "char": "byte[]?",
-    "const void": "IntPtr", "OvEntity": "ulong[]?", "uint8_t": "byte[]?", "OvBinding": "out Binding",
-    "const OvVec2": "Vec2[]", "OvOverlap": "out Overlap", "OvContact": "out Contact", "OvEntityHit": "out EntityHit",
+    "const uint8_t": "byte[]", "const uint32_t": "uint[]", "char": "[In, Out] byte[]?",
+    "const void": "IntPtr", "OvEntity": "[In, Out] ulong[]?", "uint8_t": "[In, Out] byte[]?", "OvBinding": "out Binding",
+    "const OvVec2": "Vec2[]", "OvOverlap": "out Overlap", "OvContact": "out Contact", "OvVec2": "[In, Out] Vec2[]?", "OvEntityHit": "out EntityHit",
 }
 KEYWORDS = {"base", "in", "out", "string", "object", "params", "fixed", "event", "lock"}
 

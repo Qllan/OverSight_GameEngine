@@ -24,6 +24,7 @@ pub mod gpu;
 pub mod hotreload;
 pub mod input;
 pub mod particles;
+pub mod pathfind;
 pub mod render;
 pub mod rng;
 pub mod scenes;
