@@ -316,6 +316,33 @@ void ov_canvas_size(OvEngine *e, uint32_t *w, uint32_t *h);
 bool ov_save_screenshot(OvEngine *e, const char *path);
 OvColor ov_pixel(OvEngine *e, uint32_t x, uint32_t y);
 
+/* --- entities and components ---
+ * An entity is an id (0 = none); a component is a plain struct with no
+ * pointers, registered by name, size and alignment:
+ *     typedef struct { float x, y; } Pos;
+ *     uint32_t pos = ov_component(e, "Pos", sizeof(Pos), _Alignof(Pos));
+ *     OvEntity hero = ov_spawn(e);
+ *     Pos p = {10, 20};
+ *     ov_set(e, hero, pos, &p);
+ *     ((Pos *)ov_get(e, hero, pos))->x += 1;
+ * Pointers from ov_get stay valid until the next spawn, despawn, set or
+ * remove. The same calls in the same order give the same ids and the same
+ * query order on every machine. */
+typedef uint64_t OvEntity;
+uint32_t ov_component(OvEngine *e, const char *name, uint32_t size, uint32_t align); /* 0 on error */
+OvEntity ov_spawn(OvEngine *e);
+bool ov_despawn(OvEngine *e, OvEntity entity); /* removes its components too */
+bool ov_alive(OvEngine *e, OvEntity entity);
+uint32_t ov_entity_count(OvEngine *e);
+bool ov_set(OvEngine *e, OvEntity entity, uint32_t component, const void *data); /* NULL data: zeroed */
+void *ov_get(OvEngine *e, OvEntity entity, uint32_t component); /* NULL when it has none */
+bool ov_has(OvEngine *e, OvEntity entity, uint32_t component);
+bool ov_remove(OvEngine *e, OvEntity entity, uint32_t component);
+/* Entities that have all `count` components (none: every entity). Fills up
+ * to `capacity` of them into `out` and returns how many there are. */
+uint32_t ov_query(OvEngine *e, const uint32_t *components, uint32_t count, OvEntity *out, uint32_t capacity);
+void ov_world_clear(OvEngine *e); /* despawn everything; component types stay */
+
 /* --- textures and fonts --- */
 uint32_t ov_load_texture(OvEngine *e, const char *path); /* PNG, JPEG */
 uint32_t ov_texture_from_rgba(OvEngine *e, uint32_t width, uint32_t height, const uint8_t *rgba);

@@ -80,6 +80,27 @@ int main(void) {
     CHECK(ov_key_pressed(e, OV_KEY_D));
     CHECK(ov_axis(e, OV_KEY_A, OV_KEY_D) == 1.0f);
 
+    /* Entities: a component is a plain struct registered by name */
+    typedef struct { float x, y; } Pos;
+    uint32_t pos = ov_component(e, "Pos", sizeof(Pos), 4);
+    uint32_t tag = ov_component(e, "Tag", 0, 1);
+    CHECK(pos != 0 && tag != 0 && ov_component(e, "Pos", sizeof(Pos), 4) == pos);
+    CHECK(ov_component(e, "Pos", 4, 4) == 0); /* another size: refused */
+    OvEntity ents[3];
+    for (int i = 0; i < 3; ++i) {
+        ents[i] = ov_spawn(e);
+        Pos p = {(float)i, 0};
+        CHECK(ov_set(e, ents[i], pos, &p));
+    }
+    CHECK(ov_set(e, ents[1], tag, NULL));
+    ((Pos *)ov_get(e, ents[2], pos))->y = 5;
+    CHECK(((Pos *)ov_get(e, ents[2], pos))->y == 5);
+    uint32_t both[] = {pos, tag};
+    OvEntity found[4];
+    CHECK(ov_query(e, both, 2, found, 4) == 1 && found[0] == ents[1]);
+    CHECK(ov_despawn(e, ents[1]) && !ov_alive(e, ents[1]) && ov_get(e, ents[1], pos) == NULL);
+    CHECK(ov_query(e, &pos, 1, NULL, 0) == 2 && ov_entity_count(e) == 2);
+
     ov_engine_destroy(e);
     printf("smoke_c: ok\n");
     return 0;

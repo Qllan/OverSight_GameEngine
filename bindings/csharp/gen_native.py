@@ -18,7 +18,7 @@ VALUES = {
     "uint32_t": "uint", "int32_t": "int", "uint64_t": "ulong", "int64_t": "long", "size_t": "nuint",
     "OvColor": "Color", "OvVec2": "Vec2", "OvRect": "Rect", "OvCamera": "Camera",
     "OvSpriteSheet": "SpriteSheet", "OvMoveResult": "MoveResult", "OvContacts": "Contacts",
-    "OvEmitter": "EmitterConfig",
+    "OvEmitter": "EmitterConfig", "OvEntity": "ulong",
 }
 # C pointer parameters -> C# parameters
 POINTERS = {
@@ -27,6 +27,7 @@ POINTERS = {
     "uint32_t": "out uint", "float": "out float",
     "OvTilemapInfo": "out TilemapInfo", "OvMapObject": "out MapObjectData", "OvRayHit": "out RayHit",
     "const uint8_t": "byte[]", "const uint32_t": "uint[]", "char": "byte[]?",
+    "const void": "IntPtr", "OvEntity": "ulong[]?",
 }
 KEYWORDS = {"base", "in", "out", "string", "object", "params", "fixed", "event", "lock"}
 

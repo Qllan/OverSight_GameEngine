@@ -198,7 +198,7 @@ public sealed class Tilemap : Resource
 /// }
 /// </code>
 /// </summary>
-public sealed class Engine : IDisposable
+public sealed partial class Engine : IDisposable
 {
     public const uint DefaultFont = 1;
 

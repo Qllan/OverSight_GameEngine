@@ -10,7 +10,7 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)]
 
 use std::cell::RefCell;
-use std::ffi::{c_char, CStr, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 
 use crate::anim::{AnimMode, Animation, SpriteSheet};
 use crate::camera::Camera;
@@ -298,6 +298,111 @@ pub extern "C" fn ov_random_range(e: *mut OvEngine, min: f32, max: f32) -> f32 {
 #[no_mangle]
 pub extern "C" fn ov_random_int(e: *mut OvEngine, min: i32, max: i32) -> i32 {
     engine!(e, 0).rng.int(min, max)
+}
+
+// --- entities and components ---
+
+/// # Safety
+/// `name` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_component(
+    e: *mut OvEngine,
+    name: *const c_char,
+    size: u32,
+    align: u32,
+) -> u32 {
+    let engine = engine!(e, 0);
+    result(engine.world.component(string(name), size, align), 0)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_spawn(e: *mut OvEngine) -> u64 {
+    engine!(e, 0).world.spawn()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_despawn(e: *mut OvEngine, entity: u64) -> bool {
+    engine!(e, false).world.despawn(entity)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_alive(e: *mut OvEngine, entity: u64) -> bool {
+    engine!(e, false).world.alive(entity)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_entity_count(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).world.count()
+}
+
+/// # Safety
+/// `data` is NULL or points at the component's size in bytes
+#[no_mangle]
+pub unsafe extern "C" fn ov_set(
+    e: *mut OvEngine,
+    entity: u64,
+    component: u32,
+    data: *const c_void,
+) -> bool {
+    let world = &mut engine!(e, false).world;
+    let size = match world.storage(component) {
+        Some(s) => s.size as usize,
+        None => return false,
+    };
+    let bytes = if data.is_null() || size == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(data as *const u8, size)
+    };
+    world.set(entity, component, bytes)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_get(e: *mut OvEngine, entity: u64, component: u32) -> *mut c_void {
+    let world = &mut engine!(e, std::ptr::null_mut()).world;
+    world
+        .ptr(entity, component)
+        .map_or(std::ptr::null_mut(), |p| p as *mut c_void)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_has(e: *mut OvEngine, entity: u64, component: u32) -> bool {
+    engine!(e, false).world.has(entity, component)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_remove(e: *mut OvEngine, entity: u64, component: u32) -> bool {
+    engine!(e, false).world.remove(entity, component)
+}
+
+/// # Safety
+/// `components` holds `count` ids (or is NULL when count is 0); `out` is
+/// NULL or has room for `capacity` entities
+#[no_mangle]
+pub unsafe extern "C" fn ov_query(
+    e: *mut OvEngine,
+    components: *const u32,
+    count: u32,
+    out: *mut u64,
+    capacity: u32,
+) -> u32 {
+    let world = &engine!(e, 0).world;
+    let ids = if components.is_null() || count == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(components, count as usize)
+    };
+    let found = world.query(ids);
+    if !out.is_null() {
+        let n = found.len().min(capacity as usize);
+        std::ptr::copy_nonoverlapping(found.as_ptr(), out, n);
+    }
+    found.len() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn ov_world_clear(e: *mut OvEngine) {
+    engine!(e).world.clear();
 }
 
 #[no_mangle]

@@ -12,10 +12,12 @@
 // Resources free themselves; they must not outlive their engine.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -28,6 +30,22 @@ struct Error : std::runtime_error {
 };
 
 inline std::string last_error() { return ov_last_error(); }
+
+using Entity = OvEntity;
+
+/// The name a component type is registered under. Give each component a
+/// name with OV_COMPONENT(Type) after its definition, at global scope; the
+/// C# binding uses the struct's name, so the same name works in both.
+template <class T>
+struct ComponentName {
+    static_assert(sizeof(T) == 0, "name the component: OV_COMPONENT(Type) after its definition");
+};
+
+#define OV_COMPONENT(T)                                  \
+    template <>                                          \
+    struct ov::ComponentName<T> {                        \
+        static constexpr const char *value = #T;         \
+    }
 
 struct Vec2 : OvVec2 {
     constexpr Vec2() : OvVec2{0, 0} {}
@@ -592,6 +610,48 @@ public:
     }
     void debug_tilemap(const Tilemap &map) { ov_debug_tilemap(e_, map.id()); }
 
+    // entities and components: plain structs named with OV_COMPONENT(Type).
+    // Pointers from get() stay valid until the next spawn, despawn, set or remove.
+    template <class T>
+    uint32_t component() {
+        static_assert(std::is_trivially_copyable_v<T>, "components are plain data");
+        uint32_t id = ov_component(e_, ComponentName<T>::value, sizeof(T), alignof(T));
+        if (id == 0) throw Error(ov_last_error());
+        return id;
+    }
+    Entity spawn() { return ov_spawn(e_); }
+    bool despawn(Entity en) { return ov_despawn(e_, en); }
+    bool alive(Entity en) const { return ov_alive(e_, en); }
+    uint32_t entity_count() const { return ov_entity_count(e_); }
+    template <class T>
+    T &set(Entity en, const T &value) {
+        uint32_t c = component<T>();
+        if (!ov_set(e_, en, c, &value)) throw Error("set on a dead entity");
+        return *static_cast<T *>(ov_get(e_, en, c));
+    }
+    template <class T>
+    T *get(Entity en) { return static_cast<T *>(ov_get(e_, en, component<T>())); }
+    template <class T>
+    bool has(Entity en) { return ov_has(e_, en, component<T>()); }
+    template <class T>
+    bool remove(Entity en) { return ov_remove(e_, en, component<T>()); }
+    /// Entities with all of Ts (none: every entity)
+    template <class... Ts>
+    std::vector<Entity> query() {
+        std::array<uint32_t, sizeof...(Ts)> ids{component<Ts>()...};
+        std::vector<Entity> out(ov_entity_count(e_));
+        out.resize(ov_query(e_, ids.data(), uint32_t(ids.size()), out.data(), uint32_t(out.size())));
+        return out;
+    }
+    /// f(entity, Ts &...) for each entity with all of Ts. Spawning or
+    /// changing components inside f moves data: collect and do it after.
+    template <class... Ts, class F>
+    void each(F &&f) {
+        std::array<uint32_t, sizeof...(Ts)> ids{component<Ts>()...};
+        for (Entity en : query<Ts...>()) each_one<Ts...>(f, en, ids, std::index_sequence_for<Ts...>{});
+    }
+    void clear_world() { ov_world_clear(e_); }
+
     // sound
     void stop_voice(uint32_t voice) { ov_stop_voice(e_, voice); }
     bool voice_playing(uint32_t voice) const { return ov_voice_playing(e_, voice); }
@@ -606,6 +666,11 @@ public:
     void set_master_volume(float v) { ov_set_master_volume(e_, v); }
 
 private:
+    template <class... Ts, class F, std::size_t... I>
+    void each_one(F &f, Entity en, const std::array<uint32_t, sizeof...(Ts)> &ids, std::index_sequence<I...>) {
+        f(en, *static_cast<Ts *>(ov_get(e_, en, ids[I]))...);
+    }
+
     OvEngine *e_ = nullptr;
 };
 

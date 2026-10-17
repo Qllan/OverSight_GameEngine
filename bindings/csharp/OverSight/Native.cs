@@ -59,6 +59,17 @@ internal static class Native
     [DllImport(Lib)] internal static extern void ov_canvas_size(IntPtr e, out uint w, out uint h);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_save_screenshot(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Lib)] internal static extern Color ov_pixel(IntPtr e, uint x, uint y);
+    [DllImport(Lib)] internal static extern uint ov_component(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, uint size, uint align);
+    [DllImport(Lib)] internal static extern ulong ov_spawn(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_despawn(IntPtr e, ulong entity);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_alive(IntPtr e, ulong entity);
+    [DllImport(Lib)] internal static extern uint ov_entity_count(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_set(IntPtr e, ulong entity, uint component, IntPtr data);
+    [DllImport(Lib)] internal static extern IntPtr ov_get(IntPtr e, ulong entity, uint component);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_has(IntPtr e, ulong entity, uint component);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_remove(IntPtr e, ulong entity, uint component);
+    [DllImport(Lib)] internal static extern uint ov_query(IntPtr e, uint[] components, uint count, ulong[]? @out, uint capacity);
+    [DllImport(Lib)] internal static extern void ov_world_clear(IntPtr e);
     [DllImport(Lib)] internal static extern uint ov_load_texture(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Lib)] internal static extern uint ov_texture_from_rgba(IntPtr e, uint width, uint height, byte[] rgba);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_texture_size(IntPtr e, uint texture, out uint w, out uint h);

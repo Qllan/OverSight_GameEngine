@@ -5,6 +5,15 @@
 
 #include "oversight.hpp"
 
+struct Pos {
+    float x, y;
+};
+OV_COMPONENT(Pos);
+struct Vel {
+    float x, y;
+};
+OV_COMPONENT(Vel);
+
 #define CHECK(cond)                                                              \
     do {                                                                         \
         if (!(cond)) {                                                           \
@@ -108,6 +117,22 @@ int main() {
     engine.debug_rect({0, 57, 8, 7}, {0, 255, 0});
     engine.end_frame();
     CHECK(engine.pixel(0, 60) == ov::Color(0, 255, 0)); // below the stats panel
+    // Entities: move everything that has a velocity
+    ov::Entity a = engine.spawn(), b = engine.spawn();
+    engine.set(a, Pos{0, 0});
+    engine.set(a, Vel{1, 2});
+    engine.set(b, Pos{5, 5});
+    engine.each<Pos, Vel>([](ov::Entity, Pos &p, Vel &v) {
+        p.x += v.x;
+        p.y += v.y;
+    });
+    CHECK(engine.get<Pos>(a)->x == 1 && engine.get<Pos>(a)->y == 2);
+    CHECK(engine.get<Pos>(b)->x == 5 && engine.get<Vel>(b) == nullptr);
+    CHECK((engine.query<Pos>().size() == 2 && engine.query<Pos, Vel>().size() == 1));
+    CHECK(engine.remove<Vel>(a) && !engine.has<Vel>(a));
+    engine.clear_world();
+    CHECK(engine.entity_count() == 0 && !engine.alive(a));
+
     std::printf("smoke_cpp: ok\n");
     return 0;
 }

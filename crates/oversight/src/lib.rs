@@ -12,6 +12,7 @@ pub mod audio;
 pub mod camera;
 pub mod collision;
 pub mod debug;
+pub mod ecs;
 pub mod engine;
 pub mod ffi;
 pub mod gamepad;

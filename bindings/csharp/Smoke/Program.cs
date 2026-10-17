@@ -91,4 +91,24 @@ engine.BeginFrame(Color.Black);
 engine.DebugRect(new Rect(0, 57, 8, 7), new Color(0, 255, 0)); // below the stats panel
 engine.EndFrame();
 Check(engine.Pixel(0, 60) == new Color(0, 255, 0), $"debug outline {engine.Pixel(0, 60)}");
+// Entities: move everything that has a velocity
+var a = engine.Spawn();
+var b = engine.Spawn();
+engine.Set(a, new Pos { X = 0, Y = 0 });
+engine.Set(a, new Vel { X = 1, Y = 2 });
+engine.Set(b, new Pos { X = 5, Y = 5 });
+engine.ForEach((Entity _, ref Pos p, ref Vel v) => { p.X += v.X; p.Y += v.Y; });
+Check(engine.Get<Pos>(a).X == 1 && engine.Get<Pos>(a).Y == 2, "ForEach writes in place");
+engine.Get<Pos>(b).X = 7;
+Check(engine.Get<Pos>(b).X == 7 && !engine.Has<Vel>(b), "Get by ref");
+Check(engine.Query<Pos>().Length == 2 && engine.Query<Pos, Vel>().Single() == a, "queries");
+Check(engine.Despawn(a) && !engine.Alive(a) && !engine.TryGet<Pos>(a, out _), "despawn");
+var n = engine.Spawn();
+engine.Set(n, new Named { D = 1.5, B = 2 }); // 16 bytes aligned to 8
+Check(engine.Get<Named>(n).D == 1.5 && engine.Get<Named>(n).B == 2, "named component");
+
 Console.WriteLine("smoke_cs: ok");
+
+struct Pos { public float X, Y; }
+struct Vel { public float X, Y; }
+[Component("Renamed")] struct Named { public double D; public byte B; }

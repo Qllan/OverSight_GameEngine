@@ -20,6 +20,7 @@ use crate::audio::Audio;
 use crate::camera::Camera;
 use crate::collision::{self, MoveResult, RayHit};
 use crate::debug::{DebugOverlay, Stats};
+use crate::ecs::World;
 use crate::gamepad::{GamepadAxis, GamepadButton};
 use crate::hotreload::{HotReload, MapFiles, Watched};
 use crate::input::{Input, Key, MouseButton};
@@ -56,6 +57,8 @@ pub struct Engine {
     pub time: Time,
     /// Seeded random numbers for game logic (same seed, same game)
     pub rng: Rng,
+    /// Entities and their components
+    pub world: World,
     pub debug: DebugOverlay,
     pub hot_reload: HotReload,
     #[cfg(feature = "audio")]
@@ -108,6 +111,7 @@ impl Engine {
             input: Input::default(),
             time: Time::new(Some(1.0 / 60.0)),
             rng: Rng::default(),
+            world: World::new(),
             debug: DebugOverlay::default(),
             hot_reload: HotReload::default(),
             #[cfg(feature = "audio")]
