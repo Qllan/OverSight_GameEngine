@@ -35,6 +35,24 @@ pub struct Editor {
     pub scene: Result<SceneView, String>,
     pub selected: Option<Entity>,
     pub history: History,
+    /// The open scene's file under Assets; None until it is first saved
+    pub scene_path: Option<String>,
+    /// Changed since it was opened or saved
+    pub dirty: bool,
+    /// Unsaved changes stand in the way of this; the user is asked
+    ask_save: Option<After>,
+    /// The Save scene as window: the name typed, and what comes after
+    save_as: Option<(String, Option<After>)>,
+    want_close: bool,
+    title: String,
+}
+
+/// What waits for unsaved changes to be saved or dropped
+#[derive(Debug, Clone, PartialEq)]
+enum After {
+    New,
+    Open(String),
+    Close,
 }
 
 impl Editor {
@@ -57,6 +75,130 @@ impl Editor {
             scene,
             selected: None,
             history: History::default(),
+            scene_path: None,
+            dirty: false,
+            ask_save: None,
+            save_as: None,
+            want_close: false,
+            title: String::new(),
+        }
+        .with_main_scene()
+    }
+
+    fn with_main_scene(mut self) -> Editor {
+        if let Some(path) = self.project.file.main_scene.clone() {
+            if let Err(e) = self.open_scene(&path) {
+                self.console.error(e);
+            }
+        }
+        self
+    }
+
+    /// Replace the edited scene with the file `path` under Assets
+    pub fn open_scene(&mut self, path: &str) -> Result<(), String> {
+        let file = self.project.assets.file(path);
+        let text = std::fs::read_to_string(&file).map_err(|e| format!("{path}: {e}"))?;
+        let Ok(view) = &mut self.scene else {
+            return Err("no scene view".into());
+        };
+        let engine = &mut view.engine;
+        let mut before = Vec::new();
+        engine.world.save(&mut before);
+        clear_world(&mut engine.world);
+        match engine.load_scene(&text, &mut self.project.assets) {
+            Ok(loaded) => {
+                for w in loaded.warnings {
+                    self.console.warn(format!("{path}: {w}"));
+                }
+                self.console
+                    .info(format!("Opened {path}: {} entities", loaded.entities.len()));
+            }
+            Err(e) => {
+                let _ = engine.world.load(&before);
+                return Err(format!("{path}: {e}"));
+            }
+        }
+        self.reset_scene(Some(path.to_string()));
+        Ok(())
+    }
+
+    /// An empty scene, not yet saved anywhere
+    pub fn new_scene(&mut self) {
+        if let Ok(view) = &mut self.scene {
+            clear_world(&mut view.engine.world);
+        }
+        self.reset_scene(None);
+    }
+
+    fn reset_scene(&mut self, path: Option<String>) {
+        self.scene_path = path;
+        self.history = History::default();
+        self.selected = None;
+        self.dirty = false;
+    }
+
+    /// Write the scene to `path` under Assets. The first scene saved
+    /// becomes the one the game starts with.
+    pub fn save_scene(&mut self, path: &str) -> Result<(), String> {
+        let Ok(view) = &self.scene else {
+            return Err("no scene view".into());
+        };
+        let engine = &view.engine;
+        let entities = engine.world.query(&[]);
+        let (text, warnings) = engine.save_scene(&entities, &self.project.assets);
+        let file = self.project.assets.file(path);
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{path}: {e}"))?;
+        }
+        std::fs::write(&file, text).map_err(|e| format!("{path}: {e}"))?;
+        for w in warnings {
+            self.console.warn(format!("{path}: {w}"));
+        }
+        self.console.info(format!("Saved {path}"));
+        self.scene_path = Some(path.to_string());
+        self.dirty = false;
+        if self.project.file.main_scene.is_none() {
+            self.project.file.main_scene = Some(path.to_string());
+            self.project.save()?;
+        }
+        // The new file gets its .meta
+        self.rescan();
+        Ok(())
+    }
+
+    /// Save to the scene's own file, or ask for a name the first time
+    fn save(&mut self, then: Option<After>) {
+        match self.scene_path.clone() {
+            Some(path) => match self.save_scene(&path) {
+                Ok(()) => {
+                    if let Some(after) = then {
+                        self.proceed(after);
+                    }
+                }
+                Err(e) => self.console.error(e),
+            },
+            None => self.save_as = Some(("New Scene".into(), then)),
+        }
+    }
+
+    /// Do `after`, asking first when there are unsaved changes
+    fn request(&mut self, after: After) {
+        if self.dirty {
+            self.ask_save = Some(after);
+        } else {
+            self.proceed(after);
+        }
+    }
+
+    fn proceed(&mut self, after: After) {
+        match after {
+            After::New => self.new_scene(),
+            After::Open(path) => {
+                if let Err(e) = self.open_scene(&path) {
+                    self.console.error(e);
+                }
+            }
+            After::Close => self.want_close = true,
         }
     }
 
@@ -73,6 +215,7 @@ impl Editor {
         };
         write(&mut engine.world, e, TRANSFORM, &t);
         write(&mut engine.world, e, NAME, &Name::new("Entity"));
+        self.dirty = true;
         self.select(Some(e));
     }
 
@@ -81,6 +224,7 @@ impl Editor {
             self.history.record(&view.engine.world);
             self.history.close();
             view.engine.world.despawn(e);
+            self.dirty = true;
         }
         self.select(None);
     }
@@ -98,8 +242,9 @@ impl Editor {
         } else {
             self.history.undo(world)
         };
-        if let Err(e) = done {
-            self.console.error(format!("Undo failed: {e}"));
+        match done {
+            Ok(changed) => self.dirty |= changed,
+            Err(e) => self.console.error(format!("Undo failed: {e}")),
         }
         if self.selected.is_some_and(|e| !world.alive(e)) {
             self.selected = None;
@@ -116,11 +261,26 @@ impl Editor {
         egui::Panel::top("menu").show(ui, |ui| {
             egui::MenuBar::new().ui(ui, |ui| {
                 ui.menu_button("File", |ui| {
+                    if ui.button("New scene").clicked() {
+                        self.request(After::New);
+                    }
+                    if ui.button("Save scene").on_hover_text("Ctrl+S").clicked() {
+                        self.save(None);
+                    }
+                    if ui.button("Save scene as...").clicked() {
+                        let name = self
+                            .scene_path
+                            .as_deref()
+                            .map_or("New Scene", |p| p.trim_end_matches(".scene"))
+                            .to_string();
+                        self.save_as = Some((name, None));
+                    }
+                    ui.separator();
                     if ui.button("Refresh assets").clicked() {
                         self.rescan();
                     }
                     if ui.button("Close project").clicked() {
-                        *close = true;
+                        self.request(After::Close);
                     }
                 });
                 ui.menu_button("Edit", |ui| {
@@ -160,6 +320,7 @@ impl Editor {
                 ui.add_enabled(false, egui::Button::new("Step"));
                 ui.separator();
                 ui.label(&self.project.file.name);
+                ui.weak(self.scene_title());
             });
         });
         egui::Panel::left("hierarchy")
@@ -237,6 +398,10 @@ impl Editor {
                 }
             }
         });
+        let save = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+        if ui.input_mut(|i| i.consume_shortcut(&save)) {
+            self.save(None);
+        }
         let typing = ui.ctx().egui_wants_keyboard_input();
         if !typing {
             let (undo, redo, delete) = ui.input_mut(|i| {
@@ -264,6 +429,101 @@ impl Editor {
         let busy = ui.input(|i| i.pointer.any_down()) || ui.memory(|m| m.focused().is_some());
         if !busy {
             self.history.close();
+        }
+        self.dialogs(ui.ctx());
+        let title = format!(
+            "{} - {} - ORST Studio",
+            self.scene_title(),
+            self.project.file.name
+        );
+        if title != self.title {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
+        *close |= std::mem::take(&mut self.want_close);
+    }
+
+    /// "Level 1.scene", with a star while there are unsaved changes
+    fn scene_title(&self) -> String {
+        let name = self
+            .scene_path
+            .as_deref()
+            .map_or("Untitled", |p| p.rsplit('/').next().unwrap_or(p));
+        format!("{name}{}", if self.dirty { "*" } else { "" })
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(after) = self.ask_save.clone() {
+            let mut answer = None;
+            egui::Window::new("Unsaved changes")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(format!("Save the changes to {}?", self.scene_title()));
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            answer = Some(0);
+                        }
+                        if ui.button("Don't save").clicked() {
+                            answer = Some(1);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(2);
+                        }
+                    });
+                });
+            match answer {
+                Some(0) => {
+                    self.ask_save = None;
+                    self.save(Some(after));
+                }
+                Some(1) => {
+                    self.ask_save = None;
+                    self.proceed(after);
+                }
+                Some(_) => self.ask_save = None,
+                None => {}
+            }
+        }
+        if let Some((mut name, then)) = self.save_as.take() {
+            let mut keep = true;
+            let mut chosen = None;
+            egui::Window::new("Save scene as")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label("Name, under Assets (folders with /)");
+                    let r = ui.text_edit_singleline(&mut name);
+                    r.request_focus();
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() || enter {
+                            chosen = Some(scene_file_name(&name));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            match chosen {
+                Some(Ok(path)) => match self.save_scene(&path) {
+                    Ok(()) => {
+                        if let Some(after) = then {
+                            self.proceed(after);
+                        }
+                    }
+                    Err(e) => self.console.error(e),
+                },
+                Some(Err(e)) => {
+                    self.console.error(e);
+                    self.save_as = Some((name, then));
+                }
+                None if keep => self.save_as = Some((name, then)),
+                None => {}
+            }
         }
     }
 
@@ -306,6 +566,7 @@ impl Editor {
         }
         let world = &mut view.engine.world;
         self.history.record(world);
+        self.dirty = true;
         for action in actions {
             match action {
                 Action::Set {
@@ -344,15 +605,45 @@ impl Editor {
     /// The Assets folder as a tree
     fn project_ui(&mut self, ui: &mut egui::Ui) {
         let tree = Tree::of(self.project.assets.paths());
+        let mut opened = None;
         egui::ScrollArea::vertical()
             .auto_shrink(false)
             .show(ui, |ui| {
                 if tree.files.is_empty() && tree.dirs.is_empty() {
                     ui.weak("Assets is empty: put images, sounds and maps into it");
                 }
-                tree.ui(ui, "", &mut self.selected_asset);
+                tree.ui(ui, "", &mut self.selected_asset, &mut opened);
             });
+        if let Some(path) = opened {
+            if path.ends_with(".scene") {
+                self.request(After::Open(path));
+            }
+        }
     }
+}
+
+fn clear_world(world: &mut orst::ecs::World) {
+    for e in world.query(&[]) {
+        world.despawn(e);
+    }
+}
+
+/// What the user typed as a scene name, as a path under Assets
+pub fn scene_file_name(name: &str) -> Result<String, String> {
+    let name = name.trim().trim_matches('/').replace('\\', "/");
+    let bad = name.is_empty()
+        || name
+            .split('/')
+            .any(|p| p.trim().is_empty() || p == "." || p == "..")
+        || name.contains(|c: char| ":*?\"<>|".contains(c));
+    if bad {
+        return Err(format!("\"{name}\" can't be a scene name"));
+    }
+    Ok(if name.ends_with(".scene") {
+        name
+    } else {
+        format!("{name}.scene")
+    })
 }
 
 /// Folders and files of asset paths
@@ -377,18 +668,29 @@ impl Tree {
         root
     }
 
-    fn ui(&self, ui: &mut egui::Ui, prefix: &str, selected: &mut Option<String>) {
+    /// `opened`: the file double-clicked
+    fn ui(
+        &self,
+        ui: &mut egui::Ui,
+        prefix: &str,
+        selected: &mut Option<String>,
+        opened: &mut Option<String>,
+    ) {
         for (name, dir) in &self.dirs {
             let path = format!("{prefix}{name}/");
             egui::CollapsingHeader::new(format!("{name}/"))
                 .id_salt(&path)
                 .default_open(false)
-                .show(ui, |ui| dir.ui(ui, &path, selected));
+                .show(ui, |ui| dir.ui(ui, &path, selected, opened));
         }
         for name in &self.files {
             let path = format!("{prefix}{name}");
             let picked = selected.as_deref() == Some(path.as_str());
-            if ui.selectable_label(picked, name.as_str()).clicked() {
+            let r = ui.selectable_label(picked, name.as_str());
+            if r.double_clicked() {
+                *opened = Some(path.clone());
+            }
+            if r.clicked() {
                 *selected = Some(path);
             }
         }
@@ -454,6 +756,62 @@ mod tests {
         assert!(!alive(&ed) && ed.scene.as_ref().unwrap().engine.world.count() == 0);
         ed.undo(true);
         assert!(alive(&ed));
+    }
+
+    #[test]
+    fn scenes_save_and_open_again() {
+        let mut ed = editor("scenes");
+        let root = ed.project.root.clone();
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        world.set_field(
+            e,
+            NAME,
+            "text",
+            orst::schema::Value::Text(orst::schema::text_bytes("Hero")),
+        );
+        assert!(ed.dirty);
+        ed.request(After::New);
+        assert_eq!(
+            ed.ask_save,
+            Some(After::New),
+            "unsaved changes are asked about"
+        );
+        ed.ask_save = None;
+
+        ed.save_scene("levels/One.scene").unwrap();
+        assert!(!ed.dirty);
+        assert!(root.join("Assets/levels/One.scene").is_file());
+        assert!(
+            ed.project.assets.uid("levels/One.scene").is_some(),
+            "it got a .meta"
+        );
+        assert_eq!(
+            ed.project.file.main_scene.as_deref(),
+            Some("levels/One.scene")
+        );
+
+        ed.request(After::New);
+        assert_eq!(ed.scene.as_ref().unwrap().engine.world.count(), 0);
+        assert_eq!(ed.scene_path, None);
+
+        // The project opens on its main scene
+        let (project, _) = Project::open(&root).unwrap();
+        let ed = Editor::new(project, Console::default(), None);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert!(engine.world.find_named("Hero").is_some());
+        assert_eq!(ed.scene_path.as_deref(), Some("levels/One.scene"));
+        assert!(!ed.dirty && !ed.history.can_undo());
+    }
+
+    #[test]
+    fn scene_names_become_paths_under_assets() {
+        assert_eq!(scene_file_name(" Level 1 ").unwrap(), "Level 1.scene");
+        assert_eq!(scene_file_name("maps\\a.scene").unwrap(), "maps/a.scene");
+        for bad in ["", "../x", "a//b", "a:b", "/"] {
+            assert!(scene_file_name(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

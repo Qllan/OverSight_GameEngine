@@ -90,6 +90,10 @@ impl Project {
         ))
     }
 
+    pub fn save(&self) -> Result<(), String> {
+        write_project_file(&self.root, &self.file)
+    }
+
     /// Read Assets again after files changed outside the editor
     pub fn rescan(&mut self) -> Result<Scan, String> {
         let (assets, scan) = AssetDb::scan(self.root.join(ASSETS))?;
