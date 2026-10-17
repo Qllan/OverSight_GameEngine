@@ -14,6 +14,7 @@
 //! }
 //! ```
 
+use crate::anim::SpriteSheet;
 use crate::camera::Camera;
 use crate::input::{Input, Key, MouseButton};
 use crate::render::{DrawKind, Renderer, Shape};
@@ -301,6 +302,19 @@ impl Engine {
         self.draw_sprite(texture, &sprite);
     }
 
+    /// One frame of a sprite sheet; `sprite.src` is replaced by the frame
+    pub fn draw_frame(&mut self, texture: u32, sheet: &SpriteSheet, frame: u32, sprite: &Sprite) {
+        let rect = sheet.frame(frame);
+        if rect.w <= 0.0 {
+            return; // out of range: drawing the whole sheet would be worse
+        }
+        let sprite = Sprite {
+            src: rect,
+            ..*sprite
+        };
+        self.draw_sprite(texture, &sprite);
+    }
+
     fn shape(&mut self, shape: Shape, color: Color) {
         let s = self.state;
         self.renderer
@@ -531,6 +545,24 @@ mod tests {
         assert!((e.time.total - 2.0 / 60.0).abs() < 1e-6);
         e.quit();
         assert!(!e.poll());
+    }
+
+    #[test]
+    fn draw_frame_picks_the_sheet_cell() {
+        let mut e = Engine::headless(8, 8).unwrap();
+        let tex = checker(&mut e);
+        let sheet = SpriteSheet::grid(2, 2, 1, 1, 0, 0);
+        e.begin_frame(Color::BLACK);
+        e.set_space(Space::Screen);
+        let sprite = Sprite {
+            scale: Vec2::new(8.0, 8.0),
+            ..Sprite::default()
+        };
+        e.draw_frame(tex, &sheet, 2, &sprite);
+        e.draw_frame(tex, &sheet, 9, &sprite); // out of range: nothing
+        e.end_frame();
+        assert_eq!(e.pixel(4, 4), Some(BLUE));
+        assert_eq!(e.renderer.drawn_sprites, 1);
     }
 
     #[test]

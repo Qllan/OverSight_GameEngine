@@ -6,6 +6,7 @@
 //! and plays sounds. C++ and C# use it through the C API in `ffi`
 //! (include/oversight.h).
 
+pub mod anim;
 pub mod camera;
 pub mod engine;
 pub mod input;
@@ -17,6 +18,7 @@ pub mod types;
 #[cfg(feature = "window")]
 pub mod window;
 
+pub use anim::{AnimMode, AnimPlayer, Animation, SpriteSheet};
 pub use camera::Camera;
 pub use engine::{Engine, InputEvent, DEFAULT_FONT_ID};
 pub use input::{Input, Key, MouseButton};
