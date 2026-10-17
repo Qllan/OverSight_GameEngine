@@ -127,6 +127,10 @@ impl<T> Store<T> {
     pub fn remove(&mut self, id: u32) -> Option<T> {
         self.items.get_mut((id as usize).wrapping_sub(1))?.take()
     }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.items.iter_mut().flatten()
+    }
 }
 
 #[cfg(test)]

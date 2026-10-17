@@ -23,6 +23,25 @@ int main(int argc, char **argv) try {
     bool left = false, won = false;
     ov::Animation run = ov::Animation::range(8, 4, 10.0f);
 
+    // Dust from the feet: a trail while running, a puff on landing
+    ov::EmitterConfig dust_cfg;
+    dust_cfg.rate = 14;
+    dust_cfg.max = 80;
+    dust_cfg.life_min = 0.25f;
+    dust_cfg.life_max = 0.5f;
+    dust_cfg.speed_min = 8;
+    dust_cfg.speed_max = 30;
+    dust_cfg.spread = 3.0f;
+    dust_cfg.gravity = {0, -20};
+    dust_cfg.drag = 3;
+    dust_cfg.size_start = 4;
+    dust_cfg.size_end = 1;
+    dust_cfg.color_start = ov::Color(235, 225, 205, 200);
+    dust_cfg.color_end = ov::Color(235, 225, 205, 0);
+    dust_cfg.area = {3, 0};
+    dust_cfg.layer = 4;
+    ov::Emitter dust = engine.create_emitter(dust_cfg);
+
     // Run right, hop over the crate, then over the pit
     Script script{{{5, ov::Key::D, true}, {66, ov::Key::Space, true}, {82, ov::Key::Space, false},
                    {100, ov::Key::Space, true}, {116, ov::Key::Space, false}}};
@@ -52,6 +71,7 @@ int main(int argc, char **argv) try {
         ov::MoveResult r = map.move_box(box, vel * dt);
         box = r.rect;
         if (r.contacts.ground) {
+            if (since_ground > 0.2f) dust.burst(8);
             vel.y = 0;
             since_ground = 0;
         }
@@ -63,9 +83,13 @@ int main(int argc, char **argv) try {
         if (box.overlaps(goal)) won = true;
 
         ov::Vec2 feet{box.x + box.w / 2, box.bottom()};
+        dust.set_pos(feet);
+        dust.set_emitting(since_ground == 0 && dir != 0);
+        engine.update_emitters(dt);
         engine.look_at(follow(feet, map_w, map_h, 320, 180));
         engine.begin_frame(ov::Color(90, 150, 210));
         map.draw();
+        dust.draw();
         ov::Sprite s;
         s.pos = feet;
         s.origin = {8, 16};

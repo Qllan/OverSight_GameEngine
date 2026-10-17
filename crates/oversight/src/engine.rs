@@ -21,6 +21,7 @@ use crate::camera::Camera;
 use crate::collision::{self, MoveResult, RayHit};
 use crate::debug::{DebugOverlay, Stats};
 use crate::input::{Input, Key, MouseButton};
+use crate::particles::{Emitter, EmitterConfig};
 use crate::render::{DrawKind, Renderer, Shape};
 use crate::text::{Font, DEFAULT_FONT};
 use crate::texture::{Store, Texture};
@@ -46,6 +47,7 @@ pub struct Engine {
     pub textures: Store<Texture>,
     pub fonts: Store<Font>,
     pub tilemaps: Store<Tilemap>,
+    pub emitters: Store<Emitter>,
     pub state: DrawState,
     pub input: Input,
     pub time: Time,
@@ -80,6 +82,7 @@ impl Engine {
             textures: Store::default(),
             fonts,
             tilemaps: Store::default(),
+            emitters: Store::default(),
             state: DrawState::default(),
             input: Input::default(),
             time: Time::new(Some(1.0 / 60.0)),
@@ -411,6 +414,48 @@ impl Engine {
                 map.draw_layer(&mut self.renderer, i, &opts);
             }
         }
+    }
+
+    // --- particles --------------------------------------------------------------
+
+    pub fn create_emitter(&mut self, config: EmitterConfig, pos: Vec2) -> u32 {
+        self.emitters.insert(Emitter::new(config, pos))
+    }
+
+    pub fn emitter(&self, id: u32) -> Option<&Emitter> {
+        self.emitters.get(id)
+    }
+
+    pub fn emitter_mut(&mut self, id: u32) -> Option<&mut Emitter> {
+        self.emitters.get_mut(id)
+    }
+
+    pub fn free_emitter(&mut self, id: u32) {
+        self.emitters.remove(id);
+    }
+
+    /// Advance every emitter by `dt` seconds
+    pub fn update_emitters(&mut self, dt: f32) {
+        for e in self.emitters.iter_mut() {
+            e.update(dt);
+        }
+    }
+
+    /// Particles of one emitter on the emitter's layer, at the current
+    /// depth and space
+    pub fn draw_emitter(&mut self, id: u32) {
+        let Some(e) = self.emitters.get(id) else {
+            return;
+        };
+        let mut src = e.config.src;
+        if src.w <= 0.0 || src.h <= 0.0 {
+            let (w, h) = self
+                .textures
+                .get(e.config.texture)
+                .map_or((0, 0), |t| (t.width(), t.height()));
+            src = Rect::new(0.0, 0.0, w as f32, h as f32);
+        }
+        e.draw(&mut self.renderer, src, self.state.depth, self.state.space);
     }
 
     // --- debug overlay (drawn only while it is on; F3 toggles it) ------------

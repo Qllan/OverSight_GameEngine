@@ -17,6 +17,7 @@ use crate::camera::Camera;
 use crate::collision::{self, Contacts, MoveResult, RayHit};
 use crate::engine::{Engine, InputEvent};
 use crate::input::{key_from_u32, MouseButton};
+use crate::particles::EmitterConfig;
 use crate::tilemap::{LayerDraw, Orientation, Property, Tilemap};
 use crate::tween::{self, Ease, Repeat};
 use crate::types::{Color, Rect, Space, Sprite, Vec2};
@@ -1147,6 +1148,122 @@ pub extern "C" fn ov_debug_tilemap(e: *mut OvEngine, map: u32) {
     engine!(e).debug_tilemap(map);
 }
 
+// --- particles -----------------------------------------------------------------
+
+#[no_mangle]
+pub extern "C" fn ov_default_emitter() -> EmitterConfig {
+    EmitterConfig::default()
+}
+
+/// # Safety
+/// `config` is NULL (defaults) or a valid config
+#[no_mangle]
+pub unsafe extern "C" fn ov_create_emitter(
+    e: *mut OvEngine,
+    config: *const EmitterConfig,
+    pos: Vec2,
+) -> u32 {
+    let config = config.as_ref().copied().unwrap_or_default();
+    engine!(e, 0).create_emitter(config, pos)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_free_emitter(e: *mut OvEngine, emitter: u32) {
+    engine!(e).free_emitter(emitter);
+}
+
+/// Config of an emitter (the defaults for an unknown id)
+#[no_mangle]
+pub extern "C" fn ov_emitter_config(e: *mut OvEngine, emitter: u32) -> EmitterConfig {
+    engine!(e, EmitterConfig::default())
+        .emitter(emitter)
+        .map(|em| em.config)
+        .unwrap_or_default()
+}
+
+/// # Safety
+/// `config` is a valid config
+#[no_mangle]
+pub unsafe extern "C" fn ov_set_emitter_config(
+    e: *mut OvEngine,
+    emitter: u32,
+    config: *const EmitterConfig,
+) -> bool {
+    let (Some(em), Some(c)) = (engine!(e, false).emitter_mut(emitter), config.as_ref()) else {
+        return false;
+    };
+    em.set_config(*c);
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_emitter_pos(e: *mut OvEngine, emitter: u32, pos: Vec2) {
+    if let Some(em) = engine!(e).emitter_mut(emitter) {
+        em.pos = pos;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_emitter_pos(e: *mut OvEngine, emitter: u32) -> Vec2 {
+    engine!(e, Vec2::default())
+        .emitter(emitter)
+        .map_or(Vec2::default(), |em| em.pos)
+}
+
+/// Spawn at the config's rate (on by default); bursts work either way
+#[no_mangle]
+pub extern "C" fn ov_set_emitter_emitting(e: *mut OvEngine, emitter: u32, on: bool) {
+    if let Some(em) = engine!(e).emitter_mut(emitter) {
+        em.emitting = on;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_emitter_emitting(e: *mut OvEngine, emitter: u32) -> bool {
+    engine!(e, false)
+        .emitter(emitter)
+        .is_some_and(|em| em.emitting)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_emitter_burst(e: *mut OvEngine, emitter: u32, count: u32) {
+    if let Some(em) = engine!(e).emitter_mut(emitter) {
+        em.burst(count);
+    }
+}
+
+/// Particles alive now
+#[no_mangle]
+pub extern "C" fn ov_emitter_count(e: *mut OvEngine, emitter: u32) -> u32 {
+    engine!(e, 0)
+        .emitter(emitter)
+        .map_or(0, |em| em.particles.len() as u32)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_emitter_clear(e: *mut OvEngine, emitter: u32) {
+    if let Some(em) = engine!(e).emitter_mut(emitter) {
+        em.clear();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_update_emitter(e: *mut OvEngine, emitter: u32, dt: f32) {
+    if let Some(em) = engine!(e).emitter_mut(emitter) {
+        em.update(dt);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_update_emitters(e: *mut OvEngine, dt: f32) {
+    engine!(e).update_emitters(dt);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_draw_emitter(e: *mut OvEngine, emitter: u32) {
+    engine!(e).draw_emitter(emitter);
+}
+
 // --- sound ---------------------------------------------------------------------
 // Built without the "audio" feature these do nothing and return 0/false.
 
@@ -1343,6 +1460,22 @@ mod tests {
 
             let frames = [3u32, 4, 5];
             assert_eq!(ov_anim_frame_at(frames.as_ptr(), 3, 10.0, 0, 0.15), 4);
+            assert_eq!(
+                std::mem::size_of::<EmitterConfig>(),
+                104,
+                "matches OvEmitter"
+            );
+            let em = ov_create_emitter(e, std::ptr::null(), Vec2::new(4.0, 4.0));
+            ov_emitter_burst(e, em, 3);
+            assert_eq!(ov_emitter_count(e, em), 3);
+            let mut c = ov_emitter_config(e, em);
+            c.max = 1;
+            assert!(ov_set_emitter_config(e, em, &c));
+            ov_emitter_clear(e, em);
+            ov_emitter_burst(e, em, 3);
+            assert_eq!(ov_emitter_count(e, em), 1, "new max applies");
+            ov_free_emitter(e, em);
+            assert_eq!(ov_emitter_count(e, em), 0);
             assert_eq!(ov_ease(1, 0.5), 0.25);
             assert_eq!(ov_ease(-5, 0.5), 0.5, "unknown curve is linear");
             assert_eq!(ov_tween_progress(-0.2, 1.0, 0, 0), 0.0, "delay");

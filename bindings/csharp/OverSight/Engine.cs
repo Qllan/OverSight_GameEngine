@@ -73,6 +73,24 @@ public sealed class Sound : Resource
     public uint Play(float volume = 1f, float pitch = 1f) => Native.ov_play_sound(Engine.Handle, Id, volume, pitch);
 }
 
+/// <summary>Spawns and moves particles; draw it every frame with Draw()</summary>
+public sealed class Emitter : Resource
+{
+    internal Emitter(Engine e, uint id) : base(e, id) { }
+    protected override void Free(IntPtr e, uint id) => Native.ov_free_emitter(e, id);
+
+    private IntPtr E => Engine.Handle;
+
+    public EmitterConfig Config { get => Native.ov_emitter_config(E, Id); set => Native.ov_set_emitter_config(E, Id, value); }
+    public Vec2 Pos { get => Native.ov_emitter_pos(E, Id); set => Native.ov_set_emitter_pos(E, Id, value); }
+    public bool Emitting { get => Native.ov_emitter_emitting(E, Id); set => Native.ov_set_emitter_emitting(E, Id, value); }
+    public uint Count => Native.ov_emitter_count(E, Id);
+    public void Burst(uint count) => Native.ov_emitter_burst(E, Id, count);
+    public void Clear() => Native.ov_emitter_clear(E, Id);
+    public void Update(float dt) => Native.ov_update_emitter(E, Id, dt);
+    public void Draw() => Native.ov_draw_emitter(E, Id);
+}
+
 /// <summary>A spawn point, trigger or other marker placed on a map</summary>
 public sealed class MapObject
 {
@@ -256,6 +274,10 @@ public sealed class Engine : IDisposable
     public Tilemap LoadTilemap(string path) => new(this, Check(Native.ov_load_tilemap(Handle, path), path));
     public Tilemap CreateTilemap(Orientation o, uint width, uint height, uint tileW, uint tileH, uint layers = 1)
         => new(this, Check(Native.ov_create_tilemap(Handle, (int)o, width, height, tileW, tileH, layers), "tilemap"));
+    public Emitter CreateEmitter(EmitterConfig config, Vec2 pos = default)
+        => new(this, Check(Native.ov_create_emitter(Handle, config, pos), "emitter"));
+    /// <summary>Advance every emitter by dt seconds</summary>
+    public void UpdateEmitters(float dt) => Native.ov_update_emitters(Handle, dt);
     public Sound LoadSound(string path) => new(this, Check(Native.ov_load_sound(Handle, path), path));
 
     // camera and draw state

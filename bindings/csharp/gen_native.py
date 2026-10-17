@@ -18,12 +18,12 @@ VALUES = {
     "uint32_t": "uint", "int32_t": "int", "uint64_t": "ulong", "int64_t": "long", "size_t": "nuint",
     "OvColor": "Color", "OvVec2": "Vec2", "OvRect": "Rect", "OvCamera": "Camera",
     "OvSpriteSheet": "SpriteSheet", "OvMoveResult": "MoveResult", "OvContacts": "Contacts",
-    "OvEmitter": "Emitter",
+    "OvEmitter": "EmitterConfig",
 }
 # C pointer parameters -> C# parameters
 POINTERS = {
     "OvEngine": "IntPtr", "const OvConfig": "in NativeConfig", "const OvSprite": "in Sprite",
-    "const OvSpriteSheet": "in SpriteSheet", "const OvEmitter": "in Emitter",
+    "const OvSpriteSheet": "in SpriteSheet", "const OvEmitter": "in EmitterConfig",
     "uint32_t": "out uint", "float": "out float",
     "OvTilemapInfo": "out TilemapInfo", "OvMapObject": "out MapObjectData", "OvRayHit": "out RayHit",
     "const uint8_t": "byte[]", "const uint32_t": "uint[]", "char": "byte[]?",

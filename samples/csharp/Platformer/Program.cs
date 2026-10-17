@@ -19,6 +19,15 @@ var vel = new Vec2();
 float sinceGround = 1, jumpBuffer = 1, runTime = 0;
 bool left = false, won = false;
 var run = Animation.Range(8, 4, 10f);
+
+// Dust from the feet: a trail while running, a puff on landing
+using var dust = engine.CreateEmitter(new EmitterConfig
+{
+    Rate = 14, Max = 80, LifeMin = 0.25f, LifeMax = 0.5f, SpeedMin = 8, SpeedMax = 30, Spread = 3f,
+    Gravity = new Vec2(0, -20), Drag = 3, SizeStart = 4, SizeEnd = 1,
+    ColorStart = new Color(235, 225, 205, 200), ColorEnd = new Color(235, 225, 205, 0),
+    Area = new Vec2(3, 0), Layer = 4,
+});
 bool JumpKey(Func<Key, bool> state) => state(Key.Space) || state(Key.W) || state(Key.Up);
 
 // Run right, hop over the crate, then over the pit
@@ -47,15 +56,24 @@ while (script.Next(engine, opt))
     vel.Y = MathF.Min(vel.Y + gravity * dt, 500);
     var r = map.MoveBox(box, vel * dt);
     box = r.Rect;
-    if (r.Contacts.Ground) { vel.Y = 0; sinceGround = 0; }
+    if (r.Contacts.Ground)
+    {
+        if (sinceGround > 0.2f) dust.Burst(8);
+        vel.Y = 0;
+        sinceGround = 0;
+    }
     if (r.Contacts.Ceiling) vel.Y = 0;
     if (box.Y > mapH) { box = new Rect(spawn.X - 5, spawn.Y - 14, 10, 14); vel = new Vec2(); }
     if (box.Overlaps(goal)) won = true;
 
     var feet = new Vec2(box.X + box.W / 2, box.Bottom);
+    dust.Pos = feet;
+    dust.Emitting = sinceGround == 0 && dir != 0;
+    engine.UpdateEmitters(dt);
     engine.LookAt(Sample.Follow(feet, mapW, mapH));
     engine.BeginFrame(new Color(90, 150, 210));
     map.Draw();
+    dust.Draw();
     bool airborne = sinceGround > 0.05f;
     uint f = airborne ? 9 : (dir != 0 ? run.FrameAt(runTime) : 8);
     engine.DrawFrame(hero, frames, f, new Sprite { Pos = feet, Origin = new Vec2(8, 16), FlipX = left, Layer = 5 });

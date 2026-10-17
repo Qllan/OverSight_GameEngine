@@ -54,6 +54,18 @@ int main(void) {
     OvColor red = ov_pixel(e, 12, 2);
     CHECK(red.r == 255 && red.g == 0);
 
+    /* Particles: a burst of 5 dots with no rate, gone after their life */
+    _Static_assert(sizeof(OvEmitter) == 104, "OvEmitter layout matches the engine");
+    OvEmitter cfg = ov_default_emitter();
+    cfg.rate = 0;
+    cfg.life_min = cfg.life_max = 0.5f;
+    uint32_t sparks = ov_create_emitter(e, &cfg, (OvVec2){8, 8});
+    ov_emitter_burst(e, sparks, 5);
+    CHECK(ov_emitter_count(e, sparks) == 5);
+    ov_update_emitters(e, 0.6f);
+    CHECK(ov_emitter_count(e, sparks) == 0);
+    ov_free_emitter(e, sparks);
+
     uint32_t frames[] = {7, 8, 9};
     CHECK(ov_anim_frame_at(frames, 3, 10.0f, OV_ANIM_ONCE, 5.0f) == 9);
 

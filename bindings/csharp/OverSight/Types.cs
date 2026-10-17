@@ -84,6 +84,42 @@ public struct Sprite
     public bool FlipY { readonly get => flipY != 0; set => flipY = value ? (byte)1 : (byte)0; }
 }
 
+/// <summary>How an emitter's particles look and move. new EmitterConfig() starts
+/// from the engine's defaults. A Min/Max pair picks a random value for every particle.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct EmitterConfig
+{
+    /// <summary>Texture id (Texture.Id); 0 draws round dots</summary>
+    public uint Texture;
+    /// <summary>Region of the texture; empty: the whole texture</summary>
+    public Rect Src;
+    /// <summary>Particles per second while emitting</summary>
+    public float Rate;
+    /// <summary>Most particles alive at once</summary>
+    public uint Max;
+    public float LifeMin, LifeMax;
+    /// <summary>Pixels per second</summary>
+    public float SpeedMin, SpeedMax;
+    /// <summary>Direction in radians: 0 right, PI/2 down</summary>
+    public float Angle;
+    /// <summary>Width of the cone of directions (2*PI: every way)</summary>
+    public float Spread;
+    public Vec2 Gravity;
+    /// <summary>Share of speed lost per second</summary>
+    public float Drag;
+    /// <summary>Pixels: dot diameter or texture width</summary>
+    public float SizeStart, SizeEnd;
+    public float SpinMin, SpinMax;
+    public Color ColorStart, ColorEnd;
+    /// <summary>Spawn box half-size around the emitter</summary>
+    public Vec2 Area;
+    public int Layer;
+    /// <summary>Same seed and calls: same particles</summary>
+    public uint Seed;
+
+    public EmitterConfig() { this = Native.ov_default_emitter(); }
+}
+
 /// <summary>A texture cut into a grid of equal frames, numbered row by row</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct SpriteSheet

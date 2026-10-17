@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using OverSight;
 
 static void Check(bool ok, string what)
@@ -39,6 +40,14 @@ var mid = slide.Update(0.5f);
 Check(mid.X == 5f && mid.Y == 10f && !slide.Done, $"tween middle {mid}");
 var fade = new ColorTween(Color.Black, Color.White, 2f, repeat: Repeat.PingPong);
 Check(fade.Update(3f) == new Color(128, 128, 128), "color ping-pong");
+
+Check(Marshal.SizeOf<EmitterConfig>() == 104, "EmitterConfig layout");
+var sparks = engine.CreateEmitter(new EmitterConfig { Rate = 10, Texture = tiles.Id }, new Vec2(8, 8));
+sparks.Update(0.55f);
+Check(sparks.Count == 5 && sparks.Emitting, $"emitter rate {sparks.Count}");
+sparks.Emitting = false;
+sparks.Burst(3);
+Check(sparks.Count == 8 && sparks.Config.Rate == 10f, "burst and config");
 
 Check(Animation.Range(4, 4, 8f).FrameAt(0.3f) == 6, "animation");
 

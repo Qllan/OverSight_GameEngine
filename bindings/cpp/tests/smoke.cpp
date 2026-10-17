@@ -56,6 +56,17 @@ int main() {
     ov::Tween<ov::Color> fade(ov::Color::Black, ov::Color::White, 2.0f, ov::Ease::Linear, ov::Repeat::PingPong);
     CHECK(fade.update(3.0f) == ov::Color(128, 128, 128));
 
+    ov::EmitterConfig sparks_cfg;
+    sparks_cfg.rate = 10;
+    sparks_cfg.texture = tiles.id();
+    ov::Emitter sparks = engine.create_emitter(sparks_cfg, {8, 8});
+    sparks.update(0.55f);
+    CHECK(sparks.count() == 5 && sparks.emitting());
+    sparks.set_emitting(false);
+    sparks.burst(3);
+    CHECK(sparks.count() == 8);
+    CHECK(sparks.config().rate == 10.0f);
+
     ov::Animation walk = ov::Animation::range(4, 4, 8.0f);
     CHECK(walk.frame_at(0.3f) == 6);
 

@@ -77,6 +77,28 @@ typedef struct OvSpriteSheet {
     uint32_t frame_w, frame_h, columns, count, margin, spacing;
 } OvSpriteSheet;
 
+/* How an emitter's particles look and move. Get the defaults from
+   ov_default_emitter() and change what you need. A min/max pair picks a
+   random value between them for every particle. */
+typedef struct OvEmitter {
+    uint32_t texture;           /* 0: round dots */
+    OvRect src;                 /* region of the texture; w or h <= 0: whole texture */
+    float rate;                 /* particles per second while emitting */
+    uint32_t max;               /* most particles alive at once */
+    float life_min, life_max;   /* seconds */
+    float speed_min, speed_max; /* pixels per second */
+    float angle;                /* direction, radians: 0 right, PI/2 down */
+    float spread;               /* width of the cone of directions (2*PI: every way) */
+    OvVec2 gravity;             /* pixels per second squared */
+    float drag;                 /* share of speed lost per second */
+    float size_start, size_end; /* pixels: dot diameter or texture width */
+    float spin_min, spin_max;   /* radians per second (textures) */
+    OvColor color_start, color_end;
+    OvVec2 area;                /* spawn box half-size around the emitter */
+    int32_t layer;
+    uint32_t seed;              /* same seed and calls: same particles */
+} OvEmitter;
+
 typedef enum OvAnimMode { OV_ANIM_LOOP = 0, OV_ANIM_ONCE = 1, OV_ANIM_PING_PONG = 2 } OvAnimMode;
 /* Easing curves, as on easings.net */
 typedef enum OvEase {
@@ -359,6 +381,26 @@ void ov_debug_line(OvEngine *e, OvVec2 from, OvVec2 to, OvColor color);
 void ov_debug_circle(OvEngine *e, OvVec2 center, float radius, OvColor color);
 void ov_debug_text(OvEngine *e, const char *text, OvVec2 pos, OvColor color);
 void ov_debug_tilemap(OvEngine *e, uint32_t map); /* solid cells, platforms, objects */
+
+/* --- particles --- */
+OvEmitter ov_default_emitter(void);
+/* config NULL: the defaults. The emitter spawns at its rate right away */
+uint32_t ov_create_emitter(OvEngine *e, const OvEmitter *config, OvVec2 pos);
+void ov_free_emitter(OvEngine *e, uint32_t emitter);
+OvEmitter ov_emitter_config(OvEngine *e, uint32_t emitter);
+/* Living particles keep flying; a new seed restarts the random sequence */
+bool ov_set_emitter_config(OvEngine *e, uint32_t emitter, const OvEmitter *config);
+void ov_set_emitter_pos(OvEngine *e, uint32_t emitter, OvVec2 pos);
+OvVec2 ov_emitter_pos(OvEngine *e, uint32_t emitter);
+void ov_set_emitter_emitting(OvEngine *e, uint32_t emitter, bool on);
+bool ov_emitter_emitting(OvEngine *e, uint32_t emitter);
+void ov_emitter_burst(OvEngine *e, uint32_t emitter, uint32_t count);
+uint32_t ov_emitter_count(OvEngine *e, uint32_t emitter);
+void ov_emitter_clear(OvEngine *e, uint32_t emitter);
+void ov_update_emitter(OvEngine *e, uint32_t emitter, float dt);
+void ov_update_emitters(OvEngine *e, float dt);
+/* On the config's layer, at the current depth and space */
+void ov_draw_emitter(OvEngine *e, uint32_t emitter);
 
 /* --- sound (WAV, OGG, MP3) --- */
 uint32_t ov_load_sound(OvEngine *e, const char *path);

@@ -15,6 +15,7 @@ pub mod debug;
 pub mod engine;
 pub mod ffi;
 pub mod input;
+pub mod particles;
 pub mod render;
 pub mod text;
 pub mod texture;
@@ -31,6 +32,7 @@ pub use camera::Camera;
 pub use collision::{Contacts, MoveResult, RayHit};
 pub use engine::{Engine, InputEvent, DEFAULT_FONT_ID};
 pub use input::{Input, Key, MouseButton};
+pub use particles::{Emitter, EmitterConfig};
 pub use tilemap::{
     LayerDraw, MapObject, ObjectLayer, Orientation, Properties, Property, TileLayer, Tilemap,
     Tileset,

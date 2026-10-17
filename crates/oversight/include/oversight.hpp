@@ -63,6 +63,12 @@ struct Sprite : OvSprite {
     Sprite() : OvSprite(ov_default_sprite()) {}
 };
 
+/// Particle look and motion; starts from the engine's defaults
+struct EmitterConfig : OvEmitter {
+    EmitterConfig() : OvEmitter(ov_default_emitter()) {}
+    EmitterConfig(const OvEmitter &c) : OvEmitter(c) {}
+};
+
 using Camera = OvCamera;
 using SpriteSheet = OvSpriteSheet;
 using Contacts = OvContacts;
@@ -304,6 +310,22 @@ public:
     uint32_t play(float volume = 1.0f, float pitch = 1.0f) { return ov_play_sound(e_, id_, volume, pitch); }
 };
 
+class Emitter : public detail::Handle<ov_free_emitter> {
+public:
+    using Handle::Handle;
+    EmitterConfig config() const { return ov_emitter_config(e_, id_); }
+    void set_config(const EmitterConfig &c) { ov_set_emitter_config(e_, id_, &c); }
+    Vec2 pos() const { return ov_emitter_pos(e_, id_); }
+    void set_pos(Vec2 p) { ov_set_emitter_pos(e_, id_, p); }
+    bool emitting() const { return ov_emitter_emitting(e_, id_); }
+    void set_emitting(bool on) { ov_set_emitter_emitting(e_, id_, on); }
+    void burst(uint32_t count) { ov_emitter_burst(e_, id_, count); }
+    uint32_t count() const { return ov_emitter_count(e_, id_); }
+    void clear() { ov_emitter_clear(e_, id_); }
+    void update(float dt) { ov_update_emitter(e_, id_, dt); }
+    void draw() { ov_draw_emitter(e_, id_); }
+};
+
 struct MapObject {
     uint32_t id = 0;
     std::string name, cls;
@@ -440,6 +462,11 @@ public:
         return {e_, detail::check(ov_create_tilemap(e_, static_cast<int32_t>(o), w, h, tile_w, tile_h, layers),
                                   "tilemap")};
     }
+    Emitter create_emitter(const EmitterConfig &config, Vec2 pos = {}) {
+        return {e_, detail::check(ov_create_emitter(e_, &config, pos), "emitter")};
+    }
+    /// Advance every emitter by dt seconds
+    void update_emitters(float dt) { ov_update_emitters(e_, dt); }
     Sound load_sound(const std::string &path) { return {e_, detail::check(ov_load_sound(e_, path.c_str()), path)}; }
 
     // camera and draw state
