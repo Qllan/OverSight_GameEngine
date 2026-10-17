@@ -6,6 +6,7 @@ mod app;
 mod console;
 mod editor;
 mod project;
+mod scene_view;
 
 pub(crate) use eframe::egui;
 

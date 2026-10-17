@@ -5,6 +5,9 @@
 use crate::console::Console;
 use crate::egui;
 use crate::project::Project;
+use crate::scene_view::{self, SceneView};
+use orst::components::{write, Name, Transform, NAME, TRANSFORM};
+use orst::ecs::Entity;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,21 +29,65 @@ pub struct Editor {
     pub bottom: Bottom,
     /// The asset picked in the Project window
     pub selected_asset: Option<String>,
+    /// The edited scene; Err when the engine could not start
+    pub scene: Result<SceneView, String>,
+    pub selected: Option<Entity>,
+    /// The Name field while it is being typed
+    name_edit: String,
 }
 
 impl Editor {
     pub fn new(
         project: Project,
-        console: Console,
-        _wgpu: Option<&eframe::egui_wgpu::RenderState>,
+        mut console: Console,
+        wgpu: Option<&eframe::egui_wgpu::RenderState>,
     ) -> Editor {
+        let scene = SceneView::new(wgpu);
+        match &scene {
+            Ok(view) => console.info(format!("Scene view on {}", view.engine.renderer_name())),
+            Err(e) => console.error(format!("The scene view could not start: {e}")),
+        }
         Editor {
             project,
             console,
             center: Center::Scene,
             bottom: Bottom::Project,
             selected_asset: None,
+            scene,
+            selected: None,
+            name_edit: String::new(),
         }
+    }
+
+    /// A new entity with a Name and a Transform at the middle of the view
+    pub fn create_entity(&mut self) {
+        let Ok(view) = &mut self.scene else { return };
+        let engine = &mut view.engine;
+        let e = engine.world.spawn();
+        let t = Transform {
+            pos: engine.camera().center,
+            ..Default::default()
+        };
+        write(&mut engine.world, e, TRANSFORM, &t);
+        write(&mut engine.world, e, NAME, &Name::new("Entity"));
+        self.select(Some(e));
+    }
+
+    pub fn delete_selected(&mut self) {
+        if let (Ok(view), Some(e)) = (&mut self.scene, self.selected) {
+            view.engine.world.despawn(e);
+        }
+        self.select(None);
+    }
+
+    fn select(&mut self, e: Option<Entity>) {
+        self.selected = e;
+        self.name_edit = match (&self.scene, e) {
+            (Ok(view), Some(e)) => orst::components::read::<Name>(&view.engine.world, e, NAME)
+                .map(|n| n.as_str().to_string())
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
     }
 
     /// One frame of the editor; `close` asks to go back to the hub
@@ -60,10 +107,21 @@ impl Editor {
                         *close = true;
                     }
                 });
+                ui.menu_button("Entity", |ui| {
+                    if ui.button("Create empty").clicked() {
+                        self.create_entity();
+                    }
+                    if ui
+                        .add_enabled(self.selected.is_some(), egui::Button::new("Delete"))
+                        .clicked()
+                    {
+                        self.delete_selected();
+                    }
+                });
                 ui.separator();
-                ui.add_enabled(false, egui::Button::new("▶ Play"));
-                ui.add_enabled(false, egui::Button::new("⏸ Pause"));
-                ui.add_enabled(false, egui::Button::new("⏭ Step"));
+                ui.add_enabled(false, egui::Button::new("Play"));
+                ui.add_enabled(false, egui::Button::new("Pause"));
+                ui.add_enabled(false, egui::Button::new("Step"));
                 ui.separator();
                 ui.label(&self.project.file.name);
             });
@@ -72,9 +130,18 @@ impl Editor {
             .resizable(true)
             .default_size(220.0)
             .show(ui, |ui| {
-                ui.strong("Hierarchy");
+                ui.horizontal(|ui| {
+                    ui.strong("Hierarchy");
+                    if ui
+                        .small_button("+")
+                        .on_hover_text("Create an empty entity")
+                        .clicked()
+                    {
+                        self.create_entity();
+                    }
+                });
                 ui.separator();
-                ui.weak("No scene open");
+                self.hierarchy_ui(ui);
             });
         egui::Panel::right("inspector")
             .resizable(true)
@@ -82,6 +149,10 @@ impl Editor {
             .show(ui, |ui| {
                 ui.strong("Inspector");
                 ui.separator();
+                if self.selected.is_some() {
+                    self.entity_ui(ui);
+                    return;
+                }
                 match &self.selected_asset {
                     Some(path) => {
                         ui.label(path);
@@ -114,10 +185,74 @@ impl Editor {
                 ui.selectable_value(&mut self.center, Center::Game, "Game");
             });
             ui.separator();
-            ui.centered_and_justified(|ui| {
-                ui.weak("The scene view comes in the next step");
-            });
+            match (self.center, &mut self.scene) {
+                (Center::Scene, Ok(view)) => {
+                    if let Some(picked) = view.ui(ui, self.selected) {
+                        self.select(picked);
+                    }
+                }
+                (Center::Scene, Err(e)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, e.as_str());
+                }
+                (Center::Game, _) => {
+                    ui.centered_and_justified(|ui| {
+                        ui.weak("Press Play to run the game here");
+                    });
+                }
+            }
         });
+        let typing = ui.ctx().egui_wants_keyboard_input();
+        if !typing && self.selected.is_some() && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+            self.delete_selected();
+        }
+    }
+
+    fn hierarchy_ui(&mut self, ui: &mut egui::Ui) {
+        let Ok(view) = &self.scene else {
+            ui.weak("No scene");
+            return;
+        };
+        let mut picked = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                for e in view.engine.world.query(&[]) {
+                    let label = scene_view::label(&view.engine, e);
+                    if ui
+                        .selectable_label(self.selected == Some(e), label)
+                        .clicked()
+                    {
+                        picked = Some(e);
+                    }
+                }
+            });
+        if let Some(e) = picked {
+            self.select(Some(e));
+        }
+    }
+
+    /// The selected entity: its name and components
+    fn entity_ui(&mut self, ui: &mut egui::Ui) {
+        let (Ok(view), Some(e)) = (&mut self.scene, self.selected) else {
+            return;
+        };
+        let world = &mut view.engine.world;
+        if !world.alive(e) {
+            self.selected = None;
+            return;
+        }
+        ui.horizontal(|ui| {
+            ui.label("Name");
+            if ui.text_edit_singleline(&mut self.name_edit).changed() {
+                write(world, e, NAME, &Name::new(&self.name_edit));
+            }
+        });
+        ui.separator();
+        for id in 1..=world.component_types() {
+            if id != NAME && world.has(e, id) {
+                ui.label(world.storage(id).map_or("?", |s| s.name.as_str()));
+            }
+        }
     }
 
     fn rescan(&mut self) {
@@ -173,7 +308,7 @@ impl Tree {
     fn ui(&self, ui: &mut egui::Ui, prefix: &str, selected: &mut Option<String>) {
         for (name, dir) in &self.dirs {
             let path = format!("{prefix}{name}/");
-            egui::CollapsingHeader::new(format!("📁 {name}"))
+            egui::CollapsingHeader::new(format!("{name}/"))
                 .id_salt(&path)
                 .default_open(false)
                 .show(ui, |ui| dir.ui(ui, &path, selected));
@@ -181,30 +316,10 @@ impl Tree {
         for name in &self.files {
             let path = format!("{prefix}{name}");
             let picked = selected.as_deref() == Some(path.as_str());
-            if ui
-                .selectable_label(picked, format!("{} {name}", icon(name)))
-                .clicked()
-            {
+            if ui.selectable_label(picked, name.as_str()).clicked() {
                 *selected = Some(path);
             }
         }
-    }
-}
-
-fn icon(file: &str) -> &'static str {
-    match file
-        .rsplit('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "png" | "jpg" | "jpeg" => "🖼",
-        "wav" | "ogg" | "mp3" => "🔊",
-        "scene" => "🎬",
-        "tmj" | "tsj" => "🗺",
-        "cs" | "cpp" | "h" | "hpp" => "📜",
-        _ => "📄",
     }
 }
 
