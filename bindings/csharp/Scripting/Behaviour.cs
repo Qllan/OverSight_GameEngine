@@ -15,7 +15,8 @@ namespace ORST;
 /// }
 /// </code>
 /// Start runs before the first Update of each entity; Update runs every
-/// tick (60 a second) before the engine moves things.
+/// tick (60 a second) before the engine moves things, after the contact
+/// calls for what the engine found in the tick before.
 /// </summary>
 public abstract class Behaviour
 {
@@ -30,6 +31,11 @@ public abstract class Behaviour
 
     public virtual void Start() { }
     public virtual void Update(float dt) { }
+    /// <summary>The entity's collider began to touch another's (or to
+    /// overlap a trigger); seen in the tick after the engine found it</summary>
+    public virtual void OnContactBegin(Entity other, Contact contact) { }
+    /// <summary>The two stopped touching</summary>
+    public virtual void OnContactEnd(Entity other, Contact contact) { }
 
     /// <summary>A line in the Console</summary>
     public static void Log(object? message) => Host.Log(0, message?.ToString() ?? "null");

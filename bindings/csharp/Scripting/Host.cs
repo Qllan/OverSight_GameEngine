@@ -21,6 +21,7 @@ public static unsafe class Host
     private static ScriptContext? context;
     private static readonly List<Script> scripts = new();
     private static bool playing;
+    private static bool firstTick;
     private static IntPtr error;
 
     /// <summary>The engine scripts work on; a new wrapper per load, so
@@ -85,6 +86,7 @@ public static unsafe class Host
     public static int Start()
     {
         playing = true;
+        firstTick = true;
         foreach (var s in scripts) s.Live.Clear();
         return 0;
     }
@@ -115,6 +117,23 @@ public static unsafe class Host
                     s.Live[e.Id] = b;
                     if (!Run(s, b, x => x.Start())) thrown++;
                 }
+            // Contacts are the engine's from the tick before; none yet on the first
+            if (!firstTick)
+                foreach (var c in engine.Contacts())
+                {
+                    if (c.State == ContactState.Stay) continue;
+                    foreach (var me in new[] { c.A, c.B })
+                        foreach (var (s, _) in met)
+                        {
+                            if (!s.Live.TryGetValue(me.Id, out var b)) continue;
+                            var other = c.Other(me);
+                            var ok = c.State == ContactState.Begin
+                                ? Run(s, b, x => x.OnContactBegin(other, c))
+                                : Run(s, b, x => x.OnContactEnd(other, c));
+                            if (!ok) thrown++;
+                        }
+                }
+            firstTick = false;
             foreach (var (s, entities) in met)
                 foreach (var e in entities)
                     if (s.Live.TryGetValue(e.Id, out var b) && !Run(s, b, x => x.Update(dt))) thrown++;

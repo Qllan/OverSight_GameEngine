@@ -366,9 +366,9 @@ mod dotnet {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use orst::components::{read, write, Transform, TRANSFORM};
+    use orst::components::{read, write, Collider, Transform, COLLIDER, TRANSFORM};
     use orst::schema::Value;
-    use orst::Engine;
+    use orst::{Engine, Vec2};
 
     /// Builds the script host with the .NET SDK; None (the test skips)
     /// without one, unless ORST_REQUIRE_DOTNET is set (CI)
@@ -408,7 +408,9 @@ public class Mover : Behaviour
     public float Speed = 3;
     public Mode Mode = Mode.Run;
     public int Starts;
+    public int Hits;
     public override void Start() { Starts++; Log("started"); }
+    public override void OnContactBegin(Entity other, Contact c) { if (c.Trigger) Hits++; }
     public override void Update(float dt) => Transform.Pos.X += Speed;
 }
 "#;
@@ -444,10 +446,31 @@ public class Mover : Behaviour
         let world = &mut engine.world;
         let id = world.component_id("Mover").expect("the script's component");
         let names: Vec<_> = world.fields(id).iter().map(|f| f.name.clone()).collect();
-        assert_eq!(names, ["Speed", "Mode", "Starts"]);
+        assert_eq!(names, ["Speed", "Mode", "Starts", "Hits"]);
         assert_eq!(world.fields(id)[1].options, ["Walk", "Run"]);
         let e = world.spawn();
         write(world, e, TRANSFORM, &Transform::default());
+        let shape = Collider {
+            size: Vec2::new(10.0, 10.0),
+            ..Default::default()
+        };
+        write(world, e, COLLIDER, &shape);
+        // A trigger the mover walks into
+        let zone = world.spawn();
+        let at = Transform {
+            pos: Vec2::new(12.0, 0.0),
+            ..Default::default()
+        };
+        write(world, zone, TRANSFORM, &at);
+        write(
+            world,
+            zone,
+            COLLIDER,
+            &Collider {
+                trigger: 1,
+                ..shape
+            },
+        );
         let defaults = world.default_value(id);
         world.set(e, id, &defaults);
         assert_eq!(world.field(e, id, "Speed"), Some(Value::F32(3.0)));
@@ -455,11 +478,17 @@ public class Mover : Behaviour
 
         scripts.begin_play();
         assert_eq!(scripts.tick(1.0 / 60.0), 0);
+        engine.step(1.0 / 60.0);
         assert_eq!(scripts.tick(1.0 / 60.0), 0);
         scripts.end_play();
         let t: Transform = read(&engine.world, e, TRANSFORM).unwrap();
         assert_eq!(t.pos.x, 6.0, "Update moved the entity twice");
         assert_eq!(engine.world.field(e, id, "Starts"), Some(Value::I32(1)));
+        assert_eq!(
+            engine.world.field(e, id, "Hits"),
+            Some(Value::I32(1)),
+            "at x 3 it touched the trigger"
+        );
         let log = take_log();
         assert!(log.iter().any(|(_, l)| l == "started"), "{log:?}");
 
