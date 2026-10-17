@@ -8,6 +8,7 @@
 
 pub mod anim;
 pub mod camera;
+pub mod collision;
 pub mod engine;
 pub mod input;
 pub mod render;
@@ -22,6 +23,7 @@ pub mod window;
 
 pub use anim::{AnimMode, AnimPlayer, Animation, SpriteSheet};
 pub use camera::Camera;
+pub use collision::{Contacts, MoveResult, RayHit};
 pub use engine::{Engine, InputEvent, DEFAULT_FONT_ID};
 pub use input::{Input, Key, MouseButton};
 pub use tilemap::{

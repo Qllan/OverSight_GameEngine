@@ -16,6 +16,7 @@
 
 use crate::anim::SpriteSheet;
 use crate::camera::Camera;
+use crate::collision::{self, MoveResult, RayHit};
 use crate::input::{Input, Key, MouseButton};
 use crate::render::{DrawKind, Renderer, Shape};
 use crate::text::{Font, DEFAULT_FONT};
@@ -254,6 +255,22 @@ impl Engine {
     /// Frees the map only; its tileset textures stay loaded
     pub fn free_tilemap(&mut self, map: u32) {
         self.tilemaps.remove(map);
+    }
+
+    /// `collision::move_box` against a stored map (unblocked if there is
+    /// no such map)
+    pub fn move_box(&self, map: u32, rect: Rect, delta: Vec2) -> MoveResult {
+        match self.tilemaps.get(map) {
+            Some(m) => collision::move_box(m, rect, delta),
+            None => MoveResult {
+                rect: Rect::new(rect.x + delta.x, rect.y + delta.y, rect.w, rect.h),
+                contacts: Default::default(),
+            },
+        }
+    }
+
+    pub fn raycast(&self, map: u32, from: Vec2, to: Vec2) -> Option<RayHit> {
+        collision::raycast(self.tilemaps.get(map)?, from, to)
     }
 
     // --- camera and draw state ------------------------------------------

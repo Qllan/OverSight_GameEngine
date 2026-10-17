@@ -71,6 +71,19 @@ impl Rect {
             && self.y < other.bottom()
             && other.y < self.bottom()
     }
+
+    /// The overlapping part of two rectangles
+    pub fn intersection(&self, other: &Rect) -> Option<Rect> {
+        if !self.overlaps(other) {
+            return None;
+        }
+        let (x, y) = (self.x.max(other.x), self.y.max(other.y));
+        let (r, b) = (
+            self.right().min(other.right()),
+            self.bottom().min(other.bottom()),
+        );
+        Some(Rect::new(x, y, r - x, b - y))
+    }
 }
 
 /// How a sprite is drawn. `src` is the texture region (w or h <= 0: the
@@ -120,4 +133,19 @@ pub enum Space {
     World = 0,
     /// Screen pixels (UI)
     Screen = 1,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rect_overlap_and_intersection() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(6.0, -2.0, 10.0, 5.0);
+        assert_eq!(a.intersection(&b), Some(Rect::new(6.0, 0.0, 4.0, 3.0)));
+        let touching = Rect::new(10.0, 0.0, 5.0, 5.0);
+        assert!(!a.overlaps(&touching));
+        assert_eq!(a.intersection(&touching), None);
+    }
 }

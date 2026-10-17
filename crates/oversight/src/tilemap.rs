@@ -276,16 +276,28 @@ impl Tilemap {
     /// property, or sits in a layer that has it. Cells outside the map are
     /// not solid (games close their maps with walls).
     pub fn is_solid(&self, x: i32, y: i32) -> bool {
+        self.cell_flag(x, y, "solid")
+    }
+
+    /// A one-way platform: blocks only what falls onto it from above
+    /// (the `platform` property, on a tile or a layer)
+    pub fn is_platform(&self, x: i32, y: i32) -> bool {
+        self.cell_flag(x, y, "platform")
+    }
+
+    /// Whether a tile in any layer at the cell, or that tile's layer, has
+    /// a true property `name`
+    pub fn cell_flag(&self, x: i32, y: i32, name: &str) -> bool {
         self.layers.iter().any(|layer| {
             let gid = layer.get(x, y);
             if gid == 0 {
                 return false;
             }
-            if layer.properties.get("solid").is_some_and(Property::truthy) {
+            if layer.properties.get(name).is_some_and(Property::truthy) {
                 return true;
             }
             self.tile_properties(gid)
-                .and_then(|p| p.get("solid"))
+                .and_then(|p| p.get(name))
                 .is_some_and(Property::truthy)
         })
     }
