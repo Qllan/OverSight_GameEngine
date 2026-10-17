@@ -18,23 +18,9 @@ pub const LIBRARY: &str = "Library";
 /// Where new C# scripts go, under Assets
 pub const SCRIPTS: &str = "Scripts";
 
-/// The script a new C# project starts with
-const PLAYER_MOVE: &str = r#"using ORST;
-
-/// Moves the entity with the arrow keys or WASD
-public class PlayerMove : Behaviour
-{
-    [Range(0, 500)] public float Speed = 120;
-
-    public override void Update(float dt)
-    {
-        var x = Engine.Axis(Key.Left, Key.Right) + Engine.Axis(Key.A, Key.D);
-        var y = Engine.Axis(Key.Up, Key.Down) + Engine.Axis(Key.W, Key.S);
-        Transform.Pos.X += Math.Clamp(x, -1, 1) * Speed * dt;
-        Transform.Pos.Y += Math.Clamp(y, -1, 1) * Speed * dt;
-    }
-}
-"#;
+/// The script a new C# project starts with: the Coins sample's own
+const PLAYER_MOVE: &str =
+    include_str!("../../../samples/studio/Coins/Assets/Scripts/PlayerMove.cs");
 
 /// A new script's source: a Behaviour named `class`
 pub fn script_source(class: &str) -> String {

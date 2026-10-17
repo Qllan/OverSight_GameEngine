@@ -1,0 +1,1028 @@
+{
+  "entities": [
+    {
+      "components": {
+        "Camera2D": {
+          "current": true,
+          "zoom": 2.5
+        },
+        "Transform": {
+          "pos": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 1,
+      "name": "Camera"
+    },
+    {
+      "components": {
+        "Score": {
+          "Coins": 0,
+          "ToWin": 8
+        }
+      },
+      "id": 2,
+      "name": "Rules"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Box",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 0.0,
+          "size": [
+            16.0,
+            16.0
+          ],
+          "trigger": false
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 0,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/wall.png",
+            "uid": "161ef34291b1ed9926c3f50ce80d08ca"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            0.0,
+            -104.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            21.0,
+            1.0
+          ]
+        }
+      },
+      "id": 3,
+      "name": "Wall top"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Box",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 0.0,
+          "size": [
+            16.0,
+            16.0
+          ],
+          "trigger": false
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 0,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/wall.png",
+            "uid": "161ef34291b1ed9926c3f50ce80d08ca"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            0.0,
+            104.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            21.0,
+            1.0
+          ]
+        }
+      },
+      "id": 4,
+      "name": "Wall bottom"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Box",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 0.0,
+          "size": [
+            16.0,
+            16.0
+          ],
+          "trigger": false
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 0,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/wall.png",
+            "uid": "161ef34291b1ed9926c3f50ce80d08ca"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            -168.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            14.0
+          ]
+        }
+      },
+      "id": 5,
+      "name": "Wall left"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Box",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 0.0,
+          "size": [
+            16.0,
+            16.0
+          ],
+          "trigger": false
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 0,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/wall.png",
+            "uid": "161ef34291b1ed9926c3f50ce80d08ca"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            168.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            14.0
+          ]
+        }
+      },
+      "id": 6,
+      "name": "Wall right"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Box",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 0.0,
+          "size": [
+            16.0,
+            16.0
+          ],
+          "trigger": false
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 0,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/wall.png",
+            "uid": "161ef34291b1ed9926c3f50ce80d08ca"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            -60.0,
+            -30.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            5.0
+          ]
+        }
+      },
+      "id": 7,
+      "name": "Wall 1"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Box",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 0.0,
+          "size": [
+            16.0,
+            16.0
+          ],
+          "trigger": false
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 0,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/wall.png",
+            "uid": "161ef34291b1ed9926c3f50ce80d08ca"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            60.0,
+            30.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            5.0
+          ]
+        }
+      },
+      "id": 8,
+      "name": "Wall 2"
+    },
+    {
+      "components": {
+        "Coin": {
+          "Pulse": 0.11999999731779099,
+          "Value": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 6.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 1,
+          "origin": [
+            6.0,
+            6.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/coin.png",
+            "uid": "4495865d91d05c4db83babf6cbbe0531"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            -130.0,
+            -70.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 9,
+      "name": "Coin 1"
+    },
+    {
+      "components": {
+        "Coin": {
+          "Pulse": 0.11999999731779099,
+          "Value": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 6.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 1,
+          "origin": [
+            6.0,
+            6.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/coin.png",
+            "uid": "4495865d91d05c4db83babf6cbbe0531"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            -100.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 10,
+      "name": "Coin 2"
+    },
+    {
+      "components": {
+        "Coin": {
+          "Pulse": 0.11999999731779099,
+          "Value": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 6.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 1,
+          "origin": [
+            6.0,
+            6.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/coin.png",
+            "uid": "4495865d91d05c4db83babf6cbbe0531"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            -30.0,
+            -70.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 11,
+      "name": "Coin 3"
+    },
+    {
+      "components": {
+        "Coin": {
+          "Pulse": 0.11999999731779099,
+          "Value": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 6.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 1,
+          "origin": [
+            6.0,
+            6.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/coin.png",
+            "uid": "4495865d91d05c4db83babf6cbbe0531"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            0.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 12,
+      "name": "Coin 4"
+    },
+    {
+      "components": {
+        "Coin": {
+          "Pulse": 0.11999999731779099,
+          "Value": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 6.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 1,
+          "origin": [
+            6.0,
+            6.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/coin.png",
+            "uid": "4495865d91d05c4db83babf6cbbe0531"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            30.0,
+            70.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 13,
+      "name": "Coin 5"
+    },
+    {
+      "components": {
+        "Coin": {
+          "Pulse": 0.11999999731779099,
+          "Value": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 6.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 1,
+          "origin": [
+            6.0,
+            6.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/coin.png",
+            "uid": "4495865d91d05c4db83babf6cbbe0531"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            100.0,
+            -70.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 14,
+      "name": "Coin 6"
+    },
+    {
+      "components": {
+        "Coin": {
+          "Pulse": 0.11999999731779099,
+          "Value": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 6.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 1,
+          "origin": [
+            6.0,
+            6.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/coin.png",
+            "uid": "4495865d91d05c4db83babf6cbbe0531"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            130.0,
+            0.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 15,
+      "name": "Coin 7"
+    },
+    {
+      "components": {
+        "Coin": {
+          "Pulse": 0.11999999731779099,
+          "Value": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 6.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 1,
+          "origin": [
+            6.0,
+            6.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/coin.png",
+            "uid": "4495865d91d05c4db83babf6cbbe0531"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            130.0,
+            70.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 16,
+      "name": "Coin 8"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 7.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "Patrol": {
+          "Path": [
+            0.0,
+            80.0
+          ],
+          "Speed": 1.2000000476837158
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 2,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/hazard.png",
+            "uid": "07bf13bf5f8b5c076fcb9664df1911eb"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            90.0,
+            -40.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 17,
+      "name": "Spinner 1"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Circle",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 7.0,
+          "size": [
+            0.0,
+            0.0
+          ],
+          "trigger": true
+        },
+        "Patrol": {
+          "Path": [
+            0.0,
+            80.0
+          ],
+          "Speed": 0.8999999761581421
+        },
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 2,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/hazard.png",
+            "uid": "07bf13bf5f8b5c076fcb9664df1911eb"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            -20.0,
+            -40.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        }
+      },
+      "id": 18,
+      "name": "Spinner 2"
+    },
+    {
+      "components": {
+        "Collider": {
+          "kind": "Box",
+          "layer": 1,
+          "mask": 4294967295,
+          "offset": [
+            0.0,
+            0.0
+          ],
+          "polygon": null,
+          "radius": 0.0,
+          "size": [
+            12.0,
+            12.0
+          ],
+          "trigger": false
+        },
+        "PlayerMove": {
+          "Speed": 120.0
+        },
+        "Respawn": {},
+        "SpriteRenderer": {
+          "flip_x": false,
+          "flip_y": false,
+          "hidden": false,
+          "layer": 3,
+          "origin": [
+            8.0,
+            8.0
+          ],
+          "src": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "texture": {
+            "path": "art/player.png",
+            "uid": "29b0560e88777071821973cc8988b3c2"
+          },
+          "tint": "#ffffffff",
+          "y_sort": false
+        },
+        "Transform": {
+          "pos": [
+            -130.0,
+            70.0
+          ],
+          "rotation": 0.0,
+          "scale": [
+            1.0,
+            1.0
+          ]
+        },
+        "Velocity": {
+          "angular": 0.0,
+          "linear": [
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "id": 19,
+      "name": "Player"
+    }
+  ],
+  "orst_scene": 1
+}

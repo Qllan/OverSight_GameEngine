@@ -23,6 +23,9 @@ public abstract class Behaviour
     /// <summary>The entity this script is on</summary>
     public Entity Entity { get; internal set; }
 
+    /// <summary>The component's bytes as this instance last wrote them</summary>
+    internal byte[]? Synced;
+
     /// <summary>The game's engine</summary>
     public Engine Engine => Host.Engine ?? throw new InvalidOperationException("no engine yet");
 
@@ -36,6 +39,17 @@ public abstract class Behaviour
     public virtual void OnContactBegin(Entity other, Contact contact) { }
     /// <summary>The two stopped touching</summary>
     public virtual void OnContactEnd(Entity other, Contact contact) { }
+
+    /// <summary>The T script on an entity (this one by default); null
+    /// when it has none. Changes to its fields stick.</summary>
+    public T? GetBehaviour<T>(Entity? entity = null) where T : Behaviour => Host.Find<T>(entity ?? Entity);
+
+    /// <summary>The T script on whichever entity has one, for things
+    /// there is one of: the score, the level</summary>
+    public static T? FindBehaviour<T>() where T : Behaviour => Host.FindAny<T>();
+
+    /// <summary>Remove an entity from the game</summary>
+    public void Destroy(Entity entity) => Engine.Despawn(entity);
 
     /// <summary>A line in the Console</summary>
     public static void Log(object? message) => Host.Log(0, message?.ToString() ?? "null");

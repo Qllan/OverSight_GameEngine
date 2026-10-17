@@ -153,6 +153,8 @@ dotnet run --project samples/csharp/TopDown -c Release
 
 С ключами `--headless 200 --screenshot shot.png` пример проходит заскриптованный забег без окна и сохраняет последний кадр. Так их запускает CI.
 
+`samples/studio/Coins` — игра, собранная в редакторе [ORST Studio](../orst-studio/README.md) со скриптами на C#.
+
 ## Карты из Tiled
 
 - Сохраняйте карты в формате JSON (`.tmj`). Тайлсеты можно встраивать в карту или держать отдельными файлами `.tsj`.

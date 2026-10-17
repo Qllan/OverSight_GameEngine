@@ -1,0 +1,6 @@
+{
+  "name": "Coins",
+  "engine": "0.1.0",
+  "language": "csharp",
+  "main_scene": "Main.scene"
+}

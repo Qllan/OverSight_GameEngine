@@ -9,7 +9,7 @@ use orst::ffi::OrstEngine;
 use std::ffi::{c_void, CStr, CString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 type LogFn = extern "system" fn(u32, *const u8, usize);
@@ -36,6 +36,7 @@ pub fn take_log() -> Vec<(Level, String)> {
     std::mem::take(&mut *LOG.lock().unwrap())
 }
 
+#[derive(Clone, Copy)]
 pub struct Scripts {
     load: extern "system" fn(*const u8) -> i32,
     unload: extern "system" fn() -> i32,
@@ -72,7 +73,10 @@ impl Scripts {
     /// Start .NET (once per process) and hand it `engine`, which must
     /// stay where it is while scripts run
     pub fn start(host: &Path, engine: &mut OrstEngine) -> Result<Scripts, String> {
-        let (attach, scripts) = dotnet::start(host)?;
+        // .NET starts once per process and cannot start again, so a
+        // project opened later reuses it (with the first host found)
+        static STARTED: OnceLock<Result<(Attach, Scripts), String>> = OnceLock::new();
+        let (attach, scripts) = STARTED.get_or_init(|| dotnet::start(host)).clone()?;
         let log: LogFn = log;
         if attach(engine.handle().cast(), log as *const c_void) != 0 {
             return Err(scripts.error());
@@ -425,8 +429,12 @@ public class Mover : Behaviour
 }
 "#;
 
+    /// .NET is one per process: tests that use it take turns
+    static DOTNET: Mutex<()> = Mutex::new(());
+
     #[test]
     fn scripts_run_on_the_editors_engine_and_reload_in_place() {
+        let _turn = DOTNET.lock().unwrap_or_else(|e| e.into_inner());
         let Some(host) = host() else { return };
         let dir = std::env::temp_dir().join(format!("orst-scripts-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -542,5 +550,83 @@ public class Mover : Behaviour
             built.messages
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn copy_dir(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap().flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            if name == "Library" || name.to_string_lossy().ends_with(".meta") {
+                continue;
+            }
+            if path.is_dir() {
+                copy_dir(&path, &to.join(name));
+            } else {
+                std::fs::copy(&path, to.join(name)).unwrap();
+            }
+        }
+    }
+
+    /// The first game made in the editor: walk up into a coin, then into
+    /// the wall above it
+    #[test]
+    fn the_coins_sample_plays() {
+        let _turn = DOTNET.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(host) = host() else { return };
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/studio/Coins");
+        let root = std::env::temp_dir().join(format!("orst-coins-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        copy_dir(&sample, &root);
+        let (mut project, _) = crate::project::Project::open(&root).unwrap();
+
+        let mut engine = OrstEngine::new(Engine::headless(320, 200).unwrap());
+        let mut scripts = Scripts::start(&host, &mut engine).unwrap();
+        let code = ScriptProject {
+            root: root.clone(),
+            host,
+        };
+        let built = code.build();
+        assert!(
+            built.ok && built.messages.is_empty(),
+            "{:?}",
+            built.messages
+        );
+        assert_eq!(scripts.load(&code.dll()), Ok(5));
+        let main = project.file.main_scene.clone().unwrap();
+        let text = std::fs::read_to_string(project.assets.file(&main)).unwrap();
+        let loaded = engine.load_scene(&text, &mut project.assets).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        let world = &engine.world;
+        let player = world.find_named("Player").unwrap();
+        let coin = world.find_named("Coin 1").unwrap();
+        let rules = world.find_named("Rules").unwrap();
+        let score = world.component_id("Score").unwrap();
+        let history = crate::history::History::default();
+        let mut play = crate::play::Play::start(&mut engine, history, false, None);
+        scripts.begin_play();
+        engine.input.set_key(orst::input::Key::Up, true);
+        for _ in 0..120 {
+            play.advance(&mut engine, Some(&mut scripts), crate::play::TICK);
+        }
+        let log: Vec<String> = take_log().into_iter().map(|(_, t)| t).collect();
+        assert!(log.iter().any(|l| l == "Coins: 1/8"), "{log:?}");
+        assert!(!engine.world.alive(coin), "the coin was picked up");
+        let field = engine.world.field(rules, score, "Coins");
+        assert_eq!(field, Some(Value::I32(1)));
+        let t: Transform = read(&engine.world, player, TRANSFORM).unwrap();
+        assert!((t.pos.x + 130.0).abs() < 0.01, "straight up: {:?}", t.pos);
+        assert!(
+            (-91.0..-85.0).contains(&t.pos.y),
+            "stopped by the wall: {:?}",
+            t.pos
+        );
+
+        scripts.end_play();
+        let (restored, ..) = play.stop(&mut engine);
+        restored.unwrap();
+        assert!(engine.world.alive(coin), "Stop brings it back");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

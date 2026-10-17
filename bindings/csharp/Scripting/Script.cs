@@ -12,14 +12,17 @@ internal sealed unsafe class Script
 
     public readonly Type Type;
     public readonly uint Id;
+    /// <summary>The component's size in bytes</summary>
+    public readonly uint Size;
     private readonly Slot[] slots;
     /// <summary>Entity id -> its instance, while playing</summary>
     public readonly Dictionary<ulong, Behaviour> Live = new();
 
-    private Script(Type type, uint id, Slot[] slots)
+    private Script(Type type, uint id, uint size, Slot[] slots)
     {
         Type = type;
         Id = id;
+        Size = size;
         this.slots = slots;
     }
 
@@ -46,7 +49,7 @@ internal sealed unsafe class Script
 
         var defaults = new byte[size];
         var instance = (Behaviour)Activator.CreateInstance(type, nonPublic: true)!;
-        var script = new Script(type, 0, slots.ToArray());
+        var script = new Script(type, 0, size, slots.ToArray());
         fixed (byte* p = defaults) script.Write(instance, p);
 
         var strings = new List<IntPtr>();
@@ -69,7 +72,7 @@ internal sealed unsafe class Script
                 id = Native.orst_define_component(engine.Handle, type.Name, size, align, native,
                                                   (uint)native.Length, (IntPtr)d);
             if (id == 0) throw new OrstException(type.Name + ": " + Engine.LastError);
-            return new Script(type, id, script.slots);
+            return new Script(type, id, size, script.slots);
         }
         finally
         {

@@ -163,7 +163,10 @@ public static unsafe class Host
     {
         var p = (byte*)Native.orst_get(handle, b.Entity.Id, s.Id);
         if (p == null) return true;
-        s.Read(b, p);
+        // The bytes win only when something else changed them (the
+        // Inspector, the C API); otherwise the instance has the truth,
+        // with what other scripts set through GetBehaviour
+        if (b.Synced is null || !new ReadOnlySpan<byte>(p, (int)s.Size).SequenceEqual(b.Synced)) s.Read(b, p);
         try
         {
             call(b);
@@ -175,9 +178,19 @@ public static unsafe class Host
         }
         // The call may have added components, which moves the rows
         p = (byte*)Native.orst_get(handle, b.Entity.Id, s.Id);
-        if (p != null) s.Write(b, p);
+        if (p != null)
+        {
+            s.Write(b, p);
+            b.Synced = new ReadOnlySpan<byte>(p, (int)s.Size).ToArray();
+        }
         return true;
     }
+
+    internal static T? Find<T>(Entity e) where T : Behaviour =>
+        scripts.FirstOrDefault(s => s.Type == typeof(T))?.Live.GetValueOrDefault(e.Id) as T;
+
+    internal static T? FindAny<T>() where T : Behaviour =>
+        scripts.FirstOrDefault(s => s.Type == typeof(T))?.Live.OrderBy(kv => kv.Key).Select(kv => kv.Value).FirstOrDefault() as T;
 
     private static bool UnloadScripts()
     {
