@@ -7,6 +7,8 @@
 //! (include/oversight.h).
 
 pub mod anim;
+#[cfg(feature = "audio")]
+pub mod audio;
 pub mod camera;
 pub mod collision;
 pub mod engine;

@@ -15,6 +15,8 @@
 //! ```
 
 use crate::anim::SpriteSheet;
+#[cfg(feature = "audio")]
+use crate::audio::Audio;
 use crate::camera::Camera;
 use crate::collision::{self, MoveResult, RayHit};
 use crate::input::{Input, Key, MouseButton};
@@ -46,6 +48,8 @@ pub struct Engine {
     pub state: DrawState,
     pub input: Input,
     pub time: Time,
+    #[cfg(feature = "audio")]
+    pub audio: Audio,
     #[cfg(feature = "window")]
     pub window: Option<Window>,
     /// Input events injected by code, applied at the next poll
@@ -77,6 +81,8 @@ impl Engine {
             state: DrawState::default(),
             input: Input::default(),
             time: Time::new(Some(1.0 / 60.0)),
+            #[cfg(feature = "audio")]
+            audio: Audio::silent(),
             #[cfg(feature = "window")]
             window: None,
             injected: Vec::new(),
@@ -92,6 +98,12 @@ impl Engine {
         let mut engine = Engine::headless(config.width, config.height)?;
         engine.window = Some(Window::open(config)?);
         engine.time = Time::new(None);
+        // A game without sound still runs; the error says why it is quiet
+        #[cfg(feature = "audio")]
+        match Audio::open() {
+            Ok(audio) => engine.audio = audio,
+            Err(e) => engine.last_error = Some(format!("no sound: {}", e)),
+        }
         Ok(engine)
     }
 
@@ -115,6 +127,8 @@ impl Engine {
                 InputEvent::Wheel(w) => self.input.wheel += w,
             }
         }
+        #[cfg(feature = "audio")]
+        self.audio.update();
         self.time.tick();
         !self.quit
     }
