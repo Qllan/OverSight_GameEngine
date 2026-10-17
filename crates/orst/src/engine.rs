@@ -438,6 +438,69 @@ impl Engine {
         self.collisions.update(&mut self.world, &self.polygons);
     }
 
+    /// One tick of the built-in systems, in this order: motion, bodies
+    /// with mass, collisions, sprite animations, then the camera follows
+    /// the current Camera2D. Games call it once per fixed tick after their
+    /// own logic; the editor's Play runs exactly this.
+    pub fn step(&mut self, dt: f32) {
+        self.update_motion(dt);
+        self.physics_step(dt);
+        self.update_collisions();
+        self.animate_sprites(dt);
+        self.follow_camera();
+    }
+
+    /// Advance every playing SpriteAnimator by dt and set the src of its
+    /// entity's SpriteRenderer to the frame
+    pub fn animate_sprites(&mut self, dt: f32) {
+        use crate::components::{
+            read, write, SpriteAnimator, SpriteRenderer, SPRITE_ANIMATOR, SPRITE_RENDERER,
+        };
+        for ent in self.world.query(&[SPRITE_ANIMATOR, SPRITE_RENDERER]) {
+            let (Some(mut a), Some(mut s)) = (
+                read::<SpriteAnimator>(&self.world, ent, SPRITE_ANIMATOR),
+                read::<SpriteRenderer>(&self.world, ent, SPRITE_RENDERER),
+            ) else {
+                continue;
+            };
+            if a.playing != 0 {
+                a.time += dt;
+                let length = a.count.max(1) as f32 / a.fps.max(1e-6);
+                if a.mode == 1 && a.time >= length {
+                    a.time = length;
+                    a.playing = 0;
+                }
+                write(&mut self.world, ent, SPRITE_ANIMATOR, &a);
+            }
+            let width = self.texture_size(s.texture).map_or(0, |(w, _)| w);
+            s.src = a.src(width);
+            write(&mut self.world, ent, SPRITE_RENDERER, &s);
+        }
+    }
+
+    /// Point the camera at the first current Camera2D entity; false when
+    /// there is none and the camera stays as it was
+    pub fn follow_camera(&mut self) -> bool {
+        use crate::components::{read, Camera2D, Transform, CAMERA_2D, TRANSFORM};
+        for ent in self.world.query(&[CAMERA_2D, TRANSFORM]) {
+            let (Some(c), Some(t)) = (
+                read::<Camera2D>(&self.world, ent, CAMERA_2D),
+                read::<Transform>(&self.world, ent, TRANSFORM),
+            ) else {
+                continue;
+            };
+            if c.current != 0 {
+                self.renderer.camera = Camera {
+                    center: t.pos,
+                    zoom: c.zoom,
+                    rotation: t.rotation,
+                };
+                return true;
+            }
+        }
+        false
+    }
+
     /// Entities whose collider overlaps the shape and has a layer bit in mask
     pub fn query_shape(&self, shape: &crate::shapes::Shape, mask: u32) -> Vec<u64> {
         crate::collisions::overlapping(&self.world, &self.polygons, shape, mask)
@@ -2083,5 +2146,58 @@ mod tests {
         assert_eq!(frame(&mut e), (0, 255), "then down");
         e.free_skeleton(s);
         assert_eq!(frame(&mut e), (0, 0));
+    }
+
+    #[test]
+    fn a_step_moves_animates_and_follows_the_camera() {
+        use crate::components::*;
+        let mut e = Engine::headless(32, 32).unwrap();
+        let sheet = e.texture_from_rgba(64, 16, &[255; 64 * 16 * 4]).unwrap();
+        let hero = e.world.spawn();
+        write(&mut e.world, hero, TRANSFORM, &Transform::default());
+        let v = Velocity {
+            linear: Vec2::new(60.0, 0.0),
+            ..Default::default()
+        };
+        write(&mut e.world, hero, VELOCITY, &v);
+        let s = SpriteRenderer {
+            texture: sheet,
+            ..Default::default()
+        };
+        write(&mut e.world, hero, SPRITE_RENDERER, &s);
+        let a = SpriteAnimator {
+            frame_w: 16,
+            frame_h: 16,
+            count: 3,
+            fps: 10.0,
+            mode: 1,
+            ..Default::default()
+        };
+        write(&mut e.world, hero, SPRITE_ANIMATOR, &a);
+        let c = Camera2D {
+            zoom: 2.0,
+            ..Default::default()
+        };
+        write(&mut e.world, hero, CAMERA_2D, &c);
+
+        for _ in 0..9 {
+            e.step(1.0 / 60.0);
+        }
+        let t: Transform = read(&e.world, hero, TRANSFORM).unwrap();
+        assert!((t.pos.x - 9.0).abs() < 1e-3);
+        let s: SpriteRenderer = read(&e.world, hero, SPRITE_RENDERER).unwrap();
+        assert_eq!(s.src, Rect::new(16.0, 0.0, 16.0, 16.0), "frame 1 at 0.15 s");
+        assert_eq!((e.camera().center, e.camera().zoom), (t.pos, 2.0));
+
+        for _ in 0..60 {
+            e.step(1.0 / 60.0);
+        }
+        let a: SpriteAnimator = read(&e.world, hero, SPRITE_ANIMATOR).unwrap();
+        let s: SpriteRenderer = read(&e.world, hero, SPRITE_RENDERER).unwrap();
+        assert_eq!(
+            (a.playing, s.src.x),
+            (0, 32.0),
+            "a Once clip stops on its last frame"
+        );
     }
 }

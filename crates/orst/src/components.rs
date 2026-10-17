@@ -17,6 +17,8 @@ pub const COLLIDER: u32 = 5;
 pub const RIGIDBODY: u32 = 6;
 pub const LIGHT: u32 = 7;
 pub const NAME: u32 = 8;
+pub const SPRITE_ANIMATOR: u32 = 9;
+pub const CAMERA_2D: u32 = 10;
 
 pub const BODY_DYNAMIC: u32 = 0;
 pub const BODY_FIXED: u32 = 1;
@@ -285,6 +287,98 @@ impl Default for Name {
     }
 }
 
+/// Plays frames of a sprite sheet on the entity's SpriteRenderer: frame
+/// `first + i` of a grid of `frame_w` x `frame_h` cells sets its `src`.
+/// Engine::step advances it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpriteAnimator {
+    pub frame_w: u32,
+    pub frame_h: u32,
+    /// Frames in a row of the sheet; 0: as many as fit the texture
+    pub columns: u32,
+    pub first: u32,
+    pub count: u32,
+    pub fps: f32,
+    /// ANIM_LOOP, ANIM_ONCE or ANIM_PING_PONG (as AnimMode)
+    pub mode: u32,
+    /// Seconds into the clip; Once clips stop at the end
+    pub time: f32,
+    pub playing: u8,
+    pub _pad: [u8; 3],
+}
+
+impl Default for SpriteAnimator {
+    fn default() -> Self {
+        SpriteAnimator {
+            frame_w: 32,
+            frame_h: 32,
+            columns: 0,
+            first: 0,
+            count: 1,
+            fps: 10.0,
+            mode: 0,
+            time: 0.0,
+            playing: 1,
+            _pad: [0; 3],
+        }
+    }
+}
+
+impl SpriteAnimator {
+    /// The frame shown now, counted from `first`
+    pub fn frame(&self) -> u32 {
+        let count = self.count.max(1);
+        let n = (self.time.max(0.0) * self.fps.max(0.0)).floor() as u64;
+        match self.mode {
+            1 => n.min(count as u64 - 1) as u32,
+            2 if count > 1 => {
+                // 0 1 2 3 2 1 0 1 ...
+                let period = 2 * (count as u64 - 1);
+                let k = n % period;
+                (if k < count as u64 { k } else { period - k }) as u32
+            }
+            _ => (n % count as u64) as u32,
+        }
+    }
+
+    /// Where the current frame is in a texture `texture_w` wide
+    pub fn src(&self, texture_w: u32) -> Rect {
+        let columns = match self.columns {
+            0 => (texture_w / self.frame_w.max(1)).max(1),
+            c => c,
+        };
+        let i = self.first + self.frame();
+        Rect::new(
+            ((i % columns) * self.frame_w) as f32,
+            ((i / columns) * self.frame_h) as f32,
+            self.frame_w as f32,
+            self.frame_h as f32,
+        )
+    }
+}
+
+/// Makes the entity the camera: Engine::step puts the view's centre at its
+/// position, turned with it, at this zoom. The first `current` one wins.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Camera2D {
+    /// Screen pixels per world unit
+    pub zoom: f32,
+    pub current: u8,
+    pub _pad: [u8; 3],
+}
+
+impl Default for Camera2D {
+    fn default() -> Self {
+        Camera2D {
+            zoom: 1.0,
+            current: 1,
+            _pad: [0; 3],
+        }
+    }
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -301,6 +395,12 @@ pub fn register(world: &mut World) {
         world.component("RigidBody", size(std::mem::size_of::<RigidBody>()), 4),
         world.component("Light", size(std::mem::size_of::<Light>()), 4),
         world.component("Name", size(std::mem::size_of::<Name>()), 1),
+        world.component(
+            "SpriteAnimator",
+            size(std::mem::size_of::<SpriteAnimator>()),
+            4,
+        ),
+        world.component("Camera2D", size(std::mem::size_of::<Camera2D>()), 4),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -316,7 +416,9 @@ pub fn register(world: &mut World) {
             COLLIDER,
             RIGIDBODY,
             LIGHT,
-            NAME
+            NAME,
+            SPRITE_ANIMATOR,
+            CAMERA_2D
         ],
         "built-ins come first"
     );
@@ -439,6 +541,28 @@ fn builtin_fields() -> Vec<(u32, Vec<Field>)> {
             ],
         ),
         (NAME, vec![Field::new("text", T::Text, 0)]),
+        (
+            SPRITE_ANIMATOR,
+            vec![
+                Field::new("frame_w", T::U32, at(offset_of!(SpriteAnimator, frame_w))),
+                Field::new("frame_h", T::U32, at(offset_of!(SpriteAnimator, frame_h))),
+                Field::new("columns", T::U32, at(offset_of!(SpriteAnimator, columns))),
+                Field::new("first", T::U32, at(offset_of!(SpriteAnimator, first))),
+                Field::new("count", T::U32, at(offset_of!(SpriteAnimator, count))),
+                Field::new("fps", T::F32, at(offset_of!(SpriteAnimator, fps))),
+                Field::new("mode", T::U32, at(offset_of!(SpriteAnimator, mode)))
+                    .options(&["Loop", "Once", "PingPong"]),
+                Field::new("time", T::F32, at(offset_of!(SpriteAnimator, time))),
+                Field::new("playing", T::Bool, at(offset_of!(SpriteAnimator, playing))),
+            ],
+        ),
+        (
+            CAMERA_2D,
+            vec![
+                Field::new("zoom", T::F32, at(offset_of!(Camera2D, zoom))),
+                Field::new("current", T::Bool, at(offset_of!(Camera2D, current))),
+            ],
+        ),
     ]
 }
 
@@ -459,6 +583,8 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         RIGIDBODY => Some(bytes(RigidBody::default())),
         LIGHT => Some(bytes(Light::default())),
         NAME => Some(bytes(Name::default())),
+        SPRITE_ANIMATOR => Some(bytes(SpriteAnimator::default())),
+        CAMERA_2D => Some(bytes(Camera2D::default())),
         _ => None,
     }
 }
@@ -483,6 +609,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn animators_pick_frames_from_the_sheet() {
+        let mut a = SpriteAnimator {
+            frame_w: 16,
+            frame_h: 8,
+            first: 2,
+            count: 4,
+            fps: 10.0,
+            ..Default::default()
+        };
+        let frames = |a: &mut SpriteAnimator| {
+            (0..8)
+                .map(|i| {
+                    a.time = i as f32 * 0.1 + 0.01;
+                    a.frame()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(frames(&mut a), [0, 1, 2, 3, 0, 1, 2, 3]);
+        a.mode = 1;
+        assert_eq!(frames(&mut a), [0, 1, 2, 3, 3, 3, 3, 3]);
+        a.mode = 2;
+        assert_eq!(frames(&mut a), [0, 1, 2, 3, 2, 1, 0, 1]);
+        // A 64 px wide sheet holds 4 frames a row: frame 2 + 3 = 5 is the
+        // second of the second row
+        a.time = 0.35;
+        a.mode = 0;
+        assert_eq!(a.src(64), Rect::new(16.0, 8.0, 16.0, 8.0));
+        a.columns = 2;
+        assert_eq!(a.src(64), Rect::new(16.0, 16.0, 16.0, 8.0));
+    }
+
+    #[test]
     fn layouts_match_the_c_header() {
         // orst.h and the C# structs rely on these
         assert_eq!(std::mem::size_of::<Transform>(), 20);
@@ -493,6 +651,8 @@ mod tests {
         assert_eq!(std::mem::size_of::<RigidBody>(), 32);
         assert_eq!(std::mem::size_of::<Light>(), 32);
         assert_eq!(std::mem::size_of::<Name>(), 64);
+        assert_eq!(std::mem::size_of::<SpriteAnimator>(), 36);
+        assert_eq!(std::mem::size_of::<Camera2D>(), 8);
         let mut w = World::new();
         register(&mut w);
         assert_eq!(w.component_id("Body"), Some(BODY));
@@ -526,8 +686,8 @@ mod tests {
         let long = "я".repeat(40); // 80 bytes: cut to 32 letters
         assert_eq!(Name::new(&long).as_str(), "я".repeat(32));
         // Every byte is described but padding and Body's contacts
-        let left = [0, 0, 0, 4, 3, 2, 3, 0];
-        for (id, left) in (TRANSFORM..=NAME).zip(left) {
+        let left = [0, 0, 0, 4, 3, 2, 3, 0, 3, 3];
+        for (id, left) in (TRANSFORM..=CAMERA_2D).zip(left) {
             let described: u32 = w.fields(id).iter().map(|f| f.ty.size()).sum();
             assert_eq!(
                 w.storage(id).unwrap().size - described,

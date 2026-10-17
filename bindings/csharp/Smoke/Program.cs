@@ -121,6 +121,14 @@ Check(engine.Component<Name>() == 8 && Marshal.SizeOf<Name>() == 64 && engine.Fi
       && engine.Get<Name>(named).Text == "Ёлка", "Name");
 Check(new Name(new string('я', 40)).Text == new string('я', 32), "a long Name is cut at a letter");
 engine.Despawn(named);
+var cam = engine.Spawn();
+engine.Set(cam, new Transform());
+engine.Set(cam, new Velocity { Linear = new Vec2(60, 0) });
+engine.Set(cam, new Camera2D(2f));
+engine.Step(0.5f);
+Check(engine.Component<Camera2D>() == 10 && engine.Component<SpriteAnimator>() == 9
+      && Marshal.SizeOf<SpriteAnimator>() == 36 && engine.Camera.Center.X == 30f && engine.Camera.Zoom == 2f, "Step and Camera2D");
+engine.Despawn(cam);
 Check(engine.Query<Pos>().Length == 2 && engine.Query<Pos, Vel>().Single() == a, "queries");
 var saved = engine.Snapshot();
 ulong hash = engine.StateHash;

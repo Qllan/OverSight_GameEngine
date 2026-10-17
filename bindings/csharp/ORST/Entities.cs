@@ -112,6 +112,10 @@ public sealed partial class Engine
     /// <summary>Move entities with Transform and Velocity by dt (TickDt in
     /// fixed ticks); with a Body on a tile map they slide along walls</summary>
     public void UpdateMotion(float dt) => Native.orst_update_motion(Handle, dt);
+    /// <summary>One tick of every built-in system: motion, bodies, collisions,
+    /// sprite animators, then the camera follows the current Camera2D. Call
+    /// it once per fixed tick after the game's own logic.</summary>
+    public void Step(float dt) => Native.orst_step(Handle, dt);
     /// <summary>A convex polygon for colliders, 3 to 64 corners in order</summary>
     public uint CreatePolygon(params Vec2[] points) =>
         Check(Native.orst_create_polygon(Handle, points, (uint)points.Length), "polygon");

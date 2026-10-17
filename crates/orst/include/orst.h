@@ -395,6 +395,8 @@ bool orst_get_field(OrstEngine *e, uint32_t component, uint32_t index, OrstField
 #define ORST_RIGIDBODY 6
 #define ORST_LIGHT 7
 #define ORST_NAME 8
+#define ORST_SPRITE_ANIMATOR 9
+#define ORST_CAMERA_2D 10
 
 typedef struct OrstTransform {
     OrstVec2 pos;
@@ -481,6 +483,28 @@ typedef struct OrstName {
     char text[64];
 } OrstName;
 
+/* Plays frames of a sprite sheet on the entity's SpriteRenderer: frame
+ * first + i of a grid of frame_w x frame_h cells becomes its src.
+ * orst_step advances it. */
+typedef struct OrstSpriteAnimator {
+    uint32_t frame_w, frame_h;
+    uint32_t columns; /* frames in a row; 0: as many as fit the texture */
+    uint32_t first, count;
+    float fps;
+    uint32_t mode; /* OrstAnimMode */
+    float time;    /* seconds into the clip; ORST_ANIM_ONCE stops at the end */
+    uint8_t playing;
+    uint8_t pad_[3];
+} OrstSpriteAnimator;
+
+/* Makes the entity the camera: orst_step centres the view on it, turned
+ * with it, at this zoom. The first current one wins. */
+typedef struct OrstCamera2D {
+    float zoom;
+    uint8_t current;
+    uint8_t pad_[3];
+} OrstCamera2D;
+
 /* How two shapes overlap: move the second by normal * depth and they only touch */
 typedef struct OrstOverlap {
     OrstVec2 normal; /* from the first towards the second */
@@ -488,6 +512,10 @@ typedef struct OrstOverlap {
 } OrstOverlap;
 
 void orst_update_motion(OrstEngine *e, float dt); /* dt: orst_tick_dt in fixed ticks */
+/* One tick of every built-in system: motion, bodies with mass, collisions,
+ * sprite animators, then the camera follows the current OrstCamera2D. Call
+ * it once per fixed tick after the game's own logic. */
+void orst_step(OrstEngine *e, float dt);
 void orst_draw_entities(OrstEngine *e);
 uint32_t orst_create_polygon(OrstEngine *e, const OrstVec2 *points, uint32_t count); /* convex, 3..64 corners; 0 on error */
 void orst_free_polygon(OrstEngine *e, uint32_t polygon);

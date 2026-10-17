@@ -122,6 +122,21 @@ int main(void) {
     OrstName name = {"Hero"};
     CHECK(sizeof(OrstName) == 64 && orst_set(e, ents[0], ORST_NAME, &name) && orst_find_named(e, "Hero") == ents[0]);
     CHECK(orst_find_named(e, "Nobody") == 0);
+    {
+        /* A step moves, animates and points the camera */
+        OrstEntity cam = orst_spawn(e);
+        OrstTransform t = {{0, 0}, 0, {1, 1}};
+        OrstVelocity v = {{60, 0}, 0};
+        OrstCamera2D c = {2.0f, 1, {0, 0, 0}};
+        CHECK(sizeof(OrstSpriteAnimator) == 36 && sizeof(OrstCamera2D) == 8);
+        orst_set(e, cam, ORST_TRANSFORM, &t);
+        orst_set(e, cam, ORST_VELOCITY, &v);
+        orst_set(e, cam, ORST_CAMERA_2D, &c);
+        orst_step(e, 0.5f);
+        OrstCamera view = orst_get_camera(e);
+        CHECK(view.center.x == 30.0f && view.zoom == 2.0f);
+        orst_despawn(e, cam);
+    }
 
     /* Snapshot, change the world, restore: back as it was */
     size_t size = orst_snapshot(e, NULL, 0);

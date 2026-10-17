@@ -447,6 +447,11 @@ pub extern "C" fn orst_update_motion(e: *mut OrstEngine, dt: f32) {
 }
 
 #[no_mangle]
+pub extern "C" fn orst_step(e: *mut OrstEngine, dt: f32) {
+    engine!(e).step(dt);
+}
+
+#[no_mangle]
 pub extern "C" fn orst_draw_entities(e: *mut OrstEngine) {
     engine!(e).draw_entities();
 }

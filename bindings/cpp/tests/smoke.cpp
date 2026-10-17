@@ -141,6 +141,17 @@ int main() {
     engine.set(a, orst::Name(std::string(40, 'x') + "\xd1\x8f\xd1\x8f\xd1\x8f")); // 46 bytes
     CHECK(engine.find_named(engine.get<orst::Name>(a)->str()) == a && engine.get<orst::Name>(a)->str().size() == 46);
     CHECK(orst::Name(std::string(63, 'x') + "\xd1\x8f").str().size() == 63); // a letter is never cut in half
+    {
+        orst::Camera before = engine.camera();
+        orst::Entity cam = engine.spawn();
+        engine.set(cam, orst::Transform{});
+        engine.set(cam, orst::Velocity{{60, 0}});
+        engine.set(cam, orst::Camera2D(2.0f));
+        engine.step(0.5f);
+        CHECK(engine.camera().center.x == 30.0f && engine.camera().zoom == 2.0f);
+        engine.despawn(cam);
+        engine.set_camera(before);
+    }
     auto collider = engine.fields(ORST_COLLIDER);
     CHECK(collider[0].name == "kind" && collider[0].options.size() == 3 && collider[0].options[2] == "Polygon");
     auto saved = engine.snapshot();

@@ -327,6 +327,50 @@ public unsafe struct Name
     public override readonly string ToString() => Text;
 }
 
+/// <summary>Plays frames of a sprite sheet on the entity's SpriteRenderer:
+/// frame First + i of a grid of FrameW x FrameH cells becomes its Src.
+/// Step advances it.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct SpriteAnimator
+{
+    public uint FrameW, FrameH;
+    /// <summary>Frames in a row; 0: as many as fit the texture</summary>
+    public uint Columns;
+    public uint First, Count;
+    public float Fps;
+    public AnimMode Mode;
+    /// <summary>Seconds into the clip; Once clips stop at the end</summary>
+    public float Time;
+    private byte playing, pad0, pad1, pad2;
+
+    public SpriteAnimator() : this(32, 32) { }
+    public SpriteAnimator(uint frameW, uint frameH, uint count = 1, float fps = 10f, AnimMode mode = AnimMode.Loop)
+    {
+        FrameW = frameW;
+        FrameH = frameH;
+        Count = count;
+        Fps = fps;
+        Mode = mode;
+        playing = 1;
+    }
+
+    public bool Playing { readonly get => playing != 0; set => playing = (byte)(value ? 1 : 0); }
+}
+
+/// <summary>Makes the entity the camera: Step centres the view on it,
+/// turned with it, at this zoom. The first current one wins.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Camera2D
+{
+    public float Zoom;
+    private byte current, pad0, pad1, pad2;
+
+    public Camera2D() : this(1f) { }
+    public Camera2D(float zoom) { Zoom = zoom; current = 1; }
+
+    public bool Current { readonly get => current != 0; set => current = (byte)(value ? 1 : 0); }
+}
+
 /// <summary>Where an entity is</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Transform

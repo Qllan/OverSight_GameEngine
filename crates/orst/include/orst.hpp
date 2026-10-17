@@ -148,6 +148,16 @@ struct Light : OrstLight {
     constexpr Light(float radius = 160.0f, Color color = Color::White, float intensity = 1.0f)
         : OrstLight{{0, 0}, color, intensity, radius, 0.5f, 4.0f, 1, {0, 0, 0}} {}
 };
+/// Plays frames of a sprite sheet on the SpriteRenderer (see OrstSpriteAnimator)
+struct SpriteAnimator : OrstSpriteAnimator {
+    constexpr SpriteAnimator(uint32_t frame_w = 32, uint32_t frame_h = 32, uint32_t count = 1, float fps = 10.0f,
+                             OrstAnimMode mode = ORST_ANIM_LOOP)
+        : OrstSpriteAnimator{frame_w, frame_h, 0, 0, count, fps, static_cast<uint32_t>(mode), 0.0f, 1, {0, 0, 0}} {}
+};
+/// Makes the entity the camera (see OrstCamera2D)
+struct Camera2D : OrstCamera2D {
+    constexpr Camera2D(float zoom = 1.0f) : OrstCamera2D{zoom, 1, {0, 0, 0}} {}
+};
 /// What an entity is called (see OrstName)
 struct Name : OrstName {
     Name() : OrstName{} {}
@@ -186,6 +196,10 @@ template <>
 struct ComponentName<Light> { static constexpr const char *value = "Light"; };
 template <>
 struct ComponentName<Name> { static constexpr const char *value = "Name"; };
+template <>
+struct ComponentName<SpriteAnimator> { static constexpr const char *value = "SpriteAnimator"; };
+template <>
+struct ComponentName<Camera2D> { static constexpr const char *value = "Camera2D"; };
 
 enum class Transition : int32_t { Cut = ORST_TRANSITION_CUT, Fade = ORST_TRANSITION_FADE, Wipe = ORST_TRANSITION_WIPE };
 enum class Space : int32_t { World = ORST_SPACE_WORLD, Screen = ORST_SPACE_SCREEN };
@@ -964,6 +978,9 @@ public:
     /// Move entities with Transform + Velocity by dt; with a Body on a tile
     /// map they slide along walls
     void update_motion(float dt) { orst_update_motion(e_, dt); }
+    /// One tick of every built-in system: motion, bodies, collisions, sprite
+    /// animators, then the camera follows the current Camera2D
+    void step(float dt) { orst_step(e_, dt); }
     /// A convex polygon for colliders, 3 to 64 corners in order
     uint32_t create_polygon(const std::vector<Vec2> &points) {
         uint32_t id = orst_create_polygon(e_, points.data(), uint32_t(points.size()));

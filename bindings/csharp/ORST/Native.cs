@@ -84,6 +84,7 @@ internal static class Native
     [DllImport(Lib)] internal static extern uint orst_field_count(IntPtr e, uint component);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_get_field(IntPtr e, uint component, uint index, out NativeField @out);
     [DllImport(Lib)] internal static extern void orst_update_motion(IntPtr e, float dt);
+    [DllImport(Lib)] internal static extern void orst_step(IntPtr e, float dt);
     [DllImport(Lib)] internal static extern void orst_draw_entities(IntPtr e);
     [DllImport(Lib)] internal static extern uint orst_create_polygon(IntPtr e, Vec2[] points, uint count);
     [DllImport(Lib)] internal static extern void orst_free_polygon(IntPtr e, uint polygon);
