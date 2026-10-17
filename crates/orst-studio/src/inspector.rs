@@ -4,7 +4,7 @@
 //! returns what the user changed; the editor applies it, with undo.
 
 use crate::egui;
-use crate::scene_view::label;
+use crate::scene_view::{label, AssetPath};
 use orst::components::{
     write, Body, Collider, Light, Name, RigidBody, SpriteRenderer, Transform, Velocity, BODY,
     COLLIDER, LIGHT, NAME, RIGIDBODY, SPRITE_RENDERER, TRANSFORM, VELOCITY,
@@ -20,8 +20,20 @@ pub enum Action {
         field: String,
         value: Value,
     },
+    /// An asset dropped on a texture or map field, loaded by the editor
+    SetAsset {
+        component: u32,
+        field: String,
+        ty: FieldType,
+        path: String,
+    },
     Add(u32),
     Remove(u32),
+}
+
+enum Change {
+    Value(Value),
+    Asset(String),
 }
 
 pub fn ui(ui: &mut egui::Ui, engine: &Engine, e: Entity) -> Vec<Action> {
@@ -73,12 +85,21 @@ pub fn ui(ui: &mut egui::Ui, engine: &Engine, e: Entity) -> Vec<Action> {
                                         continue;
                                     };
                                     ui.label(&f.name);
-                                    if let Some(value) = field_ui(ui, engine, f, value, &entities) {
-                                        actions.push(Action::Set {
+                                    match field_ui(ui, engine, f, value, &entities) {
+                                        Some(Change::Value(value)) => actions.push(Action::Set {
                                             component: id,
                                             field: f.name.clone(),
                                             value,
-                                        });
+                                        }),
+                                        Some(Change::Asset(path)) => {
+                                            actions.push(Action::SetAsset {
+                                                component: id,
+                                                field: f.name.clone(),
+                                                ty: f.ty,
+                                                path,
+                                            })
+                                        }
+                                        None => {}
                                     }
                                     ui.end_row();
                                 }
@@ -108,8 +129,25 @@ pub fn ui(ui: &mut egui::Ui, engine: &Engine, e: Entity) -> Vec<Action> {
     actions
 }
 
-/// One field's widget; Some(new value) when the user changed it
+/// One field's widget; what the user changed, if anything
 fn field_ui(
+    ui: &mut egui::Ui,
+    engine: &Engine,
+    f: &Field,
+    value: Value,
+    entities: &[(Entity, String)],
+) -> Option<Change> {
+    if let FieldType::Texture | FieldType::Tilemap = f.ty {
+        // Drop an image or a map from the Project window here
+        let (_, dropped) = ui.dnd_drop_zone::<AssetPath, _>(egui::Frame::NONE, |ui| {
+            field_value_ui(ui, engine, f, value, entities)
+        });
+        return dropped.map(|path| Change::Asset(path.0.clone()));
+    }
+    field_value_ui(ui, engine, f, value, entities).map(Change::Value)
+}
+
+fn field_value_ui(
     ui: &mut egui::Ui,
     engine: &Engine,
     f: &Field,
@@ -132,7 +170,8 @@ fn field_ui(
                     .map_or(path.display().to_string(), |n| n.to_string_lossy().into()),
                 (id, None) => format!("#{id}"),
             };
-            ui.weak(text);
+            ui.weak(text)
+                .on_hover_text("Drop a file from the Project window here");
             None
         }
         (_, Value::F32(mut v)) => {

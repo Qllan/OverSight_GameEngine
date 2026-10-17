@@ -5,6 +5,7 @@
 mod app;
 mod console;
 mod editor;
+mod gizmo;
 mod history;
 mod inspector;
 mod project;

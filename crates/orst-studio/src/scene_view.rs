@@ -1,9 +1,12 @@
 //! The Scene window: the edited world drawn by the engine itself, on the
 //! editor's GPU device, with a grid, markers for entities that draw
-//! nothing, and the selection outlined. Middle or right drag pans, the
-//! wheel zooms around the cursor, a click selects.
+//! nothing, the selection outlined and its gizmo. Middle or right drag
+//! pans, the wheel zooms around the cursor, a click selects, a left drag
+//! works the gizmo or moves what it starts on. Assets dropped from the
+//! Project window land where they are let go.
 
 use crate::egui;
+use crate::gizmo::{self, Drag, Tool};
 use orst::components::{read, Name, SpriteRenderer, Transform, NAME, SPRITE_RENDERER, TRANSFORM};
 use orst::ecs::Entity;
 use orst::{Camera, Color, Engine, Vec2};
@@ -22,7 +25,24 @@ const MAX_ZOOM: f32 = 64.0;
 pub struct SceneView {
     /// Holds the edited world; never runs game code
     pub engine: Engine,
+    pub tool: Tool,
+    /// The entity being dragged, and how
+    drag: Option<(Entity, Drag)>,
     shown: Shown,
+}
+
+/// An asset path under Assets, dragged out of the Project window
+pub struct AssetPath(pub String);
+
+/// What happened in the view this frame
+#[derive(Debug, Clone, PartialEq)]
+pub enum SceneEvent {
+    /// A click on an entity or on empty space
+    Pick(Option<Entity>),
+    /// A gizmo drag gave the entity this transform
+    Transform(Entity, Transform),
+    /// An asset was dropped at this world point
+    Drop(String, Vec2),
 }
 
 /// How the canvas reaches egui
@@ -49,14 +69,18 @@ impl SceneView {
             ),
             None => (Engine::headless(64, 64)?, Shown::Software(None)),
         };
-        let mut view = SceneView { engine, shown };
+        let mut view = SceneView {
+            engine,
+            tool: Tool::default(),
+            drag: None,
+            shown,
+        };
         view.engine.set_camera(Camera::default());
         Ok(view)
     }
 
-    /// The view filling `ui`; returns the entity clicked, if any (Some(None)
-    /// when empty space was clicked)
-    pub fn ui(&mut self, ui: &mut egui::Ui, selected: Option<Entity>) -> Option<Option<Entity>> {
+    /// The view filling `ui`
+    pub fn ui(&mut self, ui: &mut egui::Ui, selected: Option<Entity>) -> Vec<SceneEvent> {
         let (rect, response) =
             ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
         let ppp = ui.ctx().pixels_per_point();
@@ -69,6 +93,7 @@ impl SceneView {
         }
         let to_canvas =
             |p: egui::Pos2| Vec2::new((p.x - rect.min.x) * ppp, (p.y - rect.min.y) * ppp);
+        let mut events = Vec::new();
 
         let mut camera = self.engine.camera();
         if response.dragged_by(egui::PointerButton::Middle)
@@ -85,15 +110,53 @@ impl SceneView {
         }
         self.engine.set_camera(camera);
 
-        let mut clicked = None;
+        if !ui.ctx().egui_wants_keyboard_input() {
+            ui.input(|i| {
+                for (key, tool) in [
+                    (egui::Key::W, Tool::Move),
+                    (egui::Key::E, Tool::Rotate),
+                    (egui::Key::R, Tool::Scale),
+                ] {
+                    if i.key_pressed(key) && i.modifiers.is_none() {
+                        self.tool = tool;
+                    }
+                }
+            });
+        }
+
         if response.clicked() {
             if let Some(p) = response.interact_pointer_pos() {
                 let world = self.engine.screen_to_world(to_canvas(p));
-                clicked = Some(pick(&self.engine, world));
+                events.push(SceneEvent::Pick(pick(&self.engine, world)));
+            }
+        }
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            let origin = ui.input(|i| i.pointer.press_origin());
+            if let Some(origin) = origin {
+                self.drag = self.start_drag(to_canvas(origin), selected, &mut events);
+            }
+        }
+        if let (Some((e, drag)), Some(p)) = (self.drag, response.interact_pointer_pos()) {
+            if response.dragged_by(egui::PointerButton::Primary) {
+                let at = self.engine.screen_to_world(to_canvas(p));
+                let snap = ui
+                    .input(|i| i.modifiers.command)
+                    .then(|| gizmo::move_snap(camera.zoom));
+                events.push(SceneEvent::Transform(e, gizmo::apply(&drag, at, snap)));
+            }
+        }
+        if !response.dragged() {
+            self.drag = None;
+        }
+        if let Some(asset) = response.dnd_release_payload::<AssetPath>() {
+            if let Some(p) = response.hover_pos() {
+                let at = self.engine.screen_to_world(to_canvas(p));
+                events.push(SceneEvent::Drop(asset.0.clone(), at));
             }
         }
 
-        draw(&mut self.engine, selected);
+        let gizmo = selected.map(|_| (self.tool, self.drag.map(|(_, d)| d.handle)));
+        draw(&mut self.engine, selected, gizmo);
         if let Some(id) = self.texture(ui.ctx()) {
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             ui.painter().image(id, rect, uv, egui::Color32::WHITE);
@@ -107,7 +170,47 @@ impl SceneView {
                 ui.visuals().error_fg_color,
             );
         }
-        clicked
+        events
+    }
+
+    /// A left drag from the canvas point `at`: a handle of the selection's
+    /// gizmo, or else (with the move tool) whatever entity it starts on
+    fn start_drag(
+        &self,
+        at: Vec2,
+        selected: Option<Entity>,
+        events: &mut Vec<SceneEvent>,
+    ) -> Option<(Entity, Drag)> {
+        let start = self.engine.screen_to_world(at);
+        let world = &self.engine.world;
+        if let Some(e) = selected {
+            if let Some(t) = read::<Transform>(world, e, TRANSFORM) {
+                if let Some(handle) = gizmo::hit(&self.engine, self.tool, &t, at) {
+                    let drag = Drag {
+                        tool: self.tool,
+                        handle,
+                        start,
+                        from: t,
+                    };
+                    return Some((e, drag));
+                }
+            }
+        }
+        if self.tool != Tool::Move {
+            return None;
+        }
+        let e = pick(&self.engine, start)?;
+        let t = read::<Transform>(world, e, TRANSFORM)?;
+        if Some(e) != selected {
+            events.push(SceneEvent::Pick(Some(e)));
+        }
+        let drag = Drag {
+            tool: Tool::Move,
+            handle: gizmo::Handle::Center,
+            start,
+            from: t,
+        };
+        Some((e, drag))
     }
 
     /// The egui texture showing the last frame
@@ -250,8 +353,13 @@ fn inside(quad: &[Vec2; 4], p: Vec2) -> bool {
     true
 }
 
-/// One frame of the edited world
-pub fn draw(engine: &mut Engine, selected: Option<Entity>) {
+/// One frame of the edited world; `gizmo`: the tool for the selection and
+/// the handle being dragged
+pub fn draw(
+    engine: &mut Engine,
+    selected: Option<Entity>,
+    gizmo: Option<(Tool, Option<gizmo::Handle>)>,
+) {
     engine.begin_frame(BACKGROUND);
     let camera = engine.camera();
     let px = 1.0 / camera.zoom;
@@ -331,6 +439,11 @@ pub fn draw(engine: &mut Engine, selected: Option<Entity>) {
             }
         }
     }
+    if let (Some(e), Some((tool, active))) = (selected, gizmo) {
+        if let Some(t) = read::<Transform>(&engine.world, e, TRANSFORM) {
+            gizmo::draw(engine, tool, &t, active);
+        }
+    }
     engine.set_layer(0);
     engine.end_frame();
 }
@@ -396,7 +509,7 @@ mod tests {
         write(&mut engine.world, back, TRANSFORM, &t);
         assert_eq!(pick(&engine, Vec2::new(-3.0, -9.0)), Some(back));
         assert_eq!(pick(&engine, Vec2::new(-8.0, 0.0)), None);
-        draw(&mut engine, Some(back));
+        draw(&mut engine, Some(back), Some((Tool::Rotate, None)));
     }
 
     #[test]

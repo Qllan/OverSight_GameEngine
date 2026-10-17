@@ -14,3 +14,6 @@ orst = { path = "../orst" }
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "x11", "wayland"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }

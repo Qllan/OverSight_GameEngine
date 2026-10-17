@@ -4,12 +4,17 @@
 
 use crate::console::Console;
 use crate::egui;
+use crate::gizmo::Tool;
 use crate::history::History;
 use crate::inspector::{self, Action};
 use crate::project::Project;
-use crate::scene_view::{self, SceneView};
-use orst::components::{write, Name, Transform, NAME, TRANSFORM};
+use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
+use orst::components::{
+    read, write, Name, SpriteRenderer, Transform, NAME, SPRITE_RENDERER, TRANSFORM,
+};
 use orst::ecs::Entity;
+use orst::scene_file::Assets;
+use orst::schema::FieldType;
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -233,6 +238,62 @@ impl Editor {
         self.selected = e;
     }
 
+    pub fn scene_event(&mut self, event: SceneEvent) {
+        match event {
+            SceneEvent::Pick(e) => self.select(e),
+            SceneEvent::Transform(e, t) => {
+                let Ok(view) = &mut self.scene else { return };
+                let world = &mut view.engine.world;
+                if read::<Transform>(world, e, TRANSFORM) != Some(t) {
+                    self.history.record(world);
+                    write(world, e, TRANSFORM, &t);
+                    self.dirty = true;
+                }
+            }
+            SceneEvent::Drop(path, at) => {
+                if let Err(e) = self.drop_asset(&path, at) {
+                    self.console.error(e);
+                }
+            }
+        }
+    }
+
+    /// An image dropped into the scene becomes a sprite there
+    pub fn drop_asset(&mut self, path: &str, at: orst::Vec2) -> Result<(), String> {
+        if !is_image(path) {
+            return Err(format!("{path}: only images can be put into the scene"));
+        }
+        let Ok(view) = &mut self.scene else {
+            return Err("no scene view".into());
+        };
+        let engine = &mut view.engine;
+        let texture = self
+            .project
+            .assets
+            .load(engine, FieldType::Texture, &path.into())?;
+        let (w, h) = engine.texture_size(texture).unwrap_or((0, 0));
+        self.history.record(&engine.world);
+        self.history.close();
+        let e = engine.world.spawn();
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let name = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+        write(&mut engine.world, e, NAME, &Name::new(name));
+        let t = Transform {
+            pos: at,
+            ..Default::default()
+        };
+        write(&mut engine.world, e, TRANSFORM, &t);
+        let s = SpriteRenderer {
+            texture,
+            origin: orst::Vec2::new(w as f32 / 2.0, h as f32 / 2.0),
+            ..Default::default()
+        };
+        write(&mut engine.world, e, SPRITE_RENDERER, &s);
+        self.dirty = true;
+        self.select(Some(e));
+        Ok(())
+    }
+
     /// Undo (or redo) the last change to the scene
     pub fn undo(&mut self, redo: bool) {
         let Ok(view) = &mut self.scene else { return };
@@ -380,12 +441,24 @@ impl Editor {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.center, Center::Scene, "Scene");
                 ui.selectable_value(&mut self.center, Center::Game, "Game");
+                if let (Center::Scene, Ok(view)) = (self.center, &mut self.scene) {
+                    ui.separator();
+                    for (tool, name, key) in [
+                        (Tool::Move, "Move", "W"),
+                        (Tool::Rotate, "Rotate", "E"),
+                        (Tool::Scale, "Scale", "R"),
+                    ] {
+                        ui.selectable_value(&mut view.tool, tool, name)
+                            .on_hover_text(format!("{key}; hold Ctrl to snap"));
+                    }
+                }
             });
             ui.separator();
             match (self.center, &mut self.scene) {
                 (Center::Scene, Ok(view)) => {
-                    if let Some(picked) = view.ui(ui, self.selected) {
-                        self.select(picked);
+                    let events = view.ui(ui, self.selected);
+                    for event in events {
+                        self.scene_event(event);
                     }
                 }
                 (Center::Scene, Err(e)) => {
@@ -564,10 +637,11 @@ impl Editor {
         if actions.is_empty() {
             return;
         }
-        let world = &mut view.engine.world;
-        self.history.record(world);
+        let engine = &mut view.engine;
+        self.history.record(&engine.world);
         self.dirty = true;
         for action in actions {
+            let world = &mut engine.world;
             match action {
                 Action::Set {
                     component,
@@ -576,6 +650,19 @@ impl Editor {
                 } => {
                     world.set_field(e, component, &field, value);
                 }
+                Action::SetAsset {
+                    component,
+                    field,
+                    ty,
+                    path,
+                } => match self.project.assets.load(engine, ty, &path.as_str().into()) {
+                    Ok(id) => {
+                        let value = orst::schema::Value::U32(id);
+                        engine.world.set_field(e, component, &field, value);
+                        self.history.close();
+                    }
+                    Err(err) => self.console.error(err),
+                },
                 Action::Add(id) => {
                     inspector::add_component(world, e, id);
                     self.history.close();
@@ -620,6 +707,11 @@ impl Editor {
             }
         }
     }
+}
+
+fn is_image(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg")
 }
 
 fn clear_world(world: &mut orst::ecs::World) {
@@ -686,7 +778,10 @@ impl Tree {
         for name in &self.files {
             let path = format!("{prefix}{name}");
             let picked = selected.as_deref() == Some(path.as_str());
-            let r = ui.selectable_label(picked, name.as_str());
+            let r = ui
+                .selectable_label(picked, name.as_str())
+                .interact(egui::Sense::drag());
+            r.dnd_set_drag_payload(AssetPath(path.clone()));
             if r.double_clicked() {
                 *opened = Some(path.clone());
             }
@@ -803,6 +898,54 @@ mod tests {
         assert!(engine.world.find_named("Hero").is_some());
         assert_eq!(ed.scene_path.as_deref(), Some("levels/One.scene"));
         assert!(!ed.dirty && !ed.history.can_undo());
+    }
+
+    #[test]
+    fn dropped_images_become_sprites_and_gizmo_drags_undo() {
+        let mut ed = editor("drop");
+        let png = ed.project.assets.file("hero.png");
+        let mut pixels = Vec::new();
+        for _ in 0..(8 * 4) {
+            pixels.extend_from_slice(&[255, 0, 0, 255]);
+        }
+        image_png(&png, 8, 4, &pixels);
+        ed.rescan();
+        assert!(ed
+            .drop_asset("notes.txt", orst::Vec2::new(0.0, 0.0))
+            .is_err());
+        ed.drop_asset("hero.png", orst::Vec2::new(30.0, 40.0))
+            .unwrap();
+        let e = ed.selected.unwrap();
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert_eq!(scene_view::label(engine, e), "hero");
+        let s: SpriteRenderer = read(&engine.world, e, SPRITE_RENDERER).unwrap();
+        assert_eq!(s.origin, orst::Vec2::new(4.0, 2.0));
+        assert_eq!(engine.texture_size(s.texture), Some((8, 4)));
+
+        // A drag is many transforms and one undo step
+        for x in [31.0, 35.0, 50.0] {
+            let t = Transform {
+                pos: orst::Vec2::new(x, 40.0),
+                ..Default::default()
+            };
+            ed.scene_event(SceneEvent::Transform(e, t));
+        }
+        ed.history.close();
+        let x = |ed: &Editor| {
+            let world = &ed.scene.as_ref().unwrap().engine.world;
+            read::<Transform>(world, e, TRANSFORM).unwrap().pos.x
+        };
+        assert_eq!(x(&ed), 50.0);
+        ed.undo(false);
+        assert_eq!(x(&ed), 30.0);
+
+        ed.save_scene("s.scene").unwrap();
+        let text = std::fs::read_to_string(ed.project.assets.file("s.scene")).unwrap();
+        assert!(text.contains("hero.png") && text.contains("uid"), "{text}");
+    }
+
+    fn image_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {
+        image::save_buffer(path, rgba, w, h, image::ColorType::Rgba8).unwrap();
     }
 
     #[test]
