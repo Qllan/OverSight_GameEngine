@@ -37,12 +37,14 @@ fn unit(a: Vec2) -> Vec2 {
     }
 }
 
-/// Rotate clockwise on screen (y points down), like sprites
+/// Rotate clockwise on screen (y points down), like sprites. libm instead
+/// of the system's sin and cos, which differ between Windows and Linux in
+/// the last bits and would split networked games apart.
 pub fn rotate(p: Vec2, radians: f32) -> Vec2 {
     if radians == 0.0 {
         return p;
     }
-    let (s, c) = radians.sin_cos();
+    let (s, c) = (libm::sinf(radians), libm::cosf(radians));
     Vec2::new(p.x * c - p.y * s, p.x * s + p.y * c)
 }
 

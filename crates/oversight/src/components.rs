@@ -13,6 +13,11 @@ pub const VELOCITY: u32 = 2;
 pub const SPRITE_RENDERER: u32 = 3;
 pub const BODY: u32 = 4;
 pub const COLLIDER: u32 = 5;
+pub const RIGIDBODY: u32 = 6;
+
+pub const BODY_DYNAMIC: u32 = 0;
+pub const BODY_FIXED: u32 = 1;
+pub const BODY_KINEMATIC: u32 = 2;
 
 pub const COLLIDER_BOX: u32 = 0;
 pub const COLLIDER_CIRCLE: u32 = 1;
@@ -168,6 +173,48 @@ impl Collider {
     }
 }
 
+/// A body with mass for the physics step (with a Transform and a
+/// Collider). Dynamic bodies fall and bounce; fixed ones are walls;
+/// kinematic ones go where the game puts them (or by their Velocity) and
+/// push dynamic ones out of the way.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RigidBody {
+    /// BODY_DYNAMIC, BODY_FIXED or BODY_KINEMATIC
+    pub kind: u32,
+    /// Mass per square unit of the collider
+    pub density: f32,
+    pub friction: f32,
+    /// Bounciness, 0..1
+    pub restitution: f32,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    pub gravity_scale: f32,
+    /// Never turns (characters)
+    pub fixed_rotation: u8,
+    /// Fast: checked along its whole move so it does not pass through
+    /// thin walls (continuous collision detection)
+    pub bullet: u8,
+    pub _pad: [u8; 2],
+}
+
+impl Default for RigidBody {
+    fn default() -> Self {
+        RigidBody {
+            kind: BODY_DYNAMIC,
+            density: 1.0,
+            friction: 0.5,
+            restitution: 0.0,
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            gravity_scale: 1.0,
+            fixed_rotation: 0,
+            bullet: 0,
+            _pad: [0; 2],
+        }
+    }
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -181,6 +228,7 @@ pub fn register(world: &mut World) {
         ),
         world.component("Body", size(std::mem::size_of::<Body>()), 4),
         world.component("Collider", size(std::mem::size_of::<Collider>()), 4),
+        world.component("RigidBody", size(std::mem::size_of::<RigidBody>()), 4),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -188,7 +236,14 @@ pub fn register(world: &mut World) {
         .collect();
     debug_assert_eq!(
         ids,
-        [TRANSFORM, VELOCITY, SPRITE_RENDERER, BODY, COLLIDER],
+        [
+            TRANSFORM,
+            VELOCITY,
+            SPRITE_RENDERER,
+            BODY,
+            COLLIDER,
+            RIGIDBODY
+        ],
         "built-ins come first"
     );
 }
@@ -207,6 +262,7 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         SPRITE_RENDERER => Some(bytes(SpriteRenderer::default())),
         BODY => Some(bytes(Body::default())),
         COLLIDER => Some(bytes(Collider::default())),
+        RIGIDBODY => Some(bytes(RigidBody::default())),
         _ => None,
     }
 }
@@ -238,6 +294,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<SpriteRenderer>(), 40);
         assert_eq!(std::mem::size_of::<Body>(), 24);
         assert_eq!(std::mem::size_of::<Collider>(), 40);
+        assert_eq!(std::mem::size_of::<RigidBody>(), 32);
         let mut w = World::new();
         register(&mut w);
         assert_eq!(w.component_id("Body"), Some(BODY));

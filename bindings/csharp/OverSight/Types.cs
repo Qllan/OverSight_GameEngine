@@ -453,3 +453,31 @@ public struct EntityHit
 
     public readonly Entity Entity => new(entity);
 }
+
+public enum BodyKind : uint { Dynamic = 0, Fixed = 1, Kinematic = 2 }
+
+/// <summary>A body with mass for Engine.PhysicsStep (with a Transform and a
+/// Collider). Dynamic bodies fall and bounce, fixed ones are walls,
+/// kinematic ones go where the game puts them and push dynamic ones.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct RigidBody
+{
+    public BodyKind Kind;
+    /// <summary>Mass per square unit, default 1</summary>
+    public float Density;
+    public float Friction;
+    /// <summary>Bounciness 0..1</summary>
+    public float Restitution;
+    public float LinearDamping;
+    public float AngularDamping;
+    public float GravityScale;
+    private byte fixedRotation, bullet, pad0, pad1;
+
+    public RigidBody() : this(BodyKind.Dynamic) { }
+    public RigidBody(BodyKind kind) { Kind = kind; Density = 1; Friction = 0.5f; GravityScale = 1; }
+
+    /// <summary>Never turns (characters)</summary>
+    public bool FixedRotation { readonly get => fixedRotation != 0; set => fixedRotation = (byte)(value ? 1 : 0); }
+    /// <summary>Fast: does not pass through thin walls</summary>
+    public bool Bullet { readonly get => bullet != 0; set => bullet = (byte)(value ? 1 : 0); }
+}

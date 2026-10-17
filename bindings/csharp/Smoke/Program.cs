@@ -157,6 +157,25 @@ engine.Despawn(ball);
 engine.UpdateCollisions();
 Check(engine.Contacts().Single().State == ContactState.End, "end after despawn");
 
+// Physics: a crate falls onto a fixed floor
+engine.Gravity = new Vec2(0, 400);
+var floor = engine.Spawn();
+engine.Set(floor, new Transform(new Vec2(500, 100)));
+engine.Set(floor, Collider.Box(new Vec2(300, 20)));
+engine.Set(floor, new RigidBody(BodyKind.Fixed));
+var box = engine.Spawn();
+engine.Set(box, new Transform(new Vec2(500, 0)));
+engine.Set(box, Collider.Box(new Vec2(16, 16)));
+engine.Set(box, new RigidBody());
+engine.Set(box, new Velocity());
+Check(engine.Component<RigidBody>() == 6 && Marshal.SizeOf<RigidBody>() == 32 && engine.BodyMass(box) > 0, "RigidBody");
+for (int i = 0; i < 120; i++) engine.PhysicsStep(1f / 60);
+Check(Math.Abs(engine.Get<Transform>(box).Pos.Y - 82) < 1, $"the crate rests on the floor {engine.Get<Transform>(box).Pos}");
+Check(engine.JointRope(floor, box, 50) != 0, "JointRope");
+engine.Despawn(floor);
+engine.Despawn(box);
+engine.UpdateCollisions();
+
 // Scenes: a cut switches at the next frame, a push keeps the scene below
 Check(engine.GoScene(1, Transition.Cut) && engine.Scene == 0, "scene changes at the next frame");
 engine.Poll();

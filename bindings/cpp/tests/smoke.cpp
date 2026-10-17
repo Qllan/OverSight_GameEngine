@@ -162,6 +162,21 @@ int main() {
     CHECK(contacts.size() == 1 && contacts[0].begin() && contacts[0].other(wall) == ball);
     CHECK(engine.query_point({100, 100}).size() == 1 && engine.raycast_entities({150, 100}, {0, 100})->entity == ball);
 
+    // Physics: a crate falls onto a fixed floor
+    engine.set_gravity({0, 400});
+    ov::Entity floor = engine.spawn(), crate = engine.spawn();
+    engine.set(floor, ov::Transform{{500, 100}});
+    engine.set(floor, ov::Collider::box({300, 20}));
+    engine.set(floor, ov::RigidBody::fixed());
+    engine.set(crate, ov::Transform{{500, 0}});
+    engine.set(crate, ov::Collider::box({16, 16}));
+    engine.set(crate, ov::RigidBody::dynamic());
+    for (int i = 0; i < 120; i++) engine.physics_step(1.0f / 60);
+    CHECK(engine.get<ov::Transform>(crate)->pos.y > 81 && engine.get<ov::Transform>(crate)->pos.y < 83);
+    CHECK(engine.component<ov::RigidBody>() == OV_RIGIDBODY && engine.body_mass(crate) > 0);
+    engine.despawn(floor);
+    engine.despawn(crate);
+
     // Scenes: a push keeps the scene below, a pop resumes it
     CHECK(engine.go_scene(1, ov::Transition::Cut));
     engine.poll();

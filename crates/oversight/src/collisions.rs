@@ -88,7 +88,10 @@ fn items(world: &World, polygons: &Store<Vec<Vec2>>) -> Vec<Item> {
                 collider: c,
                 shape,
                 bounds,
-                moves: world.has(entity, VELOCITY),
+                // Bodies with mass are moved by the physics step; here
+                // they hold still like walls
+                moves: world.has(entity, VELOCITY)
+                    && !world.has(entity, crate::components::RIGIDBODY),
             });
         }
     }

@@ -580,6 +580,94 @@ pub unsafe extern "C" fn ov_find_path(
     path.len() as u32
 }
 
+// Physics: built without the `physics` feature these do nothing and
+// ov_last_error says why
+
+/// Run `f` on the physics with bodies made for new entities first
+fn with_physics<T>(
+    e: *mut OvEngine,
+    failed: T,
+    f: impl FnOnce(&mut crate::physics::Physics) -> T,
+) -> T {
+    let engine = engine!(e, failed);
+    if let Some(why) = crate::physics::Physics::missing() {
+        set_error(why);
+        return failed;
+    }
+    engine.physics_sync();
+    f(&mut engine.physics)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_physics_step(e: *mut OvEngine, dt: f32) {
+    engine!(e).physics_step(dt);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_gravity(e: *mut OvEngine, gravity: Vec2) {
+    engine!(e).physics.set_gravity(gravity);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_physics_scale(e: *mut OvEngine, units_per_metre: f32) {
+    engine!(e).physics.set_scale(units_per_metre);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_apply_impulse(e: *mut OvEngine, entity: u64, impulse: Vec2) -> bool {
+    with_physics(e, false, |p| p.apply_impulse(entity, impulse))
+}
+
+/// Pushes during the next step only
+#[no_mangle]
+pub extern "C" fn ov_apply_force(e: *mut OvEngine, entity: u64, force: Vec2) -> bool {
+    with_physics(e, false, |p| p.apply_force(entity, force))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_apply_torque_impulse(e: *mut OvEngine, entity: u64, torque: f32) -> bool {
+    with_physics(e, false, |p| p.apply_torque_impulse(entity, torque))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_body_mass(e: *mut OvEngine, entity: u64) -> f32 {
+    with_physics(e, 0.0, |p| p.mass(entity))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_joint_pin(e: *mut OvEngine, a: u64, b: u64, at: Vec2) -> u32 {
+    with_physics(e, 0, |p| p.pin(a, b, at).unwrap_or(0))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_joint_weld(e: *mut OvEngine, a: u64, b: u64) -> u32 {
+    with_physics(e, 0, |p| p.weld(a, b).unwrap_or(0))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_joint_rope(e: *mut OvEngine, a: u64, b: u64, length: f32) -> u32 {
+    with_physics(e, 0, |p| p.rope(a, b, length).unwrap_or(0))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_joint_spring(
+    e: *mut OvEngine,
+    a: u64,
+    b: u64,
+    rest: f32,
+    stiffness: f32,
+    damping: f32,
+) -> u32 {
+    with_physics(e, 0, |p| {
+        p.spring(a, b, rest, stiffness, damping).unwrap_or(0)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn ov_remove_joint(e: *mut OvEngine, joint: u32) -> bool {
+    with_physics(e, false, |p| p.remove_joint(joint))
+}
+
 #[no_mangle]
 pub extern "C" fn ov_update_collisions(e: *mut OvEngine) {
     engine!(e).update_collisions();
@@ -2585,6 +2673,64 @@ mod tests {
                 0,
                 "no such map"
             );
+            ov_engine_destroy(e);
+        }
+    }
+
+    #[cfg(feature = "physics")]
+    #[test]
+    fn physics_bodies_fall_and_replay_from_a_snapshot() {
+        use crate::components::*;
+        let e = headless(8, 8);
+        unsafe {
+            ov_set_gravity(e, Vec2::new(0.0, 400.0));
+            let put = |pos: Vec2, size: Vec2, kind: u32| {
+                let ent = ov_spawn(e);
+                let t = Transform {
+                    pos,
+                    ..Transform::default()
+                };
+                ov_set(e, ent, TRANSFORM, &t as *const _ as *const c_void);
+                let c = Collider {
+                    size,
+                    ..Collider::default()
+                };
+                ov_set(e, ent, COLLIDER, &c as *const _ as *const c_void);
+                let rb = RigidBody {
+                    kind,
+                    ..RigidBody::default()
+                };
+                ov_set(e, ent, RIGIDBODY, &rb as *const _ as *const c_void);
+                ent
+            };
+            put(Vec2::new(0.0, 100.0), Vec2::new(300.0, 20.0), BODY_FIXED);
+            let a = put(Vec2::new(0.0, 0.0), Vec2::new(16.0, 16.0), BODY_DYNAMIC);
+            let b = put(Vec2::new(4.0, -30.0), Vec2::new(16.0, 16.0), BODY_DYNAMIC);
+            // Bodies exist before the first step for joints and impulses
+            assert!(ov_body_mass(e, a) > 0.0);
+            assert!(ov_joint_rope(e, a, b, 40.0) != 0);
+            assert!(ov_apply_impulse(e, b, Vec2::new(500.0, 0.0)));
+            for _ in 0..20 {
+                ov_physics_step(e, 1.0 / 60.0);
+            }
+            let mut snap = vec![0u8; ov_snapshot(e, std::ptr::null_mut(), 0)];
+            ov_snapshot(e, snap.as_mut_ptr(), snap.len());
+            let mut hashes = Vec::new();
+            for _ in 0..60 {
+                ov_physics_step(e, 1.0 / 60.0);
+                hashes.push(ov_state_hash(e));
+            }
+            let t = *(ov_get(e, a, TRANSFORM) as *const Transform);
+            assert!(
+                t.pos.y > 60.0 && t.pos.y < 95.0,
+                "fell onto the ground: {:?}",
+                t.pos
+            );
+            assert!(ov_restore(e, snap.as_ptr(), snap.len()));
+            for (i, h) in hashes.iter().enumerate() {
+                ov_physics_step(e, 1.0 / 60.0);
+                assert_eq!(ov_state_hash(e), *h, "tick {i} after the restore");
+            }
             ov_engine_destroy(e);
         }
     }

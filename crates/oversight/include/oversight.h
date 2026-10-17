@@ -353,6 +353,7 @@ void ov_world_clear(OvEngine *e); /* despawn everything; component types stay */
 #define OV_SPRITE_RENDERER 3
 #define OV_BODY 4
 #define OV_COLLIDER 5
+#define OV_RIGIDBODY 6
 
 typedef struct OvTransform {
     OvVec2 pos;
@@ -398,6 +399,27 @@ typedef struct OvCollider {
     uint8_t pad_[3];
 } OvCollider;
 
+/* A body with mass for ov_physics_step (with a Transform and a Collider).
+ * Dynamic bodies fall and bounce, fixed ones are walls, kinematic ones go
+ * where the game puts them (or by their Velocity) and push dynamic ones.
+ * The physics step owns these entities: ov_update_motion skips them, and
+ * ov_update_collisions reports them but does not push them. */
+#define OV_BODY_DYNAMIC 0
+#define OV_BODY_FIXED 1
+#define OV_BODY_KINEMATIC 2
+typedef struct OvRigidBody {
+    uint32_t kind;       /* OV_BODY_* */
+    float density;       /* mass per square unit, default 1 */
+    float friction;      /* default 0.5 */
+    float restitution;   /* bounciness 0..1 */
+    float linear_damping;
+    float angular_damping;
+    float gravity_scale; /* default 1 */
+    uint8_t fixed_rotation; /* never turns (characters) */
+    uint8_t bullet;         /* fast: does not pass through thin walls */
+    uint8_t pad_[2];
+} OvRigidBody;
+
 /* How two shapes overlap: move the second by normal * depth and they only touch */
 typedef struct OvOverlap {
     OvVec2 normal; /* from the first towards the second */
@@ -410,6 +432,23 @@ uint32_t ov_create_polygon(OvEngine *e, const OvVec2 *points, uint32_t count); /
 void ov_free_polygon(OvEngine *e, uint32_t polygon);
 bool ov_entity_overlap(OvEngine *e, OvEntity a, OvEntity b, OvOverlap *out); /* layers aside */
 void ov_debug_colliders(OvEngine *e); /* outlines in the debug overlay */
+
+/* Physics (Rapier, deterministic): call ov_physics_step once per tick.
+ * Moving the Transform or setting the Velocity moves a body; after the
+ * step its place and speed are written back. Impulses and joints work on
+ * new entities right away. Built without physics: false, 0, ov_last_error. */
+void ov_physics_step(OvEngine *e, float dt);
+void ov_set_gravity(OvEngine *e, OvVec2 gravity); /* units/s^2, y down; default none (top-down) */
+void ov_set_physics_scale(OvEngine *e, float units_per_metre); /* default 32 */
+bool ov_apply_impulse(OvEngine *e, OvEntity entity, OvVec2 impulse);
+bool ov_apply_force(OvEngine *e, OvEntity entity, OvVec2 force); /* during the next step */
+bool ov_apply_torque_impulse(OvEngine *e, OvEntity entity, float torque);
+float ov_body_mass(OvEngine *e, OvEntity entity);
+uint32_t ov_joint_pin(OvEngine *e, OvEntity a, OvEntity b, OvVec2 at); /* hinge at a world point */
+uint32_t ov_joint_weld(OvEngine *e, OvEntity a, OvEntity b);           /* glued as they are now */
+uint32_t ov_joint_rope(OvEngine *e, OvEntity a, OvEntity b, float length); /* at most this far apart */
+uint32_t ov_joint_spring(OvEngine *e, OvEntity a, OvEntity b, float rest, float stiffness, float damping);
+bool ov_remove_joint(OvEngine *e, uint32_t joint);
 
 /* The collision pass: call it after ov_update_motion, once per tick. A grid
  * finds the pairs near each other; solid colliders (not triggers) with a

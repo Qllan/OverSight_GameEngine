@@ -70,6 +70,8 @@ pub struct Engine {
     pub scenes: crate::scenes::Scenes,
     /// Overlaps between colliders from the last collision pass
     pub collisions: crate::collisions::Collisions,
+    /// Bodies with mass and joints (Rapier)
+    pub physics: crate::physics::Physics,
     pub debug: DebugOverlay,
     pub hot_reload: HotReload,
     #[cfg(feature = "audio")]
@@ -131,6 +133,7 @@ impl Engine {
             },
             scenes: Default::default(),
             collisions: Default::default(),
+            physics: Default::default(),
             debug: DebugOverlay::default(),
             hot_reload: HotReload::default(),
             #[cfg(feature = "audio")]
@@ -271,6 +274,18 @@ impl Engine {
             out.extend_from_slice(&a.to_le_bytes());
             out.extend_from_slice(&b.to_le_bytes());
         }
+        // The physics bodies, contacts and joints, so a restored game
+        // steps on exactly as before
+        #[cfg(feature = "physics")]
+        let physics = if self.physics.body_count() > 0 {
+            self.physics.save()
+        } else {
+            Vec::new()
+        };
+        #[cfg(not(feature = "physics"))]
+        let physics: Vec<u8> = Vec::new();
+        out.extend_from_slice(&(physics.len() as u32).to_le_bytes());
+        out.extend_from_slice(&physics);
         self.world.save(&mut out);
         out
     }
@@ -289,7 +304,15 @@ impl Engine {
         for _ in 0..n {
             touching.push((r.u64()?, r.u64()?));
         }
+        let size = r.u32()? as usize;
+        let physics_bytes = r.take(size)?;
+        let physics = if size == 0 {
+            crate::physics::Physics::default_like(&self.physics)
+        } else {
+            crate::physics::Physics::load(physics_bytes)?
+        };
         self.world.load(&bytes[r.at..])?;
+        self.physics = physics;
         self.rng = Rng::new(rng);
         self.time.tick_count = ticks;
         self.collisions.set_touching(touching);
@@ -315,6 +338,9 @@ impl Engine {
             read, write, Body, Transform, Velocity, BODY, TRANSFORM, VELOCITY,
         };
         for ent in self.world.query(&[TRANSFORM, VELOCITY]) {
+            if self.world.has(ent, crate::components::RIGIDBODY) {
+                continue; // the physics step moves these
+            }
             let (Some(mut t), Some(mut v)) = (
                 read::<Transform>(&self.world, ent, TRANSFORM),
                 read::<Velocity>(&self.world, ent, VELOCITY),
@@ -376,6 +402,18 @@ impl Engine {
         mask: u32,
     ) -> Option<crate::collisions::EntityHit> {
         crate::collisions::raycast(&self.world, &self.polygons, from, to, mask)
+    }
+
+    /// Advance the bodies with mass by dt (a tick's dt) and write their
+    /// places and speeds back to Transform and Velocity
+    pub fn physics_step(&mut self, dt: f32) {
+        self.physics.step(&mut self.world, &self.polygons, dt);
+    }
+
+    /// Make bodies for new entities now, so impulses and joints can use
+    /// them before the first step
+    pub fn physics_sync(&mut self) {
+        self.physics.sync(&self.world, &self.polygons, 0.0);
     }
 
     /// A convex polygon for colliders (3 to 64 corners in order)

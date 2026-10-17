@@ -131,6 +131,10 @@ int main(void) {
     ov_update_collisions(e);
     CHECK(ov_contact_count(e) == 0);
 
+    /* Physics */
+    CHECK(sizeof(OvRigidBody) == 32);
+    CHECK(ov_joint_weld(e, 0, 0) == 0);
+
     /* Scenes: switched in the middle of the fade */
     CHECK(ov_scene_go(e, 5, OV_TRANSITION_FADE, 0.1f, OV_RGBA(0, 0, 0, 255)));
     int entered = 0;

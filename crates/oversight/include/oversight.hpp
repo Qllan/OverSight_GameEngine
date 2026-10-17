@@ -133,6 +133,13 @@ struct Collider : OvCollider {
         return c;
     }
 };
+struct RigidBody : OvRigidBody {
+    constexpr RigidBody(uint32_t kind = OV_BODY_DYNAMIC)
+        : OvRigidBody{kind, 1.0f, 0.5f, 0.0f, 0.0f, 0.0f, 1.0f, 0, 0, {0, 0}} {}
+    static constexpr RigidBody dynamic() { return RigidBody(OV_BODY_DYNAMIC); }
+    static constexpr RigidBody fixed() { return RigidBody(OV_BODY_FIXED); }
+    static constexpr RigidBody kinematic() { return RigidBody(OV_BODY_KINEMATIC); }
+};
 using Overlap = OvOverlap;
 using EntityHit = OvEntityHit;
 enum class ContactState : int32_t { Begin = OV_CONTACT_BEGIN, Stay = OV_CONTACT_STAY, End = OV_CONTACT_END };
@@ -152,6 +159,8 @@ template <>
 struct ComponentName<Body> { static constexpr const char *value = "Body"; };
 template <>
 struct ComponentName<Collider> { static constexpr const char *value = "Collider"; };
+template <>
+struct ComponentName<RigidBody> { static constexpr const char *value = "RigidBody"; };
 
 enum class Transition : int32_t { Cut = OV_TRANSITION_CUT, Fade = OV_TRANSITION_FADE, Wipe = OV_TRANSITION_WIPE };
 enum class Space : int32_t { World = OV_SPACE_WORLD, Screen = OV_SPACE_SCREEN };
@@ -753,6 +762,22 @@ public:
         return o;
     }
     void debug_colliders() { ov_debug_colliders(e_); }
+    // physics (Rapier): bodies with mass, once per tick
+    void physics_step(float dt) { ov_physics_step(e_, dt); }
+    void set_gravity(Vec2 g) { ov_set_gravity(e_, g); }
+    void set_physics_scale(float units_per_metre) { ov_set_physics_scale(e_, units_per_metre); }
+    bool apply_impulse(Entity en, Vec2 impulse) { return ov_apply_impulse(e_, en, impulse); }
+    bool apply_force(Entity en, Vec2 force) { return ov_apply_force(e_, en, force); }
+    bool apply_torque_impulse(Entity en, float torque) { return ov_apply_torque_impulse(e_, en, torque); }
+    float body_mass(Entity en) { return ov_body_mass(e_, en); }
+    uint32_t joint_pin(Entity a, Entity b, Vec2 at) { return ov_joint_pin(e_, a, b, at); }
+    uint32_t joint_weld(Entity a, Entity b) { return ov_joint_weld(e_, a, b); }
+    uint32_t joint_rope(Entity a, Entity b, float length) { return ov_joint_rope(e_, a, b, length); }
+    uint32_t joint_spring(Entity a, Entity b, float rest, float stiffness, float damping) {
+        return ov_joint_spring(e_, a, b, rest, stiffness, damping);
+    }
+    bool remove_joint(uint32_t joint) { return ov_remove_joint(e_, joint); }
+
     /// Overlaps, pushes and events between colliders; after update_motion
     void update_collisions() { ov_update_collisions(e_); }
     void set_collision_cell(float size) { ov_set_collision_cell(e_, size); }

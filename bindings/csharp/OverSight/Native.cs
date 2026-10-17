@@ -76,6 +76,18 @@ internal static class Native
     [DllImport(Lib)] internal static extern void ov_free_polygon(IntPtr e, uint polygon);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_entity_overlap(IntPtr e, ulong a, ulong b, out Overlap @out);
     [DllImport(Lib)] internal static extern void ov_debug_colliders(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_physics_step(IntPtr e, float dt);
+    [DllImport(Lib)] internal static extern void ov_set_gravity(IntPtr e, Vec2 gravity);
+    [DllImport(Lib)] internal static extern void ov_set_physics_scale(IntPtr e, float units_per_metre);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_apply_impulse(IntPtr e, ulong entity, Vec2 impulse);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_apply_force(IntPtr e, ulong entity, Vec2 force);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_apply_torque_impulse(IntPtr e, ulong entity, float torque);
+    [DllImport(Lib)] internal static extern float ov_body_mass(IntPtr e, ulong entity);
+    [DllImport(Lib)] internal static extern uint ov_joint_pin(IntPtr e, ulong a, ulong b, Vec2 at);
+    [DllImport(Lib)] internal static extern uint ov_joint_weld(IntPtr e, ulong a, ulong b);
+    [DllImport(Lib)] internal static extern uint ov_joint_rope(IntPtr e, ulong a, ulong b, float length);
+    [DllImport(Lib)] internal static extern uint ov_joint_spring(IntPtr e, ulong a, ulong b, float rest, float stiffness, float damping);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_remove_joint(IntPtr e, uint joint);
     [DllImport(Lib)] internal static extern void ov_update_collisions(IntPtr e);
     [DllImport(Lib)] internal static extern void ov_set_collision_cell(IntPtr e, float size);
     [DllImport(Lib)] internal static extern uint ov_contact_count(IntPtr e);
