@@ -7,6 +7,9 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>OverSight</RootNamespace>
+    <!-- Not OverSight.dll: on Windows that name would collide with the
+         native oversight.dll in the same folder -->
+    <AssemblyName>OverSight.Net</AssemblyName>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
