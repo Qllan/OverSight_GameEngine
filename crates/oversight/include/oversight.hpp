@@ -550,6 +550,13 @@ public:
     }
     void inject_pad_axis(int pad, PadAxis a, float v) { ov_inject_gamepad_axis(e_, pad, static_cast<int32_t>(a), v); }
 
+    // hot reload: textures and maps reload in place when their files change
+    void set_hot_reload(bool on) { ov_set_hot_reload(e_, on); }
+    bool hot_reload() const { return ov_hot_reload_enabled(e_); }
+    uint32_t reload_changed() { return ov_reload_changed(e_); }
+    /// Resources reloaded by the last poll (e.g. to re-read map objects)
+    uint32_t reloaded() const { return ov_reloaded(e_); }
+
     // debug overlay: drawn on top only while on; F3 toggles it
     void set_debug(bool on) { ov_set_debug(e_, on); }
     bool debug() const { return ov_debug_enabled(e_); }

@@ -78,6 +78,9 @@ Check(engine.GamepadConnected(1) && engine.GamepadName(1) == "Injected", "gamepa
 Check(engine.PadPressed(1, Pad.South) && !engine.PadDown(0, Pad.South), "gamepad button");
 Check(engine.PadStick(1).Y == -1f, "gamepad stick");
 
+engine.HotReload = true;
+Check(engine.HotReload && engine.ReloadChanged() == 0 && engine.Reloaded == 0, "hot reload");
+
 engine.Debug = true;
 Check(engine.Debug, "debug on");
 engine.BeginFrame(Color.Black);

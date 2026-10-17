@@ -342,6 +342,12 @@ public sealed class Engine : IDisposable
     public void InjectPadButton(int pad, Pad b, bool down) => Native.ov_inject_gamepad_button(Handle, pad, (int)b, down);
     public void InjectPadAxis(int pad, PadAxis a, float v) => Native.ov_inject_gamepad_axis(Handle, pad, (int)a, v);
 
+    // hot reload: textures and maps reload in place when their files change
+    public bool HotReload { get => Native.ov_hot_reload_enabled(Handle); set => Native.ov_set_hot_reload(Handle, value); }
+    public uint ReloadChanged() => Native.ov_reload_changed(Handle);
+    /// <summary>Resources reloaded by the last Poll (e.g. to re-read map objects)</summary>
+    public uint Reloaded => Native.ov_reloaded(Handle);
+
     // debug overlay: drawn on top only while on; F3 toggles it
     public bool Debug { get => Native.ov_debug_enabled(Handle); set => Native.ov_set_debug(Handle, value); }
     /// <summary>Key that toggles the overlay; null for none</summary>

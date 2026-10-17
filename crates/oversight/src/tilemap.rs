@@ -180,6 +180,9 @@ pub struct Tilemap {
     pub layers: Vec<TileLayer>,
     pub object_layers: Vec<ObjectLayer>,
     pub properties: Properties,
+    /// Files the map was read from (the map, external tilesets), watched
+    /// by hot reload; empty for maps built in code
+    pub files: Vec<std::path::PathBuf>,
 }
 
 /// How a tile layer is drawn

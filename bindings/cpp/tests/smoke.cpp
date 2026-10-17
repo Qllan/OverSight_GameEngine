@@ -94,6 +94,9 @@ int main() {
     CHECK(engine.pad_pressed(1, ov::Pad::South) && !engine.pad_down(0, ov::Pad::South));
     CHECK(engine.pad_stick(1).y == -1.0f);
 
+    engine.set_hot_reload(true);
+    CHECK(engine.hot_reload() && engine.reload_changed() == 0 && engine.reloaded() == 0);
+
     // Debug overlay: drawn only while on, above the game
     engine.set_debug(true);
     CHECK(engine.debug());

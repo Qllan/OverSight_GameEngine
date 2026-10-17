@@ -764,6 +764,32 @@ pub extern "C" fn ov_lerp_color(a: Color, b: Color, t: f32) -> Color {
     tween::lerp_color(a, b, t)
 }
 
+// --- hot reload ----------------------------------------------------------------
+
+/// While on, `ov_poll` reloads textures and maps whose files changed
+/// (checked twice a second); ids stay the same
+#[no_mangle]
+pub extern "C" fn ov_set_hot_reload(e: *mut OvEngine, on: bool) {
+    engine!(e).hot_reload.enabled = on;
+}
+
+#[no_mangle]
+pub extern "C" fn ov_hot_reload_enabled(e: *mut OvEngine) -> bool {
+    engine!(e, false).hot_reload.enabled
+}
+
+/// Check the files now; returns how many resources were reloaded
+#[no_mangle]
+pub extern "C" fn ov_reload_changed(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).reload_changed()
+}
+
+/// Resources reloaded by the last `ov_poll` (e.g. to re-read map objects)
+#[no_mangle]
+pub extern "C" fn ov_reloaded(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).hot_reload.reloaded
+}
+
 // --- tile maps -----------------------------------------------------------------
 
 /// # Safety

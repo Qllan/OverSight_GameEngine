@@ -15,6 +15,7 @@ pub mod debug;
 pub mod engine;
 pub mod ffi;
 pub mod gamepad;
+pub mod hotreload;
 pub mod input;
 pub mod particles;
 pub mod render;

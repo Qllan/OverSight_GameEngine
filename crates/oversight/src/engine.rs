@@ -21,6 +21,7 @@ use crate::camera::Camera;
 use crate::collision::{self, MoveResult, RayHit};
 use crate::debug::{DebugOverlay, Stats};
 use crate::gamepad::{GamepadAxis, GamepadButton};
+use crate::hotreload::{HotReload, MapFiles, Watched};
 use crate::input::{Input, Key, MouseButton};
 use crate::particles::{Emitter, EmitterConfig};
 use crate::render::{DrawKind, Renderer, Shape};
@@ -53,6 +54,7 @@ pub struct Engine {
     pub input: Input,
     pub time: Time,
     pub debug: DebugOverlay,
+    pub hot_reload: HotReload,
     #[cfg(feature = "audio")]
     pub audio: Audio,
     #[cfg(feature = "window")]
@@ -97,6 +99,7 @@ impl Engine {
             input: Input::default(),
             time: Time::new(Some(1.0 / 60.0)),
             debug: DebugOverlay::default(),
+            hot_reload: HotReload::default(),
             #[cfg(feature = "audio")]
             audio: Audio::silent(),
             #[cfg(feature = "window")]
@@ -170,6 +173,14 @@ impl Engine {
         #[cfg(feature = "audio")]
         self.audio.update();
         self.time.tick();
+        self.hot_reload.reloaded = 0;
+        if self.hot_reload.enabled {
+            self.hot_reload.timer += self.time.dt;
+            if self.hot_reload.timer >= self.hot_reload.interval {
+                self.hot_reload.timer = 0.0;
+                self.hot_reload.reloaded = self.reload_changed();
+            }
+        }
         !self.quit
     }
 
@@ -239,7 +250,10 @@ impl Engine {
     // --- resources -------------------------------------------------------
 
     pub fn load_texture(&mut self, path: &str) -> Result<u32, String> {
-        Ok(self.textures.insert(Texture::load(path)?))
+        let id = self.textures.insert(Texture::load(path)?);
+        let file = Watched::new(std::path::Path::new(path));
+        self.hot_reload.textures.insert(id, file);
+        Ok(id)
     }
 
     pub fn texture_from_rgba(
@@ -266,6 +280,7 @@ impl Engine {
 
     pub fn free_texture(&mut self, texture: u32) {
         self.textures.remove(texture);
+        self.hot_reload.textures.remove(&texture);
     }
 
     pub fn load_font(&mut self, path: &str) -> Result<u32, String> {
@@ -286,11 +301,92 @@ impl Engine {
 
     /// Load a Tiled map (.tmj) and its tileset images
     pub fn load_tilemap(&mut self, path: &str) -> Result<u32, String> {
-        let textures = &mut self.textures;
-        let map = crate::tiled::load(std::path::Path::new(path), &mut |p| {
-            Ok(textures.insert(Texture::load(&p.to_string_lossy())?))
-        })?;
-        Ok(self.add_tilemap(map))
+        let mut files = MapFiles::default();
+        let map = self.read_tilemap(std::path::Path::new(path), &mut files.images)?;
+        files.files = map.files.iter().map(|f| Watched::new(f)).collect();
+        let id = self.add_tilemap(map);
+        self.hot_reload.maps.insert(id, files);
+        Ok(id)
+    }
+
+    /// Read a map file; tileset images already in `images` are reused,
+    /// new ones are loaded (and watched like any texture)
+    fn read_tilemap(
+        &mut self,
+        path: &std::path::Path,
+        images: &mut std::collections::BTreeMap<std::path::PathBuf, u32>,
+    ) -> Result<Tilemap, String> {
+        let (textures, watched) = (&mut self.textures, &mut self.hot_reload.textures);
+        crate::tiled::load(path, &mut |p| {
+            if let Some(&id) = images.get(p) {
+                if textures.get(id).is_some() {
+                    return Ok(id);
+                }
+            }
+            let id = textures.insert(Texture::load(&p.to_string_lossy())?);
+            watched.insert(id, Watched::new(p));
+            images.insert(p.to_path_buf(), id);
+            Ok(id)
+        })
+    }
+
+    /// Reload textures and maps whose files changed since they were read;
+    /// returns how many were reloaded. Ids stay the same. A file that
+    /// fails to load keeps the old version and sets the last error.
+    /// `poll` calls this every `hot_reload.interval` seconds while
+    /// `hot_reload.enabled` is on.
+    pub fn reload_changed(&mut self) -> u32 {
+        let mut count = 0;
+        let ids: Vec<u32> = self.hot_reload.textures.keys().copied().collect();
+        for id in ids {
+            let Some(file) = self.hot_reload.textures.get_mut(&id) else {
+                continue;
+            };
+            if !file.changed() {
+                continue;
+            }
+            match Texture::load(&file.path.to_string_lossy()) {
+                Ok(mut fresh) => {
+                    if let Some(t) = self.textures.get_mut(id) {
+                        fresh.smooth = t.smooth;
+                        *t = fresh;
+                        count += 1;
+                    }
+                }
+                Err(e) => self.last_error = Some(e),
+            }
+        }
+        let ids: Vec<u32> = self.hot_reload.maps.keys().copied().collect();
+        for id in ids {
+            let Some(entry) = self.hot_reload.maps.get_mut(&id) else {
+                continue;
+            };
+            // Check every file so each change is seen once
+            let changed = entry
+                .files
+                .iter_mut()
+                .fold(false, |any, f| f.changed() | any);
+            if !changed || entry.files.is_empty() {
+                continue;
+            }
+            let path = entry.files[0].path.clone();
+            let mut images = std::mem::take(&mut entry.images);
+            let result = self.read_tilemap(&path, &mut images);
+            let entry = self.hot_reload.maps.get_mut(&id).expect("checked above");
+            entry.images = images;
+            match result {
+                Ok(map) => {
+                    // A tileset file added or removed: watch the new list
+                    entry.files = map.files.iter().map(|f| Watched::new(f)).collect();
+                    if let Some(m) = self.tilemaps.get_mut(id) {
+                        *m = map;
+                        count += 1;
+                    }
+                }
+                Err(e) => self.last_error = Some(e),
+            }
+        }
+        count
     }
 
     /// Keep a map in the engine (the C API refers to maps by id)
@@ -307,8 +403,14 @@ impl Engine {
     }
 
     /// Frees the map only; its tileset textures stay loaded
+    /// Free a map and the tileset textures it loaded
     pub fn free_tilemap(&mut self, map: u32) {
         self.tilemaps.remove(map);
+        if let Some(files) = self.hot_reload.maps.remove(&map) {
+            for texture in files.images.into_values() {
+                self.free_texture(texture);
+            }
+        }
     }
 
     /// `collision::move_box` against a stored map (unblocked if there is

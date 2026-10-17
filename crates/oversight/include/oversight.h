@@ -363,6 +363,12 @@ float ov_ease(int32_t ease, float t);
 float ov_tween_progress(float time, float duration, int32_t ease, int32_t repeat);
 OvColor ov_lerp_color(OvColor a, OvColor b, float t);
 
+/* --- hot reload: textures and maps reload in place when their files change --- */
+void ov_set_hot_reload(OvEngine *e, bool on); /* checked in ov_poll twice a second */
+bool ov_hot_reload_enabled(OvEngine *e);
+uint32_t ov_reload_changed(OvEngine *e);      /* check now; returns how many reloaded */
+uint32_t ov_reloaded(OvEngine *e);            /* reloaded by the last ov_poll */
+
 /* --- tile maps --- */
 uint32_t ov_load_tilemap(OvEngine *e, const char *path); /* Tiled .tmj */
 uint32_t ov_create_tilemap(OvEngine *e, int32_t orientation, uint32_t width, uint32_t height,

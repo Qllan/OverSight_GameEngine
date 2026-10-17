@@ -22,12 +22,18 @@ int main(int argc, char **argv) try {
     bool left = false;
     auto sign = map.find_object("sign");
     std::string sign_text = sign ? map.string(*sign, "text").value_or("") : "";
+    // Edit topdown.tmj in Tiled or hero.png and save: the running game picks it up
+    engine.set_hot_reload(true);
 
     Script script{{{10, ov::Key::D, true}, {70, ov::Key::D, false}, {70, ov::Key::W, true},
                    {100, ov::Key::W, false}, {100, ov::Key::S, true}, {180, ov::Key::S, false}}};
     int frame = 0;
     while (next_frame(engine, opt, script, frame)) {
         float dt = engine.dt();
+        if (engine.reloaded()) {
+            sign = map.find_object("sign");
+            sign_text = sign ? map.string(*sign, "text").value_or("") : "";
+        }
         ov::Vec2 dir{engine.axis(ov::Key::A, ov::Key::D) + engine.axis(ov::Key::Left, ov::Key::Right),
                      engine.axis(ov::Key::W, ov::Key::S) + engine.axis(ov::Key::Up, ov::Key::Down)};
         dir = dir + engine.pad_stick(0);  // first gamepad's left stick

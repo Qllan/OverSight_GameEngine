@@ -21,11 +21,18 @@ int row = 0; // 0 down, 1 up, 2 side
 bool left = false;
 var sign = map.FindObject("sign");
 string signText = sign != null ? map.String(sign, "text") ?? "" : "";
+// Edit topdown.tmj in Tiled or hero.png and save: the running game picks it up
+engine.HotReload = true;
 
 var script = new Sample.Script((10, Key.D, true), (70, Key.D, false), (70, Key.W, true),
     (100, Key.W, false), (100, Key.S, true), (180, Key.S, false));
 while (script.Next(engine, opt))
 {
+    if (engine.Reloaded > 0)
+    {
+        sign = map.FindObject("sign");
+        signText = sign != null ? map.String(sign, "text") ?? "" : "";
+    }
     float dt = engine.Dt;
     var stick = engine.PadStick(0); // first gamepad's left stick
     var dir = new Vec2(

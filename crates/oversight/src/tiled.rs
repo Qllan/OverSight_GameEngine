@@ -25,7 +25,10 @@ pub fn load(
 ) -> Result<Tilemap, String> {
     let text = read(path)?;
     let dir = path.parent().unwrap_or(Path::new(""));
-    parse(&text, dir, load_texture).map_err(|e| format!("{}: {}", path.display(), e))
+    let mut map =
+        parse(&text, dir, load_texture).map_err(|e| format!("{}: {}", path.display(), e))?;
+    map.files.insert(0, path.to_path_buf());
+    Ok(map)
 }
 
 /// Parse map JSON; relative image and tileset paths are taken from `dir`
@@ -62,8 +65,10 @@ pub fn parse(
                 let value: Value = serde_json::from_str(&text)
                     .map_err(|e| format!("{}: {}", path.display(), e))?;
                 let ts_dir = path.parent().unwrap_or(Path::new(""));
-                tileset(&value, first_gid, ts_dir, &mut textures, load_texture)
-                    .map_err(|e| format!("{}: {}", path.display(), e))?
+                let ts = tileset(&value, first_gid, ts_dir, &mut textures, load_texture)
+                    .map_err(|e| format!("{}: {}", path.display(), e))?;
+                out.files.push(path);
+                ts
             }
             None => tileset(ts, first_gid, dir, &mut textures, load_texture)?,
         };
