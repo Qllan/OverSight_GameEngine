@@ -263,6 +263,16 @@ public sealed partial class Engine : IDisposable
         if (Handle == IntPtr.Zero) throw new OrstException("cannot start the engine: " + LastError);
     }
 
+    private readonly bool owned = true;
+
+    /// <summary>An engine made and owned elsewhere: ORST Studio's, for the
+    /// scripts it hosts. Dispose leaves it running.</summary>
+    internal Engine(IntPtr handle)
+    {
+        Handle = handle;
+        owned = false;
+    }
+
     private static byte B(bool v) => v ? (byte)1 : (byte)0;
 
     private static uint Check(uint id, string what)
@@ -270,7 +280,7 @@ public sealed partial class Engine : IDisposable
 
     public void Dispose()
     {
-        if (Handle != IntPtr.Zero) Native.orst_engine_destroy(Handle);
+        if (Handle != IntPtr.Zero && owned) Native.orst_engine_destroy(Handle);
         Handle = IntPtr.Zero;
     }
 

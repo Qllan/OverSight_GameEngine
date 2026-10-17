@@ -911,12 +911,15 @@ pub unsafe extern "C" fn orst_define_component(
     } else {
         std::slice::from_raw_parts(defaults as *const u8, size as usize)
     };
-    result(
-        engine
-            .world
-            .define(string(name), size, align, fields, defaults),
-        0,
-    )
+    let name = string(name);
+    // A script named like a built-in must not reshape the engine's own
+    if let Some(id) = engine.world.component_id(name) {
+        if id <= crate::components::LAST_BUILTIN {
+            set_error(format!("{name} is a built-in component"));
+            return 0;
+        }
+    }
+    result(engine.world.define(name, size, align, fields, defaults), 0)
 }
 
 #[no_mangle]
@@ -2900,6 +2903,19 @@ mod tests {
             assert_eq!(
                 orst_define_component(e, c"Bad".as_ptr(), 4, 4, bad.as_ptr(), 1, std::ptr::null()),
                 0
+            );
+            assert_eq!(
+                orst_define_component(
+                    e,
+                    c"Transform".as_ptr(),
+                    4,
+                    4,
+                    bad.as_ptr(),
+                    0,
+                    std::ptr::null()
+                ),
+                0,
+                "built-ins stay as they are"
             );
             orst_engine_destroy(e);
         }

@@ -92,7 +92,7 @@ public sealed partial class Engine
         }
     }
 
-    private static ComponentField? Describe(FieldInfo fi)
+    internal static ComponentField? Describe(FieldInfo fi)
     {
         var t = fi.FieldType;
         string[] options = [];

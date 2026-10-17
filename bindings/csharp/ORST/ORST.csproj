@@ -15,6 +15,10 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <OrstLibDir Condition="'$(OrstLibDir)' == ''">$(MSBuildThisFileDirectory)../../../target/release/</OrstLibDir>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- The script host of ORST Studio wraps the studio's own engine -->
+    <InternalsVisibleTo Include="ORST.Scripting" />
+  </ItemGroup>
   <!-- NuGet package (dotnet pack; crates/orst/sdk/package.py does it
        for the SDK): the binding plus the native library under runtimes/,
        which .NET loads on its own -->

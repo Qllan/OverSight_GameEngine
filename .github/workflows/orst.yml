@@ -22,6 +22,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
       - name: Rust tests (GPU tests on the WARP software adapter)
         env:
           ORST_REQUIRE_GPU: "1"
@@ -31,6 +35,8 @@ jobs:
         run: cargo build --release -p orst
 
       - name: ORST Studio tests and ORST.exe
+        env:
+          ORST_REQUIRE_DOTNET: "1"
         run: |
           cargo test -p orst-studio
           cargo build --release -p orst-studio
@@ -52,10 +58,6 @@ jobs:
             & "build/samples/Release/$s.exe" --headless 200 --gpu --screenshot "shots/gpu_$s.png"
             if ($LASTEXITCODE -ne 0) { exit 1 }
           }
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
 
       - name: C# smoke test
         run: dotnet run --project bindings/csharp/Smoke -c Release
@@ -130,6 +132,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
       - name: Format
         run: cargo fmt -p orst -p orst-studio --check
 
@@ -139,11 +145,8 @@ jobs:
       - name: Rust tests
         env:
           ORST_REQUIRE_GPU: "1"
+          ORST_REQUIRE_DOTNET: "1"
         run: cargo test -p orst -p orst-studio
-
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
 
       - name: Package the SDK and build a game against it
         run: |

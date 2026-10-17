@@ -11,6 +11,7 @@ mod inspector;
 mod play;
 mod project;
 mod scene_view;
+mod scripts;
 
 pub(crate) use eframe::egui;
 

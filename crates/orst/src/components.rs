@@ -20,6 +20,8 @@ pub const NAME: u32 = 8;
 pub const SPRITE_ANIMATOR: u32 = 9;
 pub const CAMERA_2D: u32 = 10;
 pub const PARTICLE_EMITTER: u32 = 11;
+/// Ids up to this one are the engine's own
+pub const LAST_BUILTIN: u32 = PARTICLE_EMITTER;
 
 pub const BODY_DYNAMIC: u32 = 0;
 pub const BODY_FIXED: u32 = 1;
