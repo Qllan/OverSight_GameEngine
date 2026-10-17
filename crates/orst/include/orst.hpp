@@ -15,6 +15,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <initializer_list>
 #include <optional>
 #include <stdexcept>
@@ -147,6 +148,19 @@ struct Light : OrstLight {
     constexpr Light(float radius = 160.0f, Color color = Color::White, float intensity = 1.0f)
         : OrstLight{{0, 0}, color, intensity, radius, 0.5f, 4.0f, 1, {0, 0, 0}} {}
 };
+/// What an entity is called (see OrstName)
+struct Name : OrstName {
+    Name() : OrstName{} {}
+    Name(const std::string &name) : OrstName{} {
+        size_t n = name.size() < sizeof(text) ? name.size() : sizeof(text);
+        while (n > 0 && n < name.size() && (static_cast<unsigned char>(name[n]) & 0xC0) == 0x80) --n;
+        name.copy(text, n);
+    }
+    std::string str() const {
+        const void *zero = std::memchr(text, 0, sizeof(text));
+        return std::string(text, zero ? static_cast<const char *>(zero) - text : sizeof(text));
+    }
+};
 using Overlap = OrstOverlap;
 using EntityHit = OrstEntityHit;
 enum class ContactState : int32_t { Begin = ORST_CONTACT_BEGIN, Stay = ORST_CONTACT_STAY, End = ORST_CONTACT_END };
@@ -170,6 +184,8 @@ template <>
 struct ComponentName<RigidBody> { static constexpr const char *value = "RigidBody"; };
 template <>
 struct ComponentName<Light> { static constexpr const char *value = "Light"; };
+template <>
+struct ComponentName<Name> { static constexpr const char *value = "Name"; };
 
 enum class Transition : int32_t { Cut = ORST_TRANSITION_CUT, Fade = ORST_TRANSITION_FADE, Wipe = ORST_TRANSITION_WIPE };
 enum class Space : int32_t { World = ORST_SPACE_WORLD, Screen = ORST_SPACE_SCREEN };
@@ -913,6 +929,8 @@ public:
         for (Entity en : query<Ts...>()) each_one<Ts...>(f, en, ids, std::index_sequence_for<Ts...>{});
     }
     void clear_world() { orst_world_clear(e_); }
+    /// The oldest entity with this Name; 0: none
+    Entity find_named(const std::string &name) { return orst_find_named(e_, name.c_str()); }
 
     /// What is inside T, for tools (see orst_set_fields):
     ///     engine.set_fields<Enemy>({{"speed", ORST_FIELD_F32, offsetof(Enemy, speed), 0, 0, 10}});

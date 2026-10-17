@@ -32,6 +32,8 @@ pub enum FieldType {
     Tilemap = 10,
     Polygon = 11,
     U8 = 12,
+    /// 64 bytes of UTF-8, the rest zeros (a Name)
+    Text = 13,
 }
 
 impl FieldType {
@@ -50,6 +52,7 @@ impl FieldType {
             10 => Tilemap,
             11 => Polygon,
             12 => U8,
+            13 => Text,
             _ => return None,
         })
     }
@@ -61,6 +64,7 @@ impl FieldType {
             F32 | I32 | U32 | Color | Texture | Tilemap | Polygon => 4,
             Vec2 | Entity => 8,
             Rect => 16,
+            Text => TEXT_BYTES as u32,
         }
     }
 
@@ -79,7 +83,32 @@ impl FieldType {
             Tilemap => "tilemap",
             Polygon => "polygon",
             U8 => "u8",
+            Text => "text",
         }
+    }
+}
+
+pub const TEXT_BYTES: usize = 64;
+
+/// A string as a Text field's bytes: cut to 64 bytes at a character
+/// boundary, the rest zeros
+pub fn text_bytes(s: &str) -> [u8; TEXT_BYTES] {
+    let mut end = s.len().min(TEXT_BYTES);
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut out = [0; TEXT_BYTES];
+    out[..end].copy_from_slice(&s.as_bytes()[..end]);
+    out
+}
+
+/// A Text field's bytes as a string, up to the first zero (bytes that are
+/// not UTF-8 end it early)
+pub fn text_str(bytes: &[u8]) -> &str {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    match std::str::from_utf8(&bytes[..end]) {
+        Ok(s) => s,
+        Err(e) => std::str::from_utf8(&bytes[..e.valid_up_to()]).unwrap(),
     }
 }
 
@@ -152,6 +181,7 @@ impl Field {
             FieldType::Color => Value::Color(Color::rgba(b[0], b[1], b[2], b[3])),
             FieldType::Rect => Value::Rect(Rect::new(f(0), f(4), f(8), f(12))),
             FieldType::Entity => Value::Entity(u64::from_le_bytes(b[..8].try_into().unwrap())),
+            FieldType::Text => Value::Text(text_bytes(text_str(b))),
         }
     }
 
@@ -183,6 +213,7 @@ impl Field {
             ]
             .concat()),
             (FieldType::Entity, Value::Entity(e)) => put(&e.to_le_bytes()),
+            (FieldType::Text, Value::Text(t)) => put(&t),
             _ => return false,
         }
         true
@@ -202,6 +233,7 @@ impl Field {
             Value::Color(c) => json!(format!("#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a)),
             Value::Rect(r) => json!([r.x, r.y, r.w, r.h]),
             Value::Entity(e) => json!(e),
+            Value::Text(t) => json!(text_str(&t)),
         }
     }
 
@@ -239,6 +271,7 @@ impl Field {
                 Value::Rect(Rect::new(f[0], f[1], f[2], f[3]))
             }
             FieldType::Entity => Value::Entity(v.as_u64()?),
+            FieldType::Text => Value::Text(text_bytes(v.as_str()?)),
         })
     }
 }
@@ -266,6 +299,8 @@ pub enum Value {
     Color(Color),
     Rect(Rect),
     Entity(u64),
+    /// See text_str and text_bytes
+    Text([u8; TEXT_BYTES]),
 }
 
 impl Value {

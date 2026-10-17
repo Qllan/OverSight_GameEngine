@@ -138,6 +138,9 @@ int main() {
     engine.set_fields<Vel>({{"x", ORST_FIELD_F32, offsetof(Vel, x), ORST_FIELD_ANGLE, 0, 0, nullptr}});
     auto vel_fields = engine.fields(engine.component<Vel>());
     CHECK(vel_fields.size() == 1 && vel_fields[0].name == "x" && vel_fields[0].flags == ORST_FIELD_ANGLE);
+    engine.set(a, orst::Name(std::string(40, 'x') + "\xd1\x8f\xd1\x8f\xd1\x8f")); // 46 bytes
+    CHECK(engine.find_named(engine.get<orst::Name>(a)->str()) == a && engine.get<orst::Name>(a)->str().size() == 46);
+    CHECK(orst::Name(std::string(63, 'x') + "\xd1\x8f").str().size() == 63); // a letter is never cut in half
     auto collider = engine.fields(ORST_COLLIDER);
     CHECK(collider[0].name == "kind" && collider[0].options.size() == 3 && collider[0].options[2] == "Polygon");
     auto saved = engine.snapshot();

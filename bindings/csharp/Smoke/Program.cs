@@ -115,6 +115,12 @@ Check(string.Join(",", enemyFields.Select(f => $"{f.Name}@{f.Offset}")) == "Awak
 Check(enemyFields[1].Max == 10 && enemyFields[2].Options.SequenceEqual(["Calm", "Angry"]) && enemyFields[3].Flags == FieldFlags.Angle,
       "field hints");
 Check(engine.Fields<Transform>()[0].Name == "pos", "built-ins keep the engine's field names");
+var named = engine.Spawn();
+engine.Set(named, new Name("Ёлка"));
+Check(engine.Component<Name>() == 8 && Marshal.SizeOf<Name>() == 64 && engine.FindNamed("Ёлка") == named
+      && engine.Get<Name>(named).Text == "Ёлка", "Name");
+Check(new Name(new string('я', 40)).Text == new string('я', 32), "a long Name is cut at a letter");
+engine.Despawn(named);
 Check(engine.Query<Pos>().Length == 2 && engine.Query<Pos, Vel>().Single() == a, "queries");
 var saved = engine.Snapshot();
 ulong hash = engine.StateHash;

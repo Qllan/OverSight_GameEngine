@@ -73,6 +73,8 @@ public sealed partial class Engine
     }
 
     public Entity Spawn() => new(Native.orst_spawn(Handle));
+    /// <summary>The oldest entity with this Name; Entity.None when there is none</summary>
+    public Entity FindNamed(string name) => new(Native.orst_find_named(Handle, name));
     public bool Despawn(Entity e) => Native.orst_despawn(Handle, e.Id);
     public bool Alive(Entity e) => Native.orst_alive(Handle, e.Id);
     public uint EntityCount => Native.orst_entity_count(Handle);

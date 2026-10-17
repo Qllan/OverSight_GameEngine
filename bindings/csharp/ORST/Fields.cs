@@ -7,7 +7,7 @@ namespace ORST;
 public enum FieldType : uint
 {
     F32 = 1, I32 = 2, U32 = 3, Bool = 4, Vec2 = 5, Color = 6, Rect = 7, Entity = 8,
-    Texture = 9, Tilemap = 10, Polygon = 11, U8 = 12,
+    Texture = 9, Tilemap = 10, Polygon = 11, U8 = 12, Text = 13,
 }
 
 [Flags]

@@ -583,6 +583,24 @@ impl Engine {
 
     // --- resources -------------------------------------------------------
 
+    /// The file a texture was loaded from; None for one made from pixels
+    pub fn texture_file(&self, texture: u32) -> Option<&std::path::Path> {
+        self.hot_reload
+            .textures
+            .get(&texture)
+            .map(|w| w.path.as_path())
+    }
+
+    /// The map file a tile map was loaded from
+    pub fn tilemap_file(&self, map: u32) -> Option<&std::path::Path> {
+        self.hot_reload
+            .maps
+            .get(&map)?
+            .files
+            .first()
+            .map(|w| w.path.as_path())
+    }
+
     pub fn load_texture(&mut self, path: &str) -> Result<u32, String> {
         let id = self.textures.insert(Texture::load(path)?);
         let file = Watched::new(std::path::Path::new(path));

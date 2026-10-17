@@ -292,6 +292,41 @@ public sealed class OrstException : Exception
 // draws entities that have them. Create them with new (): default() has a
 // zero scale and a transparent tint.
 
+/// <summary>What an entity is called: the editor's hierarchy shows it and
+/// FindNamed finds it. Up to 64 bytes of UTF-8.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct Name
+{
+    private fixed byte text[64];
+
+    public Name(string name) { Text = name; }
+
+    public string Text
+    {
+        readonly get
+        {
+            fixed (byte* p = text)
+            {
+                int n = 0;
+                while (n < 64 && p[n] != 0) n++;
+                return System.Text.Encoding.UTF8.GetString(p, n);
+            }
+        }
+        set
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+            int n = Math.Min(bytes.Length, 64);
+            while (n > 0 && n < bytes.Length && (bytes[n] & 0xC0) == 0x80) n--; // whole letters only
+            fixed (byte* p = text)
+            {
+                for (int i = 0; i < 64; i++) p[i] = i < n ? bytes[i] : (byte)0;
+            }
+        }
+    }
+
+    public override readonly string ToString() => Text;
+}
+
 /// <summary>Where an entity is</summary>
 [StructLayout(LayoutKind.Sequential)]
 public struct Transform

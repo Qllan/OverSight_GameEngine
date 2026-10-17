@@ -34,6 +34,7 @@ pub mod physics;
 pub mod post;
 pub mod render;
 pub mod rng;
+pub mod scene_file;
 pub mod scenes;
 pub mod schema;
 pub mod shapes;

@@ -218,6 +218,11 @@ impl World {
         Ok(id)
     }
 
+    /// How many component types there are: ids run from 1 to this
+    pub fn component_types(&self) -> u32 {
+        self.storages.len() as u32
+    }
+
     pub fn component_id(&self, name: &str) -> Option<u32> {
         self.by_name.get(name).copied()
     }
@@ -270,6 +275,17 @@ impl World {
         // Safety: ptr points at this entity's row of `size` bytes
         let bytes = unsafe { std::slice::from_raw_parts_mut(p, size) };
         f.write(bytes, value)
+    }
+
+    /// The first entity, oldest index first, whose Name is `name`
+    pub fn find_named(&self, name: &str) -> Option<Entity> {
+        let names = self.storage(crate::components::NAME)?;
+        self.query(&[crate::components::NAME])
+            .into_iter()
+            .find(|&e| {
+                let row = names.row_of(entity_index(e)).unwrap();
+                crate::schema::text_str(names.row(row)) == name
+            })
     }
 
     pub fn spawn(&mut self) -> Entity {

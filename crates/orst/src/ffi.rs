@@ -796,6 +796,13 @@ pub extern "C" fn orst_world_clear(e: *mut OrstEngine) {
     engine!(e).world.clear();
 }
 
+/// # Safety
+/// `name` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_find_named(e: *mut OrstEngine, name: *const c_char) -> u64 {
+    engine!(e, 0).world.find_named(string(name)).unwrap_or(0)
+}
+
 #[repr(C)]
 pub struct OrstField {
     pub name: *const c_char,

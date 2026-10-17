@@ -16,6 +16,7 @@ pub const BODY: u32 = 4;
 pub const COLLIDER: u32 = 5;
 pub const RIGIDBODY: u32 = 6;
 pub const LIGHT: u32 = 7;
+pub const NAME: u32 = 8;
 
 pub const BODY_DYNAMIC: u32 = 0;
 pub const BODY_FIXED: u32 = 1;
@@ -253,6 +254,37 @@ impl Default for Light {
     }
 }
 
+/// What an entity is called: the editor's hierarchy shows it and games
+/// find entities by it. Up to 64 bytes of UTF-8, the rest zeros.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Name {
+    pub text: [u8; NAME_BYTES],
+}
+
+pub const NAME_BYTES: usize = 64;
+
+impl Name {
+    /// Cut to 64 bytes at a character boundary
+    pub fn new(name: &str) -> Name {
+        Name {
+            text: crate::schema::text_bytes(name),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        crate::schema::text_str(&self.text)
+    }
+}
+
+impl Default for Name {
+    fn default() -> Self {
+        Name {
+            text: [0; NAME_BYTES],
+        }
+    }
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -268,6 +300,7 @@ pub fn register(world: &mut World) {
         world.component("Collider", size(std::mem::size_of::<Collider>()), 4),
         world.component("RigidBody", size(std::mem::size_of::<RigidBody>()), 4),
         world.component("Light", size(std::mem::size_of::<Light>()), 4),
+        world.component("Name", size(std::mem::size_of::<Name>()), 1),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -282,7 +315,8 @@ pub fn register(world: &mut World) {
             BODY,
             COLLIDER,
             RIGIDBODY,
-            LIGHT
+            LIGHT,
+            NAME
         ],
         "built-ins come first"
     );
@@ -404,6 +438,7 @@ fn builtin_fields() -> Vec<(u32, Vec<Field>)> {
                 Field::new("shadows", T::Bool, at(offset_of!(Light, shadows))),
             ],
         ),
+        (NAME, vec![Field::new("text", T::Text, 0)]),
     ]
 }
 
@@ -423,6 +458,7 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         COLLIDER => Some(bytes(Collider::default())),
         RIGIDBODY => Some(bytes(RigidBody::default())),
         LIGHT => Some(bytes(Light::default())),
+        NAME => Some(bytes(Name::default())),
         _ => None,
     }
 }
@@ -456,6 +492,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<Collider>(), 40);
         assert_eq!(std::mem::size_of::<RigidBody>(), 32);
         assert_eq!(std::mem::size_of::<Light>(), 32);
+        assert_eq!(std::mem::size_of::<Name>(), 64);
         let mut w = World::new();
         register(&mut w);
         assert_eq!(w.component_id("Body"), Some(BODY));
@@ -483,9 +520,14 @@ mod tests {
         w.save(&mut saved);
         w.load(&saved).unwrap();
         assert_eq!(w.fields(LIGHT).len(), 7, "a restore keeps the fields");
+        write(&mut w, e, NAME, &Name::new("Ёлка"));
+        assert_eq!(w.find_named("Ёлка"), Some(e));
+        assert_eq!(read::<Name>(&w, e, NAME).unwrap().as_str(), "Ёлка");
+        let long = "я".repeat(40); // 80 bytes: cut to 32 letters
+        assert_eq!(Name::new(&long).as_str(), "я".repeat(32));
         // Every byte is described but padding and Body's contacts
-        let left = [0, 0, 0, 4, 3, 2, 3];
-        for (id, left) in (TRANSFORM..=LIGHT).zip(left) {
+        let left = [0, 0, 0, 4, 3, 2, 3, 0];
+        for (id, left) in (TRANSFORM..=NAME).zip(left) {
             let described: u32 = w.fields(id).iter().map(|f| f.ty.size()).sum();
             assert_eq!(
                 w.storage(id).unwrap().size - described,

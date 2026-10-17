@@ -119,6 +119,9 @@ int main(void) {
     CHECK(!orst_get_field(e, pos, 2, &got) && orst_field_count(e, tag) == 0);
     OrstField past = {"z", ORST_FIELD_F32, sizeof(Pos), 0, 0, 0, NULL};
     CHECK(!orst_set_fields(e, pos, &past, 1) && orst_field_count(e, pos) == 2); /* past the end: refused */
+    OrstName name = {"Hero"};
+    CHECK(sizeof(OrstName) == 64 && orst_set(e, ents[0], ORST_NAME, &name) && orst_find_named(e, "Hero") == ents[0]);
+    CHECK(orst_find_named(e, "Nobody") == 0);
 
     /* Snapshot, change the world, restore: back as it was */
     size_t size = orst_snapshot(e, NULL, 0);

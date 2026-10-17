@@ -342,6 +342,7 @@ bool orst_remove(OrstEngine *e, OrstEntity entity, uint32_t component);
  * to `capacity` of them into `out` and returns how many there are. */
 uint32_t orst_query(OrstEngine *e, const uint32_t *components, uint32_t count, OrstEntity *out, uint32_t capacity);
 void orst_world_clear(OrstEngine *e); /* despawn everything; component types stay */
+OrstEntity orst_find_named(OrstEngine *e, const char *name); /* oldest with that OrstName; 0: none */
 
 /* What is inside a component, for tools: the editor's inspector shows a
  * widget per field, scene files store fields by name, undo changes one
@@ -363,6 +364,7 @@ void orst_world_clear(OrstEngine *e); /* despawn everything; component types sta
 #define ORST_FIELD_TILEMAP 10
 #define ORST_FIELD_POLYGON 11
 #define ORST_FIELD_U8 12
+#define ORST_FIELD_TEXT 13 /* char[64] of UTF-8, the rest zeros (OrstName) */
 #define ORST_FIELD_ANGLE 1  /* flags: an f32 in radians, shown in degrees */
 #define ORST_FIELD_LAYERS 2 /* a u32 of layer bits */
 
@@ -392,6 +394,7 @@ bool orst_get_field(OrstEngine *e, uint32_t component, uint32_t index, OrstField
 #define ORST_COLLIDER 5
 #define ORST_RIGIDBODY 6
 #define ORST_LIGHT 7
+#define ORST_NAME 8
 
 typedef struct OrstTransform {
     OrstVec2 pos;
@@ -471,6 +474,12 @@ typedef struct OrstLight {
     uint8_t shadows;  /* default 1 */
     uint8_t pad_[3];
 } OrstLight;
+
+/* What an entity is called: the editor's hierarchy shows it and games find
+ * entities by it (orst_find_named). UTF-8, the unused bytes zero. */
+typedef struct OrstName {
+    char text[64];
+} OrstName;
 
 /* How two shapes overlap: move the second by normal * depth and they only touch */
 typedef struct OrstOverlap {
