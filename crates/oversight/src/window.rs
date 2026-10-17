@@ -280,6 +280,14 @@ impl ApplicationHandler for Pump<'_> {
         if c.fullscreen {
             attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
         }
+        // Drag and drop needs OleInitialize, which panics on a thread that
+        // is already in the multithreaded COM apartment (the main thread of
+        // a .NET program). The engine has no use for dropped files.
+        #[cfg(windows)]
+        {
+            use winit::platform::windows::WindowAttributesExtWindows;
+            attributes = attributes.with_drag_and_drop(false);
+        }
         let result = (|| -> Result<Graphics, String> {
             let window = Arc::new(
                 event_loop
