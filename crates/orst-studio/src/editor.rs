@@ -52,6 +52,8 @@ pub struct Editor {
     ask_save: Option<After>,
     /// The Save scene as window: the name typed, and what comes after
     save_as: Option<(String, Option<After>)>,
+    /// The New script window: the name typed
+    new_script: Option<String>,
     want_close: bool,
     title: String,
     /// The game is running in the editor; Stop throws its changes away
@@ -105,6 +107,7 @@ impl Editor {
             dirty: false,
             ask_save: None,
             save_as: None,
+            new_script: None,
             want_close: false,
             title: String::new(),
             play: None,
@@ -845,6 +848,37 @@ impl Editor {
                 None => {}
             }
         }
+        if let Some(mut name) = self.new_script.take() {
+            let mut keep = true;
+            let mut chosen = None;
+            egui::Window::new("New C# script")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label("Class name");
+                    let r = ui.text_edit_singleline(&mut name);
+                    r.request_focus();
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.horizontal(|ui| {
+                        if ui.button("Create").clicked() || enter {
+                            chosen = Some(name.clone());
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            match chosen.map(|n| self.create_script(&n)) {
+                Some(Ok(())) => {}
+                Some(Err(e)) => {
+                    self.console.error(e);
+                    self.new_script = Some(name);
+                }
+                None if keep => self.new_script = Some(name),
+                None => {}
+            }
+        }
         if let Some((mut name, then)) = self.save_as.take() {
             let mut keep = true;
             let mut chosen = None;
@@ -883,6 +917,29 @@ impl Editor {
                 None => {}
             }
         }
+    }
+
+    /// Assets/Scripts/<class>.cs from the template, opened in the
+    /// system's editor for .cs files; the watcher builds it
+    pub fn create_script(&mut self, name: &str) -> Result<(), String> {
+        let class = crate::project::class_name(name)?;
+        let path = format!("{}/{class}.cs", crate::project::SCRIPTS);
+        let file = self.project.assets.file(&path);
+        if file.exists() {
+            return Err(format!("{path} already exists"));
+        }
+        let io = |e: std::io::Error| format!("{path}: {e}");
+        std::fs::create_dir_all(file.parent().unwrap()).map_err(io)?;
+        std::fs::write(&file, crate::project::script_source(&class)).map_err(io)?;
+        self.rescan();
+        self.selected_asset = Some(path.clone());
+        self.console.info(format!("Created {path}"));
+        if !cfg!(test) {
+            if let Err(e) = open_external(&file) {
+                self.console.warn(format!("{path}: {e}"));
+            }
+        }
+        Ok(())
     }
 
     fn hierarchy_ui(&mut self, ui: &mut egui::Ui) {
@@ -976,6 +1033,14 @@ impl Editor {
 
     /// The Assets folder as a tree
     fn project_ui(&mut self, ui: &mut egui::Ui) {
+        if self.project.file.language == Language::CSharp
+            && ui
+                .small_button("New C# script")
+                .on_hover_text("A Behaviour in Assets/Scripts")
+                .clicked()
+        {
+            self.new_script = Some("NewBehaviour".into());
+        }
         let tree = Tree::of(self.project.assets.paths());
         let mut opened = None;
         egui::ScrollArea::vertical()
@@ -989,9 +1054,30 @@ impl Editor {
         if let Some(path) = opened {
             if path.ends_with(".scene") {
                 self.request(After::Open(path));
+            } else if path.ends_with(".cs") {
+                let file = self.project.assets.file(&path);
+                if let Err(e) = open_external(&file) {
+                    self.console.error(format!("{path}: {e}"));
+                }
             }
         }
     }
+}
+
+/// Open a file in the app the system has for it
+fn open_external(file: &std::path::Path) -> Result<(), String> {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(file)
+        .spawn()
+        .map(drop)
+        .map_err(|e| format!("{program} did not start: {e}"))
 }
 
 fn is_image(path: &str) -> bool {
@@ -1288,5 +1374,20 @@ mod tests {
         let art = &t.dirs["art"];
         assert_eq!(art.files, ["b.png", "d.wav"]);
         assert_eq!(art.dirs["ui"].files, ["c.png"]);
+    }
+
+    #[test]
+    fn new_scripts_come_from_the_template() {
+        let mut ed = editor("new_script");
+        ed.create_script("coin pickup").unwrap();
+        let path = "Scripts/CoinPickup.cs";
+        assert_eq!(ed.selected_asset.as_deref(), Some(path));
+        assert!(ed.project.assets.uid(path).is_some(), "it has a .meta");
+        let text = std::fs::read_to_string(ed.project.assets.file(path)).unwrap();
+        assert!(text.contains("class CoinPickup : Behaviour"));
+        assert!(
+            ed.create_script("CoinPickup").is_err(),
+            "never over a script"
+        );
     }
 }

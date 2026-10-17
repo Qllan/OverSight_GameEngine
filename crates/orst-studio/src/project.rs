@@ -15,6 +15,67 @@ use std::path::{Path, PathBuf};
 pub const PROJECT_FILE: &str = "project.orst";
 pub const ASSETS: &str = "Assets";
 pub const LIBRARY: &str = "Library";
+/// Where new C# scripts go, under Assets
+pub const SCRIPTS: &str = "Scripts";
+
+/// The script a new C# project starts with
+const PLAYER_MOVE: &str = r#"using ORST;
+
+/// Moves the entity with the arrow keys or WASD
+public class PlayerMove : Behaviour
+{
+    [Range(0, 500)] public float Speed = 120;
+
+    public override void Update(float dt)
+    {
+        var x = Engine.Axis(Key.Left, Key.Right) + Engine.Axis(Key.A, Key.D);
+        var y = Engine.Axis(Key.Up, Key.Down) + Engine.Axis(Key.W, Key.S);
+        Transform.Pos.X += Math.Clamp(x, -1, 1) * Speed * dt;
+        Transform.Pos.Y += Math.Clamp(y, -1, 1) * Speed * dt;
+    }
+}
+"#;
+
+/// A new script's source: a Behaviour named `class`
+pub fn script_source(class: &str) -> String {
+    format!(
+        r#"using ORST;
+
+public class {class} : Behaviour
+{{
+    public override void Start()
+    {{
+    }}
+
+    public override void Update(float dt)
+    {{
+    }}
+}}
+"#
+    )
+}
+
+/// What the user typed as a script name, as a C# class name: "enemy
+/// spawner" becomes EnemySpawner
+pub fn class_name(name: &str) -> Result<String, String> {
+    let name = name.trim().trim_end_matches(".cs");
+    let class: String = name
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next()
+                .map(|f| f.to_uppercase().chain(c).collect::<String>())
+                .unwrap_or_default()
+        })
+        .collect();
+    match class.chars().next() {
+        Some(c) if !c.is_ascii_digit() && class.is_ascii() => Ok(class),
+        _ => Err(format!(
+            "\"{name}\" can't be a script name: use English letters"
+        )),
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -67,6 +128,11 @@ impl Project {
             main_scene: None,
         };
         write_project_file(root, &file)?;
+        if language == Language::CSharp {
+            let scripts = root.join(ASSETS).join(SCRIPTS);
+            std::fs::create_dir_all(&scripts).map_err(io)?;
+            std::fs::write(scripts.join("PlayerMove.cs"), PLAYER_MOVE).map_err(io)?;
+        }
         Ok(Project::open(root)?.0)
     }
 
@@ -166,6 +232,7 @@ mod tests {
         let p = Project::create(&root, " My Game ", Language::CSharp).unwrap();
         assert_eq!(p.file.name, "My Game");
         assert!(root.join("Assets").is_dir() && root.join("Library").is_dir());
+        assert!(root.join("Assets/Scripts/PlayerMove.cs").is_file());
         assert_eq!(
             std::fs::read_to_string(root.join(".gitignore")).unwrap(),
             "/Library/\n"
@@ -185,6 +252,16 @@ mod tests {
         std::fs::write(busy.join("x.txt"), b"x").unwrap();
         let err = Project::create(&busy, "X", Language::Cpp).err().unwrap();
         assert!(err.contains("not empty"));
+    }
+
+    #[test]
+    fn script_names_become_class_names() {
+        assert_eq!(class_name("enemy spawner").unwrap(), "EnemySpawner");
+        assert_eq!(class_name(" Coin.cs ").unwrap(), "Coin");
+        assert_eq!(class_name("hp_bar").unwrap(), "Hp_bar");
+        assert!(class_name("2d").is_err() && class_name("").is_err());
+        assert!(class_name("Монета").is_err());
+        assert!(script_source("Coin").contains("public class Coin : Behaviour"));
     }
 
     #[test]

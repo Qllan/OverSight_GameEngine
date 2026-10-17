@@ -529,6 +529,18 @@ public class Mover : Behaviour
             "{first}"
         );
         assert!(scripts.load(&dir.join("missing.dll")).is_err());
+
+        // What a new project starts with builds
+        let root = dir.join("new");
+        let language = crate::project::Language::CSharp;
+        crate::project::Project::create(&root, "New", language).unwrap();
+        let fresh = ScriptProject { root, host };
+        let built = fresh.build();
+        assert!(
+            built.ok && built.messages.is_empty(),
+            "{:?}",
+            built.messages
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
