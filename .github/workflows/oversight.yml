@@ -1,0 +1,109 @@
+name: OverSight 2D
+
+on:
+  push:
+    branches: [oversight-2d]
+  pull_request:
+    paths:
+      - "crates/oversight/**"
+      - "bindings/**"
+      - "samples/**"
+      - ".github/workflows/oversight.yml"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Rust tests
+        run: cargo test -p oversight
+
+      - name: Build oversight.dll
+        run: cargo build --release -p oversight
+
+      - name: C and C++ smoke tests (MSVC)
+        run: |
+          cmake -S bindings/cpp -B build/bindings
+          cmake --build build/bindings --config Release
+          ctest --test-dir build/bindings -C Release --output-on-failure
+
+      - name: C++ samples, scripted runs without a window
+        run: |
+          cmake -S samples/cpp -B build/samples
+          cmake --build build/samples --config Release
+          New-Item -ItemType Directory -Force shots | Out-Null
+          foreach ($s in "topdown", "platformer", "isometric") {
+            & "build/samples/Release/$s.exe" --headless 200 --screenshot "shots/cpp_$s.png"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: C# smoke test
+        run: dotnet run --project bindings/csharp/Smoke -c Release
+
+      - name: C# samples, scripted runs without a window
+        run: |
+          foreach ($p in "TopDown", "Platformer", "Isometric") {
+            dotnet build "samples/csharp/$p" -c Release -nologo
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            & "samples/csharp/$p/bin/Release/net8.0/$p.exe" --headless 200 --screenshot "shots/cs_$($p.ToLower()).png"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: C++ and C# draw the same frames
+        run: |
+          foreach ($s in "topdown", "platformer", "isometric") {
+            $a = (Get-FileHash "shots/cpp_$s.png").Hash
+            $b = (Get-FileHash "shots/cs_$s.png").Hash
+            if ($a -ne $b) { Write-Error "$s differs between C++ and C#"; exit 1 }
+          }
+
+      - name: Package the engine for Windows
+        run: |
+          New-Item -ItemType Directory -Force dist/oversight-windows | Out-Null
+          Copy-Item target/release/oversight.dll, target/release/oversight.dll.lib dist/oversight-windows/
+          Copy-Item -Recurse crates/oversight/include dist/oversight-windows/include
+          Copy-Item -Recurse bindings/csharp/OverSight dist/oversight-windows/csharp
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue dist/oversight-windows/csharp/bin, dist/oversight-windows/csharp/obj
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oversight-windows
+          path: dist/oversight-windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample-screenshots
+          path: shots
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries (sound)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt -p oversight --check
+
+      - name: Clippy
+        run: cargo clippy -p oversight --all-targets -- -D warnings
+
+      - name: Rust tests
+        run: cargo test -p oversight
