@@ -146,7 +146,7 @@ jobs:
 
       - name: New games from the SDK templates build
         run: |
-          sdk=$(echo $PWD/dist/oversight-sdk-*)
+          sdk=$(cd dist/oversight-sdk-*/ && pwd)
           mkdir -p build/games && cd build/games
           "$sdk/new-game.sh" CoinCpp cpp
           "$sdk/new-game.sh" CoinCs
