@@ -76,6 +76,14 @@ internal static class Native
     [DllImport(Lib)] internal static extern void ov_free_polygon(IntPtr e, uint polygon);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_entity_overlap(IntPtr e, ulong a, ulong b, out Overlap @out);
     [DllImport(Lib)] internal static extern void ov_debug_colliders(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_update_collisions(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_set_collision_cell(IntPtr e, float size);
+    [DllImport(Lib)] internal static extern uint ov_contact_count(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_contact(IntPtr e, uint index, out Contact @out);
+    [DllImport(Lib)] internal static extern uint ov_query_point(IntPtr e, Vec2 point, uint mask, ulong[]? @out, uint capacity);
+    [DllImport(Lib)] internal static extern uint ov_query_rect(IntPtr e, Rect rect, uint mask, ulong[]? @out, uint capacity);
+    [DllImport(Lib)] internal static extern uint ov_query_circle(IntPtr e, Vec2 center, float radius, uint mask, ulong[]? @out, uint capacity);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_raycast_entities(IntPtr e, Vec2 from, Vec2 to, uint mask, out EntityHit @out);
     [DllImport(Lib)] internal static extern nuint ov_snapshot(IntPtr e, byte[]? buf, nuint capacity);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_restore(IntPtr e, byte[] data, nuint size);
     [DllImport(Lib)] internal static extern ulong ov_state_hash(IntPtr e);

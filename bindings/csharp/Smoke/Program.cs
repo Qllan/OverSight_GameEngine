@@ -143,8 +143,17 @@ Check(engine.EntityOverlap(wall, ball) is { Depth: > 0.99f and < 1.01f } o && o.
 Check(engine.Component<Collider>() == 5 && Marshal.SizeOf<Collider>() == 40, "Collider id and layout");
 uint tri = engine.CreatePolygon(new Vec2(0, -2), new Vec2(2, 2), new Vec2(-2, 2));
 Check(tri != 0, "CreatePolygon");
+engine.Set(ball, new Velocity(new Vec2(-5, 0)));
+engine.UpdateCollisions();
+var contact = engine.Contacts().Single();
+Check(contact.State == ContactState.Begin && contact.Other(wall) == ball && contact.Depth > 0.99f, "UpdateCollisions");
+Check(engine.Get<Transform>(ball).Pos.X > 107.99f && engine.Get<Velocity>(ball).Linear.X == 0, "a mover is pushed out of the wall");
+Check(engine.QueryPoint(new Vec2(100, 100)).Single() == wall && engine.QueryCircle(new Vec2(120, 100), 10).Single() == ball, "queries");
+Check(engine.RaycastEntities(new Vec2(150, 100), new Vec2(0, 100)) is { } eh && eh.Entity == ball, "RaycastEntities");
 engine.Despawn(wall);
 engine.Despawn(ball);
+engine.UpdateCollisions();
+Check(engine.Contacts().Single().State == ContactState.End, "end after despawn");
 
 // Scenes: a cut switches at the next frame, a push keeps the scene below
 Check(engine.GoScene(1, Transition.Cut) && engine.Scene == 0, "scene changes at the next frame");

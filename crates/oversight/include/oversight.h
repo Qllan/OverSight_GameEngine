@@ -411,6 +411,39 @@ void ov_free_polygon(OvEngine *e, uint32_t polygon);
 bool ov_entity_overlap(OvEngine *e, OvEntity a, OvEntity b, OvOverlap *out); /* layers aside */
 void ov_debug_colliders(OvEngine *e); /* outlines in the debug overlay */
 
+/* The collision pass: call it after ov_update_motion, once per tick. A grid
+ * finds the pairs near each other; solid colliders (not triggers) with a
+ * Velocity are pushed out of the others and stop moving into them, ones
+ * without stay put like walls. The contacts list every overlapping pair
+ * (lower id first, normal from a to b), then the pairs that stopped. */
+#define OV_CONTACT_BEGIN 0
+#define OV_CONTACT_STAY 1
+#define OV_CONTACT_END 2 /* or one of them is gone; no normal or depth */
+typedef struct OvContact {
+    OvEntity a, b;
+    OvVec2 normal;
+    float depth;
+    int32_t state;   /* OV_CONTACT_* */
+    uint8_t trigger; /* either one is a trigger */
+    uint8_t pad_[3];
+} OvContact;
+typedef struct OvEntityHit {
+    OvEntity entity;
+    OvVec2 point;
+    OvVec2 normal;
+    float distance;
+} OvEntityHit;
+void ov_update_collisions(OvEngine *e);
+void ov_set_collision_cell(OvEngine *e, float size); /* grid cell, default 64: about a typical collider */
+uint32_t ov_contact_count(OvEngine *e);
+bool ov_contact(OvEngine *e, uint32_t index, OvContact *out);
+/* Entities whose collider has a layer bit in mask and overlaps the point,
+ * box or circle; fills up to capacity and returns how many there are */
+uint32_t ov_query_point(OvEngine *e, OvVec2 point, uint32_t mask, OvEntity *out, uint32_t capacity);
+uint32_t ov_query_rect(OvEngine *e, OvRect rect, uint32_t mask, OvEntity *out, uint32_t capacity);
+uint32_t ov_query_circle(OvEngine *e, OvVec2 center, float radius, uint32_t mask, OvEntity *out, uint32_t capacity);
+bool ov_raycast_entities(OvEngine *e, OvVec2 from, OvVec2 to, uint32_t mask, OvEntityHit *out); /* the nearest */
+
 /* Snapshots: the entities and components, the random generator and the
  * tick counter as bytes. Restoring one continues the game exactly from
  * there: saves, rollback, replays. Assets (textures, maps, sounds) are not

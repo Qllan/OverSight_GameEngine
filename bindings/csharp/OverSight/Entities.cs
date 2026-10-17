@@ -115,6 +115,37 @@ public sealed partial class Engine
     public void FreePolygon(uint polygon) => Native.ov_free_polygon(Handle, polygon);
     /// <summary>How the colliders of two entities overlap (layers aside); null: they do not</summary>
     public Overlap? EntityOverlap(Entity a, Entity b) => Native.ov_entity_overlap(Handle, a.Id, b.Id, out var o) ? o : null;
+    /// <summary>Overlaps, pushes and events between colliders; after UpdateMotion</summary>
+    public void UpdateCollisions() => Native.ov_update_collisions(Handle);
+    /// <summary>Grid cell size, default 64: about a typical collider</summary>
+    public float CollisionCell { set => Native.ov_set_collision_cell(Handle, value); }
+
+    /// <summary>Overlapping pairs of the last pass, then the pairs that stopped</summary>
+    public Contact[] Contacts()
+    {
+        var all = new Contact[Native.ov_contact_count(Handle)];
+        for (int i = 0; i < all.Length; i++) Native.ov_contact(Handle, (uint)i, out all[i]);
+        return all;
+    }
+
+    public Entity[] QueryPoint(Vec2 point, uint mask = uint.MaxValue) =>
+        Collect((o, n) => Native.ov_query_point(Handle, point, mask, o, n));
+    public Entity[] QueryRect(Rect rect, uint mask = uint.MaxValue) =>
+        Collect((o, n) => Native.ov_query_rect(Handle, rect, mask, o, n));
+    public Entity[] QueryCircle(Vec2 center, float radius, uint mask = uint.MaxValue) =>
+        Collect((o, n) => Native.ov_query_circle(Handle, center, radius, mask, o, n));
+
+    /// <summary>The nearest collider the segment enters; null: none</summary>
+    public EntityHit? RaycastEntities(Vec2 from, Vec2 to, uint mask = uint.MaxValue) =>
+        Native.ov_raycast_entities(Handle, from, to, mask, out var h) ? h : null;
+
+    private static Entity[] Collect(Func<ulong[]?, uint, uint> query)
+    {
+        var ids = new ulong[query(null, 0)];
+        uint n = query(ids, (uint)ids.Length);
+        return ids.Take((int)Math.Min(n, (uint)ids.Length)).Select(id => new Entity(id)).ToArray();
+    }
+
     /// <summary>Outline every collider in the debug overlay</summary>
     public void DebugColliders() => Native.ov_debug_colliders(Handle);
 

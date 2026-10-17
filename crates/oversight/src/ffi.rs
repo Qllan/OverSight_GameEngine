@@ -559,6 +559,119 @@ pub unsafe extern "C" fn ov_entity_overlap(
 }
 
 #[no_mangle]
+pub extern "C" fn ov_update_collisions(e: *mut OvEngine) {
+    engine!(e).update_collisions();
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_collision_cell(e: *mut OvEngine, size: f32) {
+    engine!(e).collisions.cell = size.max(1.0);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_contact_count(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).collisions.contacts().len() as u32
+}
+
+/// # Safety
+/// `out` is NULL or points to an OvContact
+#[no_mangle]
+pub unsafe extern "C" fn ov_contact(
+    e: *mut OvEngine,
+    index: u32,
+    out: *mut crate::collisions::Contact,
+) -> bool {
+    match (
+        engine!(e, false).collisions.contacts().get(index as usize),
+        out.as_mut(),
+    ) {
+        (Some(c), Some(out)) => {
+            *out = *c;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Copy found entities out; returns how many there are
+unsafe fn entities_out(found: &[u64], out: *mut u64, capacity: u32) -> u32 {
+    if !out.is_null() {
+        let n = found.len().min(capacity as usize);
+        std::ptr::copy_nonoverlapping(found.as_ptr(), out, n);
+    }
+    found.len() as u32
+}
+
+/// # Safety
+/// `out` is NULL or has room for `capacity` entities
+#[no_mangle]
+pub unsafe extern "C" fn ov_query_point(
+    e: *mut OvEngine,
+    point: Vec2,
+    mask: u32,
+    out: *mut u64,
+    capacity: u32,
+) -> u32 {
+    let shape = crate::shapes::Shape::Circle {
+        center: point,
+        radius: 0.0,
+    };
+    entities_out(&engine!(e, 0).query_shape(&shape, mask), out, capacity)
+}
+
+/// # Safety
+/// `out` is NULL or has room for `capacity` entities
+#[no_mangle]
+pub unsafe extern "C" fn ov_query_rect(
+    e: *mut OvEngine,
+    rect: Rect,
+    mask: u32,
+    out: *mut u64,
+    capacity: u32,
+) -> u32 {
+    let center = Vec2::new(rect.x + rect.w * 0.5, rect.y + rect.h * 0.5);
+    let shape = crate::shapes::Shape::rect(center, Vec2::new(rect.w, rect.h), 0.0);
+    entities_out(&engine!(e, 0).query_shape(&shape, mask), out, capacity)
+}
+
+/// # Safety
+/// `out` is NULL or has room for `capacity` entities
+#[no_mangle]
+pub unsafe extern "C" fn ov_query_circle(
+    e: *mut OvEngine,
+    center: Vec2,
+    radius: f32,
+    mask: u32,
+    out: *mut u64,
+    capacity: u32,
+) -> u32 {
+    let shape = crate::shapes::Shape::Circle {
+        center,
+        radius: radius.max(0.0),
+    };
+    entities_out(&engine!(e, 0).query_shape(&shape, mask), out, capacity)
+}
+
+/// # Safety
+/// `out` is NULL or points to an OvEntityHit
+#[no_mangle]
+pub unsafe extern "C" fn ov_raycast_entities(
+    e: *mut OvEngine,
+    from: Vec2,
+    to: Vec2,
+    mask: u32,
+    out: *mut crate::collisions::EntityHit,
+) -> bool {
+    let Some(hit) = engine!(e, false).raycast_entities(from, to, mask) else {
+        return false;
+    };
+    if let Some(out) = out.as_mut() {
+        *out = hit;
+    }
+    true
+}
+
+#[no_mangle]
 pub extern "C" fn ov_debug_colliders(e: *mut OvEngine) {
     engine!(e).debug_colliders();
 }
@@ -2312,6 +2425,103 @@ mod tests {
             ov_debug_colliders(e);
             ov_end_frame(e);
             assert_ne!(ov_pixel(e, 5, 8), Color::BLACK, "the wall's left edge");
+            ov_engine_destroy(e);
+        }
+    }
+
+    #[test]
+    fn collision_pass_reports_and_survives_a_snapshot() {
+        use crate::collisions::Contact;
+        use crate::components::*;
+        let e = headless(8, 8);
+        unsafe {
+            let put = |x: f32, c: Collider| {
+                let ent = ov_spawn(e);
+                let t = Transform {
+                    pos: Vec2::new(x, 0.0),
+                    ..Transform::default()
+                };
+                ov_set(e, ent, TRANSFORM, &t as *const _ as *const c_void);
+                ov_set(e, ent, COLLIDER, &c as *const _ as *const c_void);
+                ent
+            };
+            let coin = put(
+                0.0,
+                Collider {
+                    kind: COLLIDER_CIRCLE,
+                    radius: 4.0,
+                    trigger: 1,
+                    layer: 8,
+                    ..Collider::default()
+                },
+            );
+            let hero = put(
+                6.0,
+                Collider {
+                    kind: COLLIDER_CIRCLE,
+                    radius: 4.0,
+                    ..Collider::default()
+                },
+            );
+            ov_update_collisions(e);
+            assert_eq!(ov_contact_count(e), 1);
+            let mut c: Contact = std::mem::zeroed();
+            assert!(
+                ov_contact(e, 0, &mut c)
+                    && c.a == coin
+                    && c.b == hero
+                    && c.state == 0
+                    && c.trigger == 1
+            );
+
+            // Restoring a snapshot keeps the pair touching: no second begin
+            let mut snap = vec![0u8; ov_snapshot(e, std::ptr::null_mut(), 0)];
+            ov_snapshot(e, snap.as_mut_ptr(), snap.len());
+            ov_update_collisions(e);
+            assert!(ov_restore(e, snap.as_ptr(), snap.len()));
+            ov_update_collisions(e);
+            assert!(
+                ov_contact(e, 0, &mut c) && c.state == 1,
+                "stay after restore"
+            );
+
+            let mut found = [0u64; 4];
+            assert_eq!(
+                ov_query_point(e, Vec2::new(-1.0, 0.0), u32::MAX, found.as_mut_ptr(), 4),
+                1
+            );
+            assert_eq!(found[0], coin);
+            assert_eq!(
+                ov_query_rect(
+                    e,
+                    Rect::new(-10.0, -10.0, 30.0, 20.0),
+                    1,
+                    std::ptr::null_mut(),
+                    0
+                ),
+                1,
+                "layer 1: the hero only"
+            );
+            assert_eq!(
+                ov_query_circle(
+                    e,
+                    Vec2::new(20.0, 0.0),
+                    11.0,
+                    u32::MAX,
+                    found.as_mut_ptr(),
+                    4
+                ),
+                1
+            );
+            let mut hit = crate::collisions::EntityHit::default();
+            assert!(ov_raycast_entities(
+                e,
+                Vec2::new(30.0, 0.0),
+                Vec2::new(-30.0, 0.0),
+                u32::MAX,
+                &mut hit
+            ));
+            assert_eq!(hit.entity, hero);
             ov_engine_destroy(e);
         }
     }

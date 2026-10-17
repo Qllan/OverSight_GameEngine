@@ -134,6 +134,14 @@ struct Collider : OvCollider {
     }
 };
 using Overlap = OvOverlap;
+using EntityHit = OvEntityHit;
+enum class ContactState : int32_t { Begin = OV_CONTACT_BEGIN, Stay = OV_CONTACT_STAY, End = OV_CONTACT_END };
+struct Contact : OvContact {
+    bool begin() const { return state == OV_CONTACT_BEGIN; }
+    bool end() const { return state == OV_CONTACT_END; }
+    /// The other entity when one of them is `me`
+    OvEntity other(OvEntity me) const { return a == me ? b : a; }
+};
 template <>
 struct ComponentName<Transform> { static constexpr const char *value = "Transform"; };
 template <>
@@ -738,6 +746,28 @@ public:
         return o;
     }
     void debug_colliders() { ov_debug_colliders(e_); }
+    /// Overlaps, pushes and events between colliders; after update_motion
+    void update_collisions() { ov_update_collisions(e_); }
+    void set_collision_cell(float size) { ov_set_collision_cell(e_, size); }
+    std::vector<Contact> contacts() const {
+        std::vector<Contact> out(ov_contact_count(e_));
+        for (uint32_t i = 0; i < out.size(); i++) ov_contact(e_, i, &out[i]);
+        return out;
+    }
+    std::vector<Entity> query_point(Vec2 p, uint32_t mask = 0xFFFFFFFFu) const {
+        return collect([&](Entity *o, uint32_t n) { return ov_query_point(e_, p, mask, o, n); });
+    }
+    std::vector<Entity> query_rect(Rect r, uint32_t mask = 0xFFFFFFFFu) const {
+        return collect([&](Entity *o, uint32_t n) { return ov_query_rect(e_, r, mask, o, n); });
+    }
+    std::vector<Entity> query_circle(Vec2 c, float radius, uint32_t mask = 0xFFFFFFFFu) const {
+        return collect([&](Entity *o, uint32_t n) { return ov_query_circle(e_, c, radius, mask, o, n); });
+    }
+    std::optional<EntityHit> raycast_entities(Vec2 from, Vec2 to, uint32_t mask = 0xFFFFFFFFu) const {
+        EntityHit h{};
+        if (!ov_raycast_entities(e_, from, to, mask, &h)) return std::nullopt;
+        return h;
+    }
     /// Draw every entity with Transform + SpriteRenderer
     void draw_entities() { ov_draw_entities(e_); }
     /// Entities, components, random generator and tick counter as bytes
@@ -825,6 +855,12 @@ public:
     void set_master_volume(float v) { ov_set_master_volume(e_, v); }
 
 private:
+    template <class F>
+    static std::vector<Entity> collect(F &&query) {
+        std::vector<Entity> out(query(nullptr, 0));
+        out.resize(query(out.data(), uint32_t(out.size())));
+        return out;
+    }
     template <class... Ts, class F, std::size_t... I>
     void each_one(F &f, Entity en, const std::array<uint32_t, sizeof...(Ts)> &ids, std::index_sequence<I...>) {
         f(en, *static_cast<Ts *>(ov_get(e_, en, ids[I]))...);

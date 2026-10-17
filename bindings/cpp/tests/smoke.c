@@ -127,6 +127,9 @@ int main(void) {
     CHECK(sizeof(OvCollider) == 40);
     OvVec2 bent[] = {{0, 0}, {4, 0}, {2, 1}, {4, 4}};
     CHECK(ov_create_polygon(e, bent, 4) == 0); /* concave */
+    CHECK(sizeof(OvContact) == 40 && sizeof(OvEntityHit) == 32);
+    ov_update_collisions(e);
+    CHECK(ov_contact_count(e) == 0);
 
     /* Scenes: switched in the middle of the fade */
     CHECK(ov_scene_go(e, 5, OV_TRANSITION_FADE, 0.1f, OV_RGBA(0, 0, 0, 255)));

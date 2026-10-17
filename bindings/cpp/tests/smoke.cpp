@@ -156,6 +156,10 @@ int main() {
     CHECK(o && o->normal.x > 0.99f && o->depth > 0.99f && o->depth < 1.01f);
     CHECK(engine.component<ov::Collider>() == OV_COLLIDER);
     CHECK(engine.create_polygon({{0, -2}, {2, 2}, {-2, 2}}) != 0);
+    engine.update_collisions();
+    auto contacts = engine.contacts();
+    CHECK(contacts.size() == 1 && contacts[0].begin() && contacts[0].other(wall) == ball);
+    CHECK(engine.query_point({100, 100}).size() == 1 && engine.raycast_entities({150, 100}, {0, 100})->entity == ball);
 
     // Scenes: a push keeps the scene below, a pop resumes it
     CHECK(engine.go_scene(1, ov::Transition::Cut));

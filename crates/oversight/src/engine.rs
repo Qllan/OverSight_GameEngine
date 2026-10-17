@@ -47,7 +47,7 @@ pub struct DrawState {
 }
 
 /// Start of every snapshot; the digit changes when the format does
-const SNAPSHOT_MAGIC: &[u8; 4] = b"OVS1";
+const SNAPSHOT_MAGIC: &[u8; 4] = b"OVS2";
 
 pub struct Engine {
     pub renderer: Renderer,
@@ -68,6 +68,8 @@ pub struct Engine {
     pub world: World,
     /// Which scene is on, and the transition between scenes
     pub scenes: crate::scenes::Scenes,
+    /// Overlaps between colliders from the last collision pass
+    pub collisions: crate::collisions::Collisions,
     pub debug: DebugOverlay,
     pub hot_reload: HotReload,
     #[cfg(feature = "audio")]
@@ -128,6 +130,7 @@ impl Engine {
                 w
             },
             scenes: Default::default(),
+            collisions: Default::default(),
             debug: DebugOverlay::default(),
             hot_reload: HotReload::default(),
             #[cfg(feature = "audio")]
@@ -261,6 +264,13 @@ impl Engine {
         out.extend_from_slice(SNAPSHOT_MAGIC);
         out.extend_from_slice(&self.rng.state().to_le_bytes());
         out.extend_from_slice(&self.time.tick_count.to_le_bytes());
+        // Which pairs touch, so the next pass reports the same begins
+        let touching = self.collisions.touching();
+        out.extend_from_slice(&(touching.len() as u32).to_le_bytes());
+        for &(a, b) in touching {
+            out.extend_from_slice(&a.to_le_bytes());
+            out.extend_from_slice(&b.to_le_bytes());
+        }
         self.world.save(&mut out);
         out
     }
@@ -273,9 +283,16 @@ impl Engine {
         }
         let rng = r.u64()?;
         let ticks = r.u64()?;
+        let n = r.u32()? as usize;
+        r.need(n.saturating_mul(16))?;
+        let mut touching = Vec::with_capacity(n);
+        for _ in 0..n {
+            touching.push((r.u64()?, r.u64()?));
+        }
         self.world.load(&bytes[r.at..])?;
         self.rng = Rng::new(rng);
         self.time.tick_count = ticks;
+        self.collisions.set_touching(touching);
         Ok(())
     }
 
@@ -339,6 +356,26 @@ impl Engine {
             t.rotation += v.angular * dt;
             write(&mut self.world, ent, TRANSFORM, &t);
         }
+    }
+
+    /// Find overlaps between colliders, push solid movers apart and work
+    /// out begin and end events (after update_motion, once per tick)
+    pub fn update_collisions(&mut self) {
+        self.collisions.update(&mut self.world, &self.polygons);
+    }
+
+    /// Entities whose collider overlaps the shape and has a layer bit in mask
+    pub fn query_shape(&self, shape: &crate::shapes::Shape, mask: u32) -> Vec<u64> {
+        crate::collisions::overlapping(&self.world, &self.polygons, shape, mask)
+    }
+
+    pub fn raycast_entities(
+        &self,
+        from: Vec2,
+        to: Vec2,
+        mask: u32,
+    ) -> Option<crate::collisions::EntityHit> {
+        crate::collisions::raycast(&self.world, &self.polygons, from, to, mask)
     }
 
     /// A convex polygon for colliders (3 to 64 corners in order)

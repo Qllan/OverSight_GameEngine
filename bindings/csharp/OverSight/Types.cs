@@ -419,3 +419,37 @@ public struct Overlap
     public Vec2 Normal;
     public float Depth;
 }
+
+public enum ContactState { Begin = 0, Stay = 1, End = 2 }
+
+/// <summary>A pair of colliders from the last collision pass</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Contact
+{
+    private ulong a, b;
+    /// <summary>From A towards B</summary>
+    public Vec2 Normal;
+    public float Depth;
+    public ContactState State;
+    private byte trigger, pad0, pad1, pad2;
+
+    /// <summary>The lower id of the two</summary>
+    public readonly Entity A => new(a);
+    public readonly Entity B => new(b);
+    /// <summary>Either one is a trigger</summary>
+    public readonly bool Trigger => trigger != 0;
+    /// <summary>The other entity when one of them is me</summary>
+    public readonly Entity Other(Entity me) => me.Id == a ? new(b) : new(a);
+    public readonly bool Involves(Entity e) => e.Id == a || e.Id == b;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct EntityHit
+{
+    private ulong entity;
+    public Vec2 Point;
+    public Vec2 Normal;
+    public float Distance;
+
+    public readonly Entity Entity => new(entity);
+}
