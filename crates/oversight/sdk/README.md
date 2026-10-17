@@ -7,6 +7,7 @@
 - `cmake/` — пакет для CMake.
 - `nuget/OverSight.Net.<версия>.nupkg` — пакет для C#, библиотека движка уже внутри.
 - `new-game` и `templates/` — заготовки новой игры.
+- `docs/first-game.md` — урок «первая игра», `examples/assets` — картинки и карты для него.
 
 ## Новая игра за минуту
 

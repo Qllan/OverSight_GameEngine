@@ -101,6 +101,12 @@ def package(lib_dir, out, system, arch, csharp=True):
     if csharp:
         pack_csharp(lib_dir, dest, version)
     shutil.copytree(SDK / "templates", dest / "templates")
+    shutil.copytree(CRATE / "docs", dest / "docs")
+    # The pictures and map the tutorial (docs/first-game.md) builds on
+    examples = dest / "examples" / "assets"
+    examples.mkdir(parents=True)
+    for file in ("hero.png", "tiles.png", "topdown.tmj", "platformer.tmj", "iso.tmj", "iso_tiles.png"):
+        shutil.copy2(ROOT / "samples" / "assets" / file, examples / file)
     for script in ("new-game.cmd", "new-game.ps1", "new-game.sh"):
         shutil.copy2(SDK / script, dest / script)
     (dest / "VERSION").write_text(version + "\n", encoding="utf-8")
