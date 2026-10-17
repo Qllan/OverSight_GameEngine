@@ -96,7 +96,7 @@ pub struct Engine {
     gamepads: Option<crate::gamepad::Backend>,
     /// Draws frames on the graphics card; None: the software renderer
     #[cfg(feature = "gpu")]
-    gpu: Option<crate::gpu::Gpu>,
+    pub(crate) gpu: Option<crate::gpu::Gpu>,
     /// The software canvas is behind the GPU's frame (read it back before
     /// screenshots and pixel reads)
     canvas_stale: bool,

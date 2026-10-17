@@ -22,8 +22,8 @@ use crate::light::LightPx;
 use crate::particles::Record;
 use crate::post::{self, Effect};
 use crate::render::{
-    normal_map_of, normal_matrix, sprite_src, sprite_transform, visible, DrawCmd, DrawKind,
-    Renderer, Shape,
+    normal_map_of, normal_matrix, quad_visible, sprite_quad, sprite_src, sprite_transform, DrawCmd,
+    DrawKind, Renderer, Shape,
 };
 use crate::text::Font;
 use crate::texture::{Store, Texture};
@@ -54,6 +54,27 @@ impl Vertex {
     }
 }
 
+/// A textured quad, drawn as an instance: corner `a`, edges `ex` and
+/// `ey` in pixels, the texture region and the colour. Sprites, tiles and
+/// glyphs are quads, so each costs one of these, not six vertices.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Quad {
+    a: [f32; 2],
+    ex: [f32; 2],
+    ey: [f32; 2],
+    uv: [f32; 4],
+    /// Premultiplied colour the texel is multiplied by
+    color: [f32; 4],
+}
+
+impl Quad {
+    fn bytes(q: &[Quad]) -> &[u8] {
+        // Quad is repr(C) and made only of f32s, so it has no padding
+        unsafe { std::slice::from_raw_parts(q.as_ptr() as *const u8, std::mem::size_of_val(q)) }
+    }
+}
+
 /// Which texture a run of triangles samples
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Source {
@@ -62,10 +83,14 @@ enum Source {
     Texture(u32),
     /// One GPU emitter's draw: an index into `particle_draws`
     Particles(u32),
+    /// A page of the sprite atlas
+    Page(u32),
 }
 
 struct Batch {
     source: Source,
+    /// Quads (instances) rather than vertices
+    quads: bool,
     start: u32,
     count: u32,
 }
@@ -209,6 +234,75 @@ impl Atlas {
     }
 }
 
+/// Maps keyed by texture ids, which the renderer looks up for every
+/// sprite: a multiply instead of SipHash
+type IdMap<V> = HashMap<u32, V, std::hash::BuildHasherDefault<IdHash>>;
+
+#[derive(Default)]
+struct IdHash(u64);
+
+impl std::hash::Hasher for IdHash {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for b in bytes {
+            self.0 = (self.0 << 8 | *b as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_u32(&mut self, n: u32) {
+        self.0 = (n as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+/// Textures up to this size share atlas pages, so sprites from many
+/// small textures draw in one batch
+const PACK_MAX: u32 = 512;
+
+/// One page of the sprite atlas; its images keep a 1-pixel border of
+/// their own edge pixels, so filtering never reaches a neighbour
+struct Page {
+    texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    smooth: bool,
+    x: u32,
+    y: u32,
+    row_h: u32,
+}
+
+impl Page {
+    /// Shelf packing; the image's top left inside its border
+    fn place(&mut self, w: u32, h: u32) -> Option<(u32, u32)> {
+        let (w, h) = (w + 2, h + 2);
+        if self.x + w > ATLAS_SIZE {
+            self.x = 0;
+            self.y += self.row_h;
+            self.row_h = 0;
+        }
+        if self.y + h > ATLAS_SIZE {
+            return None;
+        }
+        let at = (self.x + 1, self.y + 1);
+        self.x += w;
+        self.row_h = self.row_h.max(h);
+        Some(at)
+    }
+}
+
+/// An atlas page and the image's top left in it
+type AtlasSpot = (u32, f32, f32);
+
+/// Where a texture sits in the sprite atlas
+struct Packed {
+    page: u32,
+    x: u32,
+    y: u32,
+    size: (u32, u32),
+    generation: u64,
+}
+
 struct Target {
     size: (u32, u32),
     texture: wgpu::Texture,
@@ -247,6 +341,10 @@ pub struct Gpu {
     light_pipeline: wgpu::RenderPipeline,
     /// 1 sample (crisp) and MSAA (antialiased) versions
     pipelines: [wgpu::RenderPipeline; 2],
+    /// The same for quads
+    quad_pipelines: [wgpu::RenderPipeline; 2],
+    quads: Vec<Quad>,
+    quad_buffer: wgpu::Buffer,
     /// The same for GPU emitters
     particle_pipelines: [wgpu::RenderPipeline; 2],
     particle_buffers: HashMap<u64, ParticleBuffer>,
@@ -255,7 +353,13 @@ pub struct Gpu {
     linear: wgpu::Sampler,
     white: wgpu::BindGroup,
     atlas: Atlas,
-    textures: HashMap<u32, GpuTexture>,
+    pages: Vec<Page>,
+    packed: IdMap<Packed>,
+    /// Atlas pixels of images that were freed or moved
+    wasted: u64,
+    /// Textures up to this size go into the atlas (tests turn it off)
+    pack_max: u32,
+    textures: IdMap<GpuTexture>,
     target: Target,
     presenter: Option<Presenter>,
     vertex_buffer: wgpu::Buffer,
@@ -283,6 +387,20 @@ fn vs(@location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) colo
     var o: VOut;
     o.pos = vec4<f32>(pos.x / u.size.x * 2.0 - 1.0, 1.0 - pos.y / u.size.y * 2.0, 0.0, 1.0);
     o.uv = uv;
+    o.color = color;
+    return o;
+}
+
+@vertex
+fn vs_quad(@builtin(vertex_index) vi: u32, @location(0) a: vec2<f32>, @location(1) ex: vec2<f32>,
+           @location(2) ey: vec2<f32>, @location(3) uv: vec4<f32>, @location(4) color: vec4<f32>) -> VOut {
+    var corners = array<vec2<f32>, 6>(vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+                                      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+    let q = corners[vi];
+    let pos = a + ex * q.x + ey * q.y;
+    var o: VOut;
+    o.pos = vec4<f32>(pos.x / u.size.x * 2.0 - 1.0, 1.0 - pos.y / u.size.y * 2.0, 0.0, 1.0);
+    o.uv = uv.xy + uv.zw * q;
     o.color = color;
     return o;
 }
@@ -837,6 +955,44 @@ impl Gpu {
             })
         };
         let pipelines = [pipeline(1), pipeline(MSAA)];
+        let quad_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Quad>() as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &wgpu::vertex_attr_array![
+                0 => Float32x2, 1 => Float32x2, 2 => Float32x2, 3 => Float32x4, 4 => Float32x4
+            ],
+        };
+        let quad_pipeline = |samples: u32, fs: &str| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("quads"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_quad"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(quad_layout.clone())],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(fs),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: FORMAT,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let quad_pipelines = [quad_pipeline(1, "fs"), quad_pipeline(MSAA, "fs")];
         let part_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("particles"),
             source: wgpu::ShaderSource::Wgsl(PARTICLE_SHADER.into()),
@@ -891,37 +1047,8 @@ impl Gpu {
             .iter()
             .map(|entry| fx_pipeline(&device, &fx_layout, &fx_module, entry))
             .collect();
-        let normal_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("normals"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<Vertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![
-                        0 => Float32x2, 1 => Float32x2, 2 => Float32x4
-                    ],
-                })],
-            },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_normal"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        // Normals come from sprites, so they are quads
+        let normal_pipeline = quad_pipeline(1, "fs_normal");
         let add = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
             dst_factor: wgpu::BlendFactor::One,
@@ -1006,7 +1133,8 @@ impl Gpu {
             row_h: 0,
         };
         let target = make_target(&device, &texture_layout, &nearest, size);
-        let vertex_buffer = vertex_buffer(&device, 4096);
+        let (vertex_buffer, quad_buffer) =
+            (vertex_buffer(&device, 4096), vertex_buffer(&device, 4096));
         let gpu = Gpu {
             device,
             queue,
@@ -1024,6 +1152,9 @@ impl Gpu {
             normal_pipeline,
             light_pipeline,
             pipelines,
+            quad_pipelines,
+            quads: Vec::new(),
+            quad_buffer,
             particle_pipelines,
             particle_buffers: HashMap::new(),
             particle_draws: Vec::new(),
@@ -1031,7 +1162,11 @@ impl Gpu {
             linear,
             white,
             atlas,
-            textures: HashMap::new(),
+            pages: Vec::new(),
+            packed: IdMap::default(),
+            wasted: 0,
+            pack_max: PACK_MAX,
+            textures: IdMap::default(),
             target,
             presenter: None,
             vertex_buffer,
@@ -1098,7 +1233,9 @@ impl Gpu {
             self.target = make_target(&self.device, &self.texture_layout, &self.nearest, size);
         }
         self.sync_textures(textures);
+        self.sync_atlas(textures);
         self.vertices.clear();
+        self.quads.clear();
         self.batches.clear();
         self.passes.clear();
         self.particle_draws.clear();
@@ -1117,34 +1254,60 @@ impl Gpu {
             }
             self.split = true;
             let first = self.batches.len();
+            let world = renderer.space_transform(crate::types::Space::World, pass.target);
+            // The last texture looked up: (id, its size if it is on the
+            // card, its place in the atlas)
+            let mut last: (u32, Option<(u32, u32)>, Option<AtlasSpot>) = (0, None, None);
             for cmd in &commands[pass.commands.clone()] {
-                let base = renderer.space_transform(cmd.space, pass.target);
+                let base = match cmd.space {
+                    crate::types::Space::World => world,
+                    crate::types::Space::Screen => Transform::identity(),
+                };
                 match &cmd.kind {
                     DrawKind::Sprite { texture, sprite } => {
                         // A target cannot show itself while it is drawn
                         if *texture == pass.target {
                             continue;
                         }
-                        let Some(tex) = textures.get(*texture) else {
+                        if last.0 != *texture {
+                            let on_card = self.textures.contains_key(texture);
+                            let size = textures.get(*texture).filter(|_| on_card);
+                            let packed = self
+                                .packed
+                                .get(texture)
+                                .map(|p| (p.page, p.x as f32, p.y as f32));
+                            last = (*texture, size.map(|t| (t.width(), t.height())), packed);
+                        }
+                        let Some((tw, th)) = last.1 else {
                             continue;
                         };
-                        let (tw, th) = (tex.width(), tex.height());
                         let src = sprite_src(sprite, tw, th);
-                        let transform = base.pre_concat(sprite_transform(sprite, src));
-                        if !visible(pass.size, Rect::new(0.0, 0.0, src.w, src.h), transform) {
+                        let q = sprite_quad(base, sprite, src);
+                        if !quad_visible(pass.size, &q) {
                             continue;
                         }
-                        if !self.textures.contains_key(texture) {
-                            continue;
+                        let color = premultiplied(sprite.tint);
+                        let (tw, th) = (tw as f32, th as f32);
+                        // A region past the texture's edge needs its own
+                        // texture's clamping, not the atlas neighbours
+                        let inside =
+                            src.x >= 0.0 && src.y >= 0.0 && src.right() <= tw && src.bottom() <= th;
+                        match last.2.filter(|_| inside) {
+                            Some((page, x, y)) => {
+                                let a = ATLAS_SIZE as f32;
+                                let uv = Rect::new(
+                                    (x + src.x) / a,
+                                    (y + src.y) / a,
+                                    src.w / a,
+                                    src.h / a,
+                                );
+                                self.quad_at(Source::Page(page), q, uv, color);
+                            }
+                            None => {
+                                let uv = Rect::new(src.x / tw, src.y / th, src.w / tw, src.h / th);
+                                self.quad_at(Source::Texture(*texture), q, uv, color);
+                            }
                         }
-                        let uv = Rect::new(
-                            src.x / tw as f32,
-                            src.y / th as f32,
-                            src.w / tw as f32,
-                            src.h / th as f32,
-                        );
-                        let local = Rect::new(0.0, 0.0, src.w, src.h);
-                        self.quad(Source::Texture(*texture), local, uv, transform, sprite.tint);
                         sprites += 1;
                     }
                     DrawKind::Shape { shape, color } => self.shape(shape, *color, base),
@@ -1241,12 +1404,15 @@ impl Gpu {
             };
             let (tw, th) = (tex.width(), tex.height());
             let src = sprite_src(sprite, tw, th);
-            let transform = base.pre_concat(sprite_transform(sprite, src));
-            if !visible(size, Rect::new(0.0, 0.0, src.w, src.h), transform) {
+            let q = sprite_quad(base, sprite, src);
+            if !quad_visible(size, &q) {
                 continue;
             }
             let (source, m) = match normal_map_of(textures, tex) {
-                Some(n) => (n, normal_matrix(transform)),
+                Some(n) => (
+                    n,
+                    normal_matrix(base.pre_concat(sprite_transform(sprite, src))),
+                ),
                 None => (*texture, [0.0; 4]),
             };
             if !self.textures.contains_key(&source) {
@@ -1258,10 +1424,16 @@ impl Gpu {
                 src.w / tw as f32,
                 src.h / th as f32,
             );
-            let local = Rect::new(0.0, 0.0, src.w, src.h);
-            self.quad_raw(Source::Texture(source), local, uv, transform, m);
+            self.quad_at(Source::Texture(source), q, uv, m);
         }
         first..self.batches.len()
+    }
+
+    /// Draw calls of the last frame's passes (sprites from atlas pages
+    /// share them)
+    #[cfg(test)]
+    fn batch_count(&self) -> usize {
+        self.batches.len()
     }
 
     /// Compile a custom effect shader (see `Engine::create_shader`)
@@ -1340,6 +1512,134 @@ impl Gpu {
                 }
             }
         }
+    }
+
+    /// Put small textures into the sprite atlas, updating changed ones in
+    /// place; when the pages run out and much of them is freed space,
+    /// pack everything again
+    fn sync_atlas(&mut self, textures: &Store<Texture>) {
+        let max = self.pack_max;
+        let fits = |t: &Texture| !t.target && t.width() <= max && t.height() <= max;
+        let mut wasted = 0;
+        self.packed.retain(|id, p| {
+            let keep = textures
+                .get(*id)
+                .is_some_and(|t| fits(t) && (t.width(), t.height()) == p.size);
+            if !keep {
+                wasted += (p.size.0 + 2) as u64 * (p.size.1 + 2) as u64;
+            }
+            keep
+        });
+        self.wasted += wasted;
+        for id in textures.ids() {
+            let Some(tex) = textures.get(id).filter(|t| fits(t)) else {
+                continue;
+            };
+            if let Some(p) = self.packed.get(&id) {
+                if self.pages[p.page as usize].smooth != tex.smooth {
+                    self.wasted += (p.size.0 + 2) as u64 * (p.size.1 + 2) as u64;
+                    self.packed.remove(&id);
+                } else if p.generation != tex.generation {
+                    let (page, x, y) = (p.page, p.x, p.y);
+                    self.upload_packed(page, x, y, tex);
+                    if let Some(p) = self.packed.get_mut(&id) {
+                        p.generation = tex.generation;
+                    }
+                    continue;
+                } else {
+                    continue;
+                }
+            }
+            let (w, h) = (tex.width(), tex.height());
+            let mut spot = self
+                .pages
+                .iter_mut()
+                .enumerate()
+                .filter(|(_, p)| p.smooth == tex.smooth)
+                .find_map(|(i, p)| p.place(w, h).map(|(x, y)| (i as u32, x, y)));
+            let area = (ATLAS_SIZE * ATLAS_SIZE) as u64;
+            if spot.is_none() && self.wasted * 2 > area {
+                // Start the pages over and place everything again (with
+                // nothing wasted this cannot come back here)
+                for p in &mut self.pages {
+                    (p.x, p.y, p.row_h) = (0, 0, 0);
+                }
+                self.packed.clear();
+                self.wasted = 0;
+                return self.sync_atlas(textures);
+            }
+            if spot.is_none() {
+                let texture = self.device.create_texture(&texture_desc(
+                    ATLAS_SIZE,
+                    ATLAS_SIZE,
+                    wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                ));
+                let view = texture.create_view(&Default::default());
+                let mut page = Page {
+                    bind_group: self.bind_group(&view, tex.smooth),
+                    texture,
+                    smooth: tex.smooth,
+                    x: 0,
+                    y: 0,
+                    row_h: 0,
+                };
+                spot = page
+                    .place(w, h)
+                    .map(|(x, y)| (self.pages.len() as u32, x, y));
+                self.pages.push(page);
+            }
+            let Some((page, x, y)) = spot else {
+                continue;
+            };
+            self.upload_packed(page, x, y, tex);
+            let packed = Packed {
+                page,
+                x,
+                y,
+                size: (w, h),
+                generation: tex.generation,
+            };
+            self.packed.insert(id, packed);
+        }
+    }
+
+    /// Write a texture into an atlas page with a border of its own edges
+    fn upload_packed(&self, page: u32, x: u32, y: u32, tex: &Texture) {
+        let (w, h) = (tex.width() as usize, tex.height() as usize);
+        let (pw, ph) = (w + 2, h + 2);
+        let src = tex.pixmap.data();
+        let mut px = vec![0u8; pw * ph * 4];
+        for py in 0..ph {
+            let sy = py.saturating_sub(1).min(h - 1);
+            for qx in 0..pw {
+                let sx = qx.saturating_sub(1).min(w - 1);
+                let (d, s) = ((py * pw + qx) * 4, (sy * w + sx) * 4);
+                px[d..d + 4].copy_from_slice(&src[s..s + 4]);
+            }
+        }
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.pages[page as usize].texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: x - 1,
+                    y: y - 1,
+                    z: 0,
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &px,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(pw as u32 * 4),
+                rows_per_image: Some(ph as u32),
+            },
+            wgpu::Extent3d {
+                width: pw as u32,
+                height: ph as u32,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     fn bind_group(&self, view: &wgpu::TextureView, smooth: bool) -> wgpu::BindGroup {
@@ -1470,6 +1770,7 @@ impl Gpu {
         });
         self.batches.push(Batch {
             source: Source::Particles(index),
+            quads: false,
             start: 0,
             count: 0,
         });
@@ -1480,9 +1781,10 @@ impl Gpu {
         self.vertices.extend_from_slice(vertices);
         let split = std::mem::take(&mut self.split);
         match self.batches.last_mut() {
-            Some(b) if b.source == source && !split => b.count += vertices.len() as u32,
+            Some(b) if b.source == source && !b.quads && !split => b.count += vertices.len() as u32,
             _ => self.batches.push(Batch {
                 source,
+                quads: false,
                 start,
                 count: vertices.len() as u32,
             }),
@@ -1504,16 +1806,43 @@ impl Gpu {
         transform: Transform,
         color: [f32; 4],
     ) {
-        let corner = |x: f32, y: f32, u: f32, v: f32| Vertex {
-            pos: map(transform, x, y),
-            uv: [u, v],
-            color,
+        let p = |x: f32, y: f32| {
+            let [x, y] = map(transform, x, y);
+            Vec2::new(x, y)
         };
-        let a = corner(local.x, local.y, uv.x, uv.y);
-        let b = corner(local.right(), local.y, uv.right(), uv.y);
-        let c = corner(local.right(), local.bottom(), uv.right(), uv.bottom());
-        let d = corner(local.x, local.bottom(), uv.x, uv.bottom());
-        self.push(source, &[a, b, c, a, c, d]);
+        let (a, b, d) = (
+            p(local.x, local.y),
+            p(local.right(), local.y),
+            p(local.x, local.bottom()),
+        );
+        let edges = [
+            a,
+            Vec2::new(b.x - a.x, b.y - a.y),
+            Vec2::new(d.x - a.x, d.y - a.y),
+        ];
+        self.quad_at(source, edges, uv, color);
+    }
+
+    /// A quad from its corner and edges in pixels, sampling `uv`
+    fn quad_at(&mut self, source: Source, q: [Vec2; 3], uv: Rect, color: [f32; 4]) {
+        let start = self.quads.len() as u32;
+        self.quads.push(Quad {
+            a: [q[0].x, q[0].y],
+            ex: [q[1].x, q[1].y],
+            ey: [q[2].x, q[2].y],
+            uv: [uv.x, uv.y, uv.w, uv.h],
+            color,
+        });
+        let split = std::mem::take(&mut self.split);
+        match self.batches.last_mut() {
+            Some(b) if b.source == source && b.quads && !split => b.count += 1,
+            _ => self.batches.push(Batch {
+                source,
+                quads: true,
+                start,
+                count: 1,
+            }),
+        }
     }
 
     /// Filled triangles from a list of points in local space
@@ -1740,6 +2069,13 @@ impl Gpu {
         if !bytes.is_empty() {
             self.queue.write_buffer(&self.vertex_buffer, 0, bytes);
         }
+        let bytes = Quad::bytes(&self.quads);
+        if bytes.len() as u64 > self.quad_buffer.size() {
+            self.quad_buffer = vertex_buffer(&self.device, bytes.len() as u64 * 2);
+        }
+        if !bytes.is_empty() {
+            self.queue.write_buffer(&self.quad_buffer, 0, bytes);
+        }
         let mut blocks = vec![0u8; (slots * SLOT) as usize];
         for (i, pass) in self.passes.iter_mut().enumerate() {
             pass.block = i as u64 * SLOT;
@@ -1796,9 +2132,9 @@ impl Gpu {
                     ..Default::default()
                 });
                 let samples = resolve.is_some() as usize;
-                rp.set_pipeline(&self.pipelines[samples]);
                 rp.set_bind_group(0, &self.uniform_group, &[offset as u32]);
-                rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                // Quads or triangles, set when it changes
+                let mut drawing = None;
                 for batch in &self.batches[pass.batches.clone()] {
                     if let Source::Particles(i) = batch.source {
                         let d = &self.particle_draws[i as usize];
@@ -1814,10 +2150,19 @@ impl Gpu {
                         rp.set_bind_group(1, group, &[]);
                         rp.set_vertex_buffer(0, b.buffer.slice(..));
                         rp.draw(0..6, 0..d.len);
-                        rp.set_pipeline(&self.pipelines[samples]);
                         rp.set_bind_group(0, &self.uniform_group, &[offset as u32]);
-                        rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                        drawing = None;
                         continue;
+                    }
+                    if drawing != Some(batch.quads) {
+                        drawing = Some(batch.quads);
+                        if batch.quads {
+                            rp.set_pipeline(&self.quad_pipelines[samples]);
+                            rp.set_vertex_buffer(0, self.quad_buffer.slice(..));
+                        } else {
+                            rp.set_pipeline(&self.pipelines[samples]);
+                            rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                        }
                     }
                     let group = match batch.source {
                         Source::White => &self.white,
@@ -1826,10 +2171,16 @@ impl Gpu {
                             Some(t) => &t.bind_group,
                             None => continue,
                         },
+                        Source::Page(n) => &self.pages[n as usize].bind_group,
                         Source::Particles(_) => continue,
                     };
                     rp.set_bind_group(1, group, &[]);
-                    rp.draw(batch.start..batch.start + batch.count, 0..1);
+                    let range = batch.start..batch.start + batch.count;
+                    if batch.quads {
+                        rp.draw(0..6, range);
+                    } else {
+                        rp.draw(range, 0..1);
+                    }
                 }
             }
             let texture = if pass.target == 0 {
@@ -1993,7 +2344,8 @@ impl Gpu {
         });
     }
 
-    /// Triangles from the vertex buffer into `view`, after clearing it
+    /// Triangles from the vertex buffer (or quads) into `view`, after
+    /// clearing it
     #[allow(clippy::too_many_arguments)]
     fn triangles_pass(
         &self,
@@ -2004,6 +2356,7 @@ impl Gpu {
         block: u64,
         scissor: Option<[i32; 4]>,
         draws: &[(&wgpu::BindGroup, std::ops::Range<u32>)],
+        quads: bool,
     ) {
         let mut rp = fx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("triangles"),
@@ -2027,10 +2380,19 @@ impl Gpu {
         }
         rp.set_pipeline(pipeline);
         rp.set_bind_group(0, &self.uniform_group, &[block as u32]);
-        rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        let buffer = if quads {
+            &self.quad_buffer
+        } else {
+            &self.vertex_buffer
+        };
+        rp.set_vertex_buffer(0, buffer.slice(..));
         for (group, range) in draws {
             rp.set_bind_group(1, *group, &[]);
-            rp.draw(range.clone(), 0..1);
+            if quads {
+                rp.draw(0..6, range.clone());
+            } else {
+                rp.draw(range.clone(), 0..1);
+            }
         }
     }
 
@@ -2065,7 +2427,16 @@ impl Gpu {
             })
             .collect();
         let np = &self.normal_pipeline;
-        self.triangles_pass(fx, &lt.normals.1, flat, np, pass.block, None, &normals);
+        self.triangles_pass(
+            fx,
+            &lt.normals.1,
+            flat,
+            np,
+            pass.block,
+            None,
+            &normals,
+            true,
+        );
         let ambient = wgpu::Color {
             r: p[0] as f64,
             g: p[1] as f64,
@@ -2087,7 +2458,7 @@ impl Gpu {
             };
             let white = wgpu::Color::WHITE;
             let crisp = &self.pipelines[0];
-            self.triangles_pass(fx, mask, white, crisp, pass.block, Some(b), &draws);
+            self.triangles_pass(fx, mask, white, crisp, pass.block, Some(b), &draws, false);
             let blur = light.blur();
             if blur > 0 {
                 let mut mp = [0.0; 12];
@@ -2859,5 +3230,131 @@ mod tests {
                 .count();
             assert!(shown > 200, "particles are on screen: {shown}");
         }
+    }
+
+    /// Many small textures, crisp and smooth, flipped, rotated and cut
+    /// into regions, plus one too big for the atlas
+    fn atlas_scene(e: &mut Engine, textures: &[u32], big: u32) {
+        e.set_space(Space::Screen);
+        e.begin_frame(Color::rgba(20, 20, 30, 255));
+        for i in 0..240u32 {
+            let tex = textures[i as usize % textures.len()];
+            let s = Sprite {
+                pos: Vec2::new((i % 16) as f32 * 8.0 + 4.0, (i / 16) as f32 * 6.0 + 4.0),
+                src: if i % 3 == 0 {
+                    Rect::new(1.0, 1.0, 4.0, 3.0)
+                } else {
+                    Rect::default()
+                },
+                origin: Vec2::new(3.0, 3.0),
+                rotation: (i % 5) as f32 * 0.4,
+                scale: Vec2::new(1.0 + (i % 2) as f32, 1.0),
+                flip_x: i % 4 == 1,
+                flip_y: i % 7 == 2,
+                tint: Color::rgba(255, 255, 255, if i % 6 == 0 { 160 } else { 255 }),
+                ..Sprite::default()
+            };
+            e.draw_sprite(tex, &s);
+        }
+        let s = Sprite {
+            pos: Vec2::new(0.0, 92.0),
+            src: Rect::new(0.0, 0.0, 128.0, 4.0),
+            ..Sprite::default()
+        };
+        e.draw_sprite(big, &s);
+        e.end_frame();
+    }
+
+    fn atlas_textures(e: &mut Engine) -> (Vec<u32>, u32) {
+        let textures = (0..24u32)
+            .map(|i| {
+                let px: Vec<u8> = (0..36u32)
+                    .flat_map(|p| {
+                        let (x, y) = (p % 6, p / 6);
+                        let v = ((x * 40 + i * 9) % 256) as u8;
+                        [v, ((y * 50 + i * 20) % 256) as u8, (255 - v), 255]
+                    })
+                    .collect();
+                let t = e.texture_from_rgba(6, 6, &px).unwrap();
+                e.set_texture_smooth(t, i % 5 == 0);
+                t
+            })
+            .collect();
+        let px: Vec<u8> = (0..600 * 4)
+            .flat_map(|p| [(p % 256) as u8, 128, 64, 255])
+            .collect();
+        let big = e.texture_from_rgba(600, 4, &px).unwrap();
+        (textures, big)
+    }
+
+    #[test]
+    fn gpu_atlas_looks_the_same_and_batches() {
+        let (Some(mut gpu), Some(mut plain)) = (gpu_engine(128, 96), gpu_engine(128, 96)) else {
+            return;
+        };
+        plain.gpu.as_mut().unwrap().pack_max = 0;
+        let (textures, big) = atlas_textures(&mut gpu);
+        atlas_textures(&mut plain);
+        atlas_scene(&mut plain, &textures, big);
+        atlas_scene(&mut gpu, &textures, big);
+        // Sampling the same texels from a page, edges included
+        let bad = differ(&mut plain, &mut gpu, 2);
+        if bad > 0.001 || std::env::var_os("OVERSIGHT_GPU_SHOTS").is_some() {
+            plain.save_screenshot("atlas_off.png").ok();
+            gpu.save_screenshot("atlas_on.png").ok();
+        }
+        assert!(bad <= 0.001, "{:.2}% pixels differ", bad * 100.0);
+        assert!(
+            gpu.gpu.as_ref().unwrap().pages.len() == 2,
+            "a crisp and a smooth page"
+        );
+        // Only the crisp sprites now: one page, so one draw call
+        gpu.begin_frame(Color::BLACK);
+        for i in 0..200u32 {
+            let tex = textures[i as usize % 24];
+            if i % 24 % 5 != 0 {
+                gpu.draw_sprite(
+                    tex,
+                    &Sprite {
+                        pos: Vec2::new(i as f32 * 0.5, 10.0),
+                        ..Sprite::default()
+                    },
+                );
+            }
+        }
+        gpu.end_frame();
+        assert_eq!(gpu.gpu.as_ref().unwrap().batch_count(), 1);
+    }
+
+    #[test]
+    fn gpu_atlas_reuses_freed_space() {
+        let Some(mut e) = gpu_engine(64, 64) else {
+            return;
+        };
+        e.set_space(Space::Screen);
+        let solid = |e: &mut Engine, c: u8| {
+            e.texture_from_rgba(500, 500, &[c, 255 - c, 9, 255].repeat(500 * 500))
+                .unwrap()
+        };
+        let frame = |e: &mut Engine, id: u32| {
+            e.begin_frame(Color::BLACK);
+            e.draw_sprite(id, &Sprite::default());
+            e.end_frame();
+            e.pixel(10, 10).unwrap()
+        };
+        // A page holds 16 of these
+        let first: Vec<u32> = (0..16).map(|i| solid(&mut e, i * 10)).collect();
+        assert_eq!(frame(&mut e, first[3]), Color::rgba(30, 225, 9, 255));
+        for id in &first[..12] {
+            e.free_texture(*id);
+        }
+        let late = solid(&mut e, 200);
+        assert_eq!(frame(&mut e, late), Color::rgba(200, 55, 9, 255));
+        assert_eq!(frame(&mut e, first[13]), Color::rgba(130, 125, 9, 255));
+        assert_eq!(
+            e.gpu.as_ref().unwrap().pages.len(),
+            1,
+            "packed again instead of a new page"
+        );
     }
 }

@@ -463,6 +463,62 @@ impl Renderer {
 }
 
 /// Whether a local rectangle can touch a canvas of `size`
+/// Where a sprite's region lands: the point showing its top-left texel
+/// and the two edges from it, as mapping (0, 0), (w, 0) and (0, h)
+/// through `base.pre_concat(sprite_transform(s, src))` would give, but
+/// without building that transform (the GPU does this for every sprite)
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+pub(crate) fn sprite_quad(base: Transform, s: &Sprite, src: Rect) -> [Vec2; 3] {
+    let (sin, cos) = if s.rotation == 0.0 {
+        (0.0, 1.0)
+    } else {
+        s.rotation.sin_cos()
+    };
+    // The sprite's own axes before the base: rotated and scaled
+    let (ax, ay) = (cos * s.scale.x, sin * s.scale.x);
+    let (bx, by) = (-sin * s.scale.y, cos * s.scale.y);
+    let lin = |x: f32, y: f32| Vec2::new(base.sx * x + base.kx * y, base.ky * x + base.sy * y);
+    let (ux, uy) = (lin(ax, ay), lin(bx, by));
+    let ox = s.pos.x - (ax * s.origin.x + bx * s.origin.y);
+    let oy = s.pos.y - (ay * s.origin.x + by * s.origin.y);
+    let o = Vec2::new(
+        base.sx * ox + base.kx * oy + base.tx,
+        base.ky * ox + base.sy * oy + base.ty,
+    );
+    // Flips mirror the image inside its own rectangle
+    let (x0, w) = if s.flip_x {
+        (src.w, -src.w)
+    } else {
+        (0.0, src.w)
+    };
+    let (y0, h) = if s.flip_y {
+        (src.h, -src.h)
+    } else {
+        (0.0, src.h)
+    };
+    [
+        Vec2::new(o.x + ux.x * x0 + uy.x * y0, o.y + ux.y * x0 + uy.y * y0),
+        Vec2::new(ux.x * w, ux.y * w),
+        Vec2::new(uy.x * h, uy.y * h),
+    ]
+}
+
+/// Whether a quad (corner and edges) touches a picture of `size`
+#[cfg_attr(not(feature = "gpu"), allow(dead_code))]
+pub(crate) fn quad_visible(size: (u32, u32), q: &[Vec2; 3]) -> bool {
+    let [a, e, f] = *q;
+    let xs = [a.x, a.x + e.x, a.x + f.x, a.x + e.x + f.x];
+    let ys = [a.y, a.y + e.y, a.y + f.y, a.y + e.y + f.y];
+    let span = |v: [f32; 4]| {
+        v.iter()
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &x| {
+                (lo.min(x), hi.max(x))
+            })
+    };
+    let ((min_x, max_x), (min_y, max_y)) = (span(xs), span(ys));
+    max_x >= 0.0 && max_y >= 0.0 && min_x <= size.0 as f32 && min_y <= size.1 as f32
+}
+
 pub(crate) fn visible(size: (u32, u32), rect: Rect, transform: Transform) -> bool {
     let mut corners = [
         tiny_skia::Point::from_xy(rect.x, rect.y),
@@ -663,4 +719,42 @@ fn normal_buffer(
         }
     }
     Some(canvas)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sprite_quads_match_the_sprite_transform() {
+        let base = Transform::from_translate(40.0, 30.0)
+            .pre_concat(Transform::from_rotate(20.0))
+            .pre_scale(1.5, 1.5);
+        let src = Rect::new(4.0, 8.0, 16.0, 10.0);
+        for (flip_x, flip_y) in [(false, false), (true, false), (false, true), (true, true)] {
+            let s = Sprite {
+                src,
+                pos: Vec2::new(12.0, -7.0),
+                origin: Vec2::new(5.0, 3.0),
+                scale: Vec2::new(2.0, -0.5),
+                rotation: 0.7,
+                flip_x,
+                flip_y,
+                ..Sprite::default()
+            };
+            let t = base.pre_concat(sprite_transform(&s, src));
+            let at = |x: f32, y: f32| {
+                let mut p = tiny_skia::Point::from_xy(x, y);
+                t.map_point(&mut p);
+                Vec2::new(p.x, p.y)
+            };
+            // The texel (0, 0) is where the transform puts the region's top left
+            let (a, b, c) = (at(0.0, 0.0), at(src.w, 0.0), at(0.0, src.h));
+            let [qa, qe, qf] = sprite_quad(base, &s, src);
+            let close = |p: Vec2, q: Vec2| (p.x - q.x).abs() < 1e-3 && (p.y - q.y).abs() < 1e-3;
+            assert!(close(qa, a), "{flip_x} {flip_y}: {qa:?} {a:?}");
+            assert!(close(Vec2::new(qa.x + qe.x, qa.y + qe.y), b));
+            assert!(close(Vec2::new(qa.x + qf.x, qa.y + qf.y), c));
+        }
+    }
 }
