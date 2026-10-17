@@ -13,6 +13,7 @@ pub mod input;
 pub mod render;
 pub mod text;
 pub mod texture;
+pub mod tiled;
 pub mod tilemap;
 pub mod time;
 pub mod types;

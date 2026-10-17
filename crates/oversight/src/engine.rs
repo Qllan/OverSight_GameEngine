@@ -229,6 +229,15 @@ impl Engine {
             .map_or(Vec2::default(), |f| f.measure(text, size))
     }
 
+    /// Load a Tiled map (.tmj) and its tileset images
+    pub fn load_tilemap(&mut self, path: &str) -> Result<u32, String> {
+        let textures = &mut self.textures;
+        let map = crate::tiled::load(std::path::Path::new(path), &mut |p| {
+            Ok(textures.insert(Texture::load(&p.to_string_lossy())?))
+        })?;
+        Ok(self.add_tilemap(map))
+    }
+
     /// Keep a map in the engine (the C API refers to maps by id)
     pub fn add_tilemap(&mut self, map: Tilemap) -> u32 {
         self.tilemaps.insert(map)
@@ -604,6 +613,44 @@ mod tests {
         e.end_frame();
         assert_eq!(e.pixel(4, 4), Some(BLUE));
         assert_eq!(e.renderer.drawn_sprites, 1);
+    }
+
+    #[test]
+    fn loads_and_draws_a_tiled_map() {
+        let dir = std::env::temp_dir().join(format!("oversight_engine_map_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Tileset image: a red and a blue 4x4 tile
+        let mut img = image::RgbaImage::new(8, 4);
+        for (x, _, p) in img.enumerate_pixels_mut() {
+            *p = if x < 4 {
+                image::Rgba([255, 0, 0, 255])
+            } else {
+                image::Rgba([0, 0, 255, 255])
+            };
+        }
+        img.save(dir.join("tiles.png")).unwrap();
+        let map = r#"{"orientation": "orthogonal", "width": 2, "height": 1,
+            "tilewidth": 4, "tileheight": 4,
+            "tilesets": [{"firstgid": 1, "name": "t", "image": "tiles.png",
+                "imagewidth": 8, "imageheight": 4, "tilewidth": 4, "tileheight": 4,
+                "columns": 2, "tilecount": 2}],
+            "layers": [{"type": "tilelayer", "name": "g", "width": 2, "height": 1, "data": [2, 1]}]}"#;
+        let path = dir.join("level.tmj");
+        std::fs::write(&path, map).unwrap();
+
+        let mut e = Engine::headless(8, 4).unwrap();
+        let id = e.load_tilemap(&path.to_string_lossy()).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        e.set_camera(Camera {
+            center: Vec2::new(4.0, 2.0),
+            ..Camera::default()
+        });
+        e.begin_frame(Color::BLACK);
+        e.draw_tilemap(id, 0);
+        e.end_frame();
+        assert_eq!(e.pixel(1, 1), Some(BLUE));
+        assert_eq!(e.pixel(6, 2), Some(RED));
+        assert!(e.load_tilemap("missing.tmj").is_err());
     }
 
     #[test]
