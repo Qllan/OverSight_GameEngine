@@ -3,8 +3,9 @@
     cargo build --release -p oversight
     python crates/oversight/sdk/package.py --out dist
 
-Makes dist/oversight-sdk-<version>-<platform>/ with the library, headers
-and the CMake package, plus a .zip (Windows) or .tar.gz (Linux) of it.
+Makes dist/oversight-sdk-<version>-<platform>/ with the library, headers,
+the CMake package and the OverSight.Net NuGet package (needs the .NET 8
+SDK; --no-csharp skips it), plus a .zip (Windows) or .tar.gz (Linux) of it.
 A game needs only this folder: no Rust, no repository checkout.
 """
 
@@ -12,6 +13,7 @@ import argparse
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import zipfile
@@ -61,7 +63,22 @@ def host_platform():
     return "linux"
 
 
-def package(lib_dir, out, system, arch):
+def pack_csharp(lib_dir, dest, version):
+    """OverSight.Net.<version>.nupkg with this platform's native library."""
+    project = ROOT / "bindings" / "csharp" / "OverSight" / "OverSight.csproj"
+    subprocess.run(
+        [
+            "dotnet", "pack", str(project), "-c", "Release", "-nologo",
+            "-o", str(dest / "nuget"),
+            f"-p:Version={version}",
+            # Trailing slash: the project joins it with the file name
+            f"-p:OverSightLibDir={lib_dir.resolve()}/",
+        ],
+        check=True,
+    )
+
+
+def package(lib_dir, out, system, arch, csharp=True):
     version = crate_version()
     name = f"oversight-sdk-{version}-{system}-{arch}"
     dest = out / name
@@ -81,6 +98,8 @@ def package(lib_dir, out, system, arch):
     (dest / "cmake" / "oversight-config-version.cmake").write_text(
         VERSION_FILE.format(version=version, major=major, minor=minor), encoding="utf-8"
     )
+    if csharp:
+        pack_csharp(lib_dir, dest, version)
     shutil.copy2(SDK / "README.md", dest / "README.md")
     shutil.copy2(ROOT / "LICENSE", dest / "LICENSE")
 
@@ -103,9 +122,10 @@ def main():
     p.add_argument("--out", type=Path, default=ROOT / "dist")
     p.add_argument("--platform", choices=sorted(LIBRARIES), default=host_platform())
     p.add_argument("--arch", default="x64")
+    p.add_argument("--no-csharp", action="store_true", help="skip the NuGet package")
     a = p.parse_args()
     a.out.mkdir(parents=True, exist_ok=True)
-    package(a.lib_dir, a.out, a.platform, a.arch)
+    package(a.lib_dir, a.out.resolve(), a.platform, a.arch, csharp=not a.no_csharp)
 
 
 if __name__ == "__main__":

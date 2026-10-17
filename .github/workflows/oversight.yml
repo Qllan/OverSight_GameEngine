@@ -78,6 +78,8 @@ jobs:
           cmake -S crates/oversight/sdk/test -B build/sdk -DCMAKE_PREFIX_PATH="$sdk"
           cmake --build build/sdk --config Release
           ctest --test-dir build/sdk -C Release --output-on-failure
+          dotnet run --project crates/oversight/sdk/test-csharp -c Release -p:OverSightSdk="$sdk"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
 
       - uses: actions/upload-artifact@v4
         with:
@@ -114,10 +116,16 @@ jobs:
           OVERSIGHT_REQUIRE_GPU: "1"
         run: cargo test -p oversight
 
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
       - name: Package the SDK and build a game against it
         run: |
           cargo build --release -p oversight
           python3 crates/oversight/sdk/package.py --out dist
-          cmake -S crates/oversight/sdk/test -B build/sdk -DCMAKE_PREFIX_PATH="$(echo $PWD/dist/oversight-sdk-*/)"
+          sdk=$(echo $PWD/dist/oversight-sdk-*/)
+          cmake -S crates/oversight/sdk/test -B build/sdk -DCMAKE_PREFIX_PATH="$sdk"
           cmake --build build/sdk
           ctest --test-dir build/sdk --output-on-failure
+          dotnet run --project crates/oversight/sdk/test-csharp -c Release -p:OverSightSdk="$sdk"

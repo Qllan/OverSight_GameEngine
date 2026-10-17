@@ -15,9 +15,21 @@
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <OverSightLibDir Condition="'$(OverSightLibDir)' == ''">$(MSBuildThisFileDirectory)../../../target/release/</OverSightLibDir>
   </PropertyGroup>
+  <!-- NuGet package (dotnet pack; crates/oversight/sdk/package.py does it
+       for the SDK): the binding plus the native library under runtimes/,
+       which .NET loads on its own -->
+  <PropertyGroup>
+    <PackageId>OverSight.Net</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>OverSight</Authors>
+    <Description>OverSight 2D: a 2D game engine for C#, with the native library inside.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>gamedev;2d;engine</PackageTags>
+    <RepositoryUrl>https://github.com/Qllan/OverSight_GameEngine</RepositoryUrl>
+  </PropertyGroup>
   <ItemGroup>
-    <None Include="$(OverSightLibDir)oversight.dll" Condition="Exists('$(OverSightLibDir)oversight.dll')" CopyToOutputDirectory="PreserveNewest" Link="oversight.dll" />
-    <None Include="$(OverSightLibDir)liboversight.so" Condition="Exists('$(OverSightLibDir)liboversight.so')" CopyToOutputDirectory="PreserveNewest" Link="liboversight.so" />
-    <None Include="$(OverSightLibDir)liboversight.dylib" Condition="Exists('$(OverSightLibDir)liboversight.dylib')" CopyToOutputDirectory="PreserveNewest" Link="liboversight.dylib" />
+    <None Include="$(OverSightLibDir)oversight.dll" Condition="Exists('$(OverSightLibDir)oversight.dll')" CopyToOutputDirectory="PreserveNewest" Link="oversight.dll" Pack="true" PackagePath="runtimes/win-x64/native/" />
+    <None Include="$(OverSightLibDir)liboversight.so" Condition="Exists('$(OverSightLibDir)liboversight.so')" CopyToOutputDirectory="PreserveNewest" Link="liboversight.so" Pack="true" PackagePath="runtimes/linux-x64/native/" />
+    <None Include="$(OverSightLibDir)liboversight.dylib" Condition="Exists('$(OverSightLibDir)liboversight.dylib')" CopyToOutputDirectory="PreserveNewest" Link="liboversight.dylib" Pack="true" PackagePath="runtimes/osx/native/" />
   </ItemGroup>
 </Project>
