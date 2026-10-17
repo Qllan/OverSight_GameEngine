@@ -55,7 +55,7 @@ int main(void) {
     CHECK(red.r == 255 && red.g == 0);
 
     /* Particles: a burst of 5 dots with no rate, gone after their life */
-    _Static_assert(sizeof(OvEmitter) == 104, "OvEmitter layout matches the engine");
+    CHECK(sizeof(OvEmitter) == 104); /* layout matches the engine */
     OvEmitter cfg = ov_default_emitter();
     cfg.rate = 0;
     cfg.life_min = cfg.life_max = 0.5f;
