@@ -22,6 +22,9 @@ pub mod ffi;
 pub mod gamepad;
 #[cfg(feature = "gpu")]
 pub mod gpu;
+/// The wgpu the engine draws with, for hosts that share its device
+#[cfg(feature = "gpu")]
+pub use wgpu;
 pub mod hotreload;
 pub mod input;
 pub mod light;

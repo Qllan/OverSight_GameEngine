@@ -850,7 +850,17 @@ impl Gpu {
             ..Default::default()
         }))
         .map_err(|e| format!("no GPU device: {}", e))?;
+        Ok((Gpu::shared(device, queue, adapter_name, size), adapter))
+    }
 
+    /// A renderer on a device someone else made (the editor's, so its
+    /// panels can show the canvas without copying it); see `canvas`
+    pub fn shared(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        adapter_name: String,
+        size: (u32, u32),
+    ) -> Gpu {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("orst"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -1135,7 +1145,7 @@ impl Gpu {
         let target = make_target(&device, &texture_layout, &nearest, size);
         let (vertex_buffer, quad_buffer) =
             (vertex_buffer(&device, 4096), vertex_buffer(&device, 4096));
-        let gpu = Gpu {
+        Gpu {
             device,
             queue,
             adapter_name,
@@ -1174,8 +1184,13 @@ impl Gpu {
             batches: Vec::new(),
             passes: Vec::new(),
             split: true,
-        };
-        Ok((gpu, adapter))
+        }
+    }
+
+    /// The texture the last frame was drawn into (Rgba8Unorm, the canvas
+    /// size); a new one after the canvas changes size
+    pub fn canvas(&self) -> (&wgpu::Texture, &wgpu::TextureView) {
+        (&self.target.texture, &self.target.view)
     }
 
     #[cfg(feature = "window")]
@@ -3356,5 +3371,29 @@ mod tests {
             1,
             "packed again instead of a new page"
         );
+    }
+
+    #[test]
+    fn engines_draw_on_a_device_they_are_given() {
+        // The editor's device: made outside the engine
+        let Some(other) = gpu_engine(8, 8) else {
+            return;
+        };
+        let made = other.gpu.as_ref().unwrap();
+        let (device, queue) = (made.device.clone(), made.queue.clone());
+        let mut e = Engine::on_device(16, 16, device, queue).unwrap();
+        e.resize_canvas(32, 24);
+        e.set_space(Space::Screen);
+        e.begin_frame(Color::BLACK);
+        e.fill_rect(Rect::new(4.0, 4.0, 8.0, 8.0), Color::rgba(10, 200, 30, 255));
+        e.end_frame();
+        let (texture, _) = e.gpu_canvas().unwrap();
+        assert_eq!(
+            (texture.width(), texture.height()),
+            (32, 24),
+            "drawn at the new size"
+        );
+        assert_eq!(e.pixel(6, 6), Some(Color::rgba(10, 200, 30, 255)));
+        assert_eq!(e.pixel(20, 20), Some(Color::BLACK));
     }
 }

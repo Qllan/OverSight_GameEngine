@@ -217,6 +217,36 @@ impl Engine {
         Ok(engine)
     }
 
+    /// An engine without a window that draws on the caller's GPU device,
+    /// into a texture the caller shows (the editor's scene view)
+    #[cfg(feature = "gpu")]
+    pub fn on_device(
+        width: u32,
+        height: u32,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+    ) -> Result<Engine, String> {
+        let mut engine = Engine::headless(width, height)?;
+        engine.gpu = Some(crate::gpu::Gpu::shared(
+            device,
+            queue,
+            "shared".into(),
+            (width, height),
+        ));
+        Ok(engine)
+    }
+
+    /// The GPU texture of the last frame; None when drawing in software
+    #[cfg(feature = "gpu")]
+    pub fn gpu_canvas(&self) -> Option<(&wgpu::Texture, &wgpu::TextureView)> {
+        self.gpu.as_ref().map(|g| g.canvas())
+    }
+
+    /// Change the canvas size; the next frame is drawn at it
+    pub fn resize_canvas(&mut self, width: u32, height: u32) {
+        self.renderer.resize(width, height);
+    }
+
     /// "gpu: <adapter>" or "software"
     pub fn renderer_name(&self) -> String {
         #[cfg(feature = "gpu")]

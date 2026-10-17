@@ -162,6 +162,13 @@ impl Renderer {
         (self.canvas.width(), self.canvas.height())
     }
 
+    /// A new canvas size (an editor panel that was resized)
+    pub fn resize(&mut self, width: u32, height: u32) {
+        if self.size() != (width.max(1), height.max(1)) {
+            self.canvas = Pixmap::new(width.max(1), height.max(1)).expect("canvas size");
+        }
+    }
+
     pub fn begin(&mut self, clear: Color) {
         self.clear_color = clear;
         self.commands.clear();
