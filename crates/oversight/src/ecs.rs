@@ -346,6 +346,135 @@ impl World {
             self.despawn(e);
         }
     }
+
+    /// Append the whole world as bytes: entities with their generations
+    /// and free list, then each component type by name with its rows in
+    /// order. Loading them gives back the same ids and the same order.
+    pub fn save(&self, out: &mut Vec<u8>) {
+        let n = self.generations.len() as u32;
+        put_u32(out, n);
+        for i in 0..n as usize {
+            put_u32(out, self.generations[i]);
+            out.push(self.alive[i] as u8);
+        }
+        put_u32(out, self.free.len() as u32);
+        for &i in &self.free {
+            put_u32(out, i);
+        }
+        put_u32(out, self.storages.len() as u32);
+        for s in &self.storages {
+            put_u32(out, s.name.len() as u32);
+            out.extend_from_slice(s.name.as_bytes());
+            put_u32(out, s.size);
+            put_u32(out, s.align);
+            put_u32(out, s.dense.len() as u32);
+            for (row, &index) in s.dense.iter().enumerate() {
+                put_u32(out, index);
+                out.extend_from_slice(s.row(row));
+            }
+        }
+    }
+
+    /// Replace the world with one saved by `save`. Component types are
+    /// matched by name: ids registered here keep their numbers, types only
+    /// in the saved world are registered, types only here end up empty. On
+    /// an error (damaged bytes, a type with another size) nothing changes.
+    pub fn load(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let mut r = Reader { bytes, at: 0 };
+        let mut next = World {
+            storages: self
+                .storages
+                .iter()
+                .map(|s| Storage::new(&s.name, s.size, s.align))
+                .collect(),
+            by_name: self.by_name.clone(),
+            ..World::default()
+        };
+        let n = r.u32()? as usize;
+        // Every entity takes 5 bytes: a damaged count fails here, not in an
+        // allocation of gigabytes
+        r.need(n.saturating_mul(5))?;
+        for _ in 0..n {
+            next.generations.push(r.u32()?);
+            next.alive.push(r.u8()? != 0);
+        }
+        next.count = next.alive.iter().filter(|&&a| a).count() as u32;
+        let free = r.u32()? as usize;
+        r.need(free.saturating_mul(4))?;
+        for _ in 0..free {
+            let i = r.u32()?;
+            if i as usize >= n || next.alive[i as usize] {
+                return Err(format!("snapshot: free index {i} is not a dead entity"));
+            }
+            next.free.push(i);
+        }
+        let types = r.u32()?;
+        for _ in 0..types {
+            let len = r.u32()? as usize;
+            let name = std::str::from_utf8(r.take(len)?)
+                .map_err(|_| "snapshot: a component name is not UTF-8")?;
+            let (size, align) = (r.u32()?, r.u32()?);
+            let id = next
+                .component(name, size, align)
+                .map_err(|e| format!("snapshot: {e}"))?;
+            let rows = r.u32()? as usize;
+            r.need(rows.saturating_mul(4 + size as usize))?;
+            for _ in 0..rows {
+                let index = r.u32()?;
+                if index as usize >= n || !next.alive[index as usize] {
+                    return Err(format!(
+                        "snapshot: {name} on index {index}, which is not alive"
+                    ));
+                }
+                let data = r.take(size as usize)?;
+                next.storages[id as usize - 1].insert(index, data);
+            }
+        }
+        if r.at != bytes.len() {
+            return Err("snapshot: bytes left over at the end".into());
+        }
+        *self = next;
+        Ok(())
+    }
+}
+
+fn put_u32(out: &mut Vec<u8>, v: u32) {
+    out.extend_from_slice(&v.to_le_bytes());
+}
+
+/// Reads a snapshot, every read checked against the end
+pub(crate) struct Reader<'a> {
+    pub bytes: &'a [u8],
+    pub at: usize,
+}
+
+impl<'a> Reader<'a> {
+    pub fn need(&self, n: usize) -> Result<(), String> {
+        if self.bytes.len() - self.at < n {
+            Err("snapshot: cut short".into())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
+        self.need(n)?;
+        let s = &self.bytes[self.at..self.at + n];
+        self.at += n;
+        Ok(s)
+    }
+
+    pub fn u8(&mut self) -> Result<u8, String> {
+        Ok(self.take(1)?[0])
+    }
+
+    pub fn u32(&mut self) -> Result<u32, String> {
+        Ok(u32::from_le_bytes(self.take(4)?.try_into().unwrap()))
+    }
+
+    pub fn u64(&mut self) -> Result<u64, String> {
+        Ok(u64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
 }
 
 #[cfg(test)]
@@ -460,5 +589,67 @@ mod tests {
         }
         assert!(w.component("Odd", 4, 3).is_err());
         assert!(w.component("Huge", MAX_COMPONENT_SIZE + 1, 4).is_err());
+    }
+
+    #[test]
+    fn save_and_load_give_back_the_same_world() {
+        let mut w = World::new();
+        let p = w.component("Pos", 8, 4).unwrap();
+        let t = w.component("Tag", 0, 1).unwrap();
+        let es: Vec<Entity> = (0..5).map(|_| w.spawn()).collect();
+        for (i, &e) in es.iter().enumerate() {
+            w.set(e, p, &pos(i as f32, 1.0));
+        }
+        w.set(es[3], t, &[]);
+        w.despawn(es[1]);
+        let mut bytes = Vec::new();
+        w.save(&mut bytes);
+
+        // Carry on, then roll back: everything is as it was
+        let saved_query = w.query(&[p]);
+        w.despawn(es[0]);
+        w.set(es[2], p, &pos(9.0, 9.0));
+        let later = w.spawn();
+        w.load(&bytes).unwrap();
+        assert_eq!(w.query(&[p]), saved_query);
+        assert_eq!(read_pos(&w, es[2], p), (2.0, 1.0));
+        assert!(w.has(es[3], t) && !w.alive(es[1]) && !w.alive(later));
+        assert_eq!(w.count(), 4);
+        // Ids handed out after a load match the ones after the save
+        let mut copy = World::new();
+        copy.load(&bytes).unwrap();
+        assert_eq!(copy.spawn(), w.spawn());
+
+        let mut again = Vec::new();
+        w.load(&bytes).unwrap();
+        w.save(&mut again);
+        assert_eq!(again, bytes, "save after load is byte for byte the same");
+    }
+
+    #[test]
+    fn a_bad_snapshot_changes_nothing() {
+        let mut w = World::new();
+        let p = w.component("Pos", 8, 4).unwrap();
+        let e = w.spawn();
+        w.set(e, p, &pos(1.0, 2.0));
+        let mut bytes = Vec::new();
+        w.save(&mut bytes);
+
+        for cut in [0, 3, 10, bytes.len() - 1] {
+            assert!(w.load(&bytes[..cut]).is_err(), "cut at {cut}");
+        }
+        let mut longer = bytes.clone();
+        longer.push(0);
+        assert!(w.load(&longer).is_err());
+        let mut huge = bytes.clone();
+        huge[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(w.load(&huge).is_err());
+
+        // The same name with another size is refused
+        let mut other = World::new();
+        other.component("Pos", 12, 4).unwrap();
+        assert!(other.load(&bytes).is_err());
+        assert_eq!(read_pos(&w, e, p), (1.0, 2.0));
+        assert_eq!(w.count(), 1);
     }
 }

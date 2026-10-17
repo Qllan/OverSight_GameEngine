@@ -101,6 +101,17 @@ int main(void) {
     CHECK(ov_despawn(e, ents[1]) && !ov_alive(e, ents[1]) && ov_get(e, ents[1], pos) == NULL);
     CHECK(ov_query(e, &pos, 1, NULL, 0) == 2 && ov_entity_count(e) == 2);
 
+    /* Snapshot, change the world, restore: back as it was */
+    size_t size = ov_snapshot(e, NULL, 0);
+    uint8_t snap[1024];
+    CHECK(size <= sizeof snap && ov_snapshot(e, snap, sizeof snap) == size);
+    uint64_t hash = ov_state_hash(e);
+    ov_despawn(e, ents[0]);
+    ov_random_u32(e);
+    CHECK(ov_state_hash(e) != hash);
+    CHECK(ov_restore(e, snap, size) && ov_state_hash(e) == hash && ov_alive(e, ents[0]));
+    CHECK(!ov_restore(e, snap, 3) && ov_alive(e, ents[0]));
+
     ov_engine_destroy(e);
     printf("smoke_c: ok\n");
     return 0;

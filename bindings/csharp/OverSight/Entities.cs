@@ -106,6 +106,25 @@ public sealed partial class Engine
     /// <summary>Despawn everything; component types stay</summary>
     public void ClearWorld() => Native.ov_world_clear(Handle);
 
+    /// <summary>Entities, components, random generator and tick counter as
+    /// bytes: save them, or Restore them to continue exactly from here</summary>
+    public byte[] Snapshot()
+    {
+        var bytes = new byte[(int)Native.ov_snapshot(Handle, null, 0)];
+        Native.ov_snapshot(Handle, bytes, (nuint)bytes.Length);
+        return bytes;
+    }
+
+    /// <summary>Continue from a snapshot; throws (and changes nothing) on bad bytes</summary>
+    public void Restore(byte[] snapshot)
+    {
+        if (!Native.ov_restore(Handle, snapshot, (nuint)snapshot.Length))
+            throw new OverSightException("restore: " + LastError);
+    }
+
+    /// <summary>Fingerprint of the snapshot: games running in step have equal hashes</summary>
+    public ulong StateHash => Native.ov_state_hash(Handle);
+
     /// <summary>Entities that have all of the components (none: every entity)</summary>
     public Entity[] Query(params uint[] components)
     {

@@ -102,7 +102,15 @@ Check(engine.Get<Pos>(a).X == 1 && engine.Get<Pos>(a).Y == 2, "ForEach writes in
 engine.Get<Pos>(b).X = 7;
 Check(engine.Get<Pos>(b).X == 7 && !engine.Has<Vel>(b), "Get by ref");
 Check(engine.Query<Pos>().Length == 2 && engine.Query<Pos, Vel>().Single() == a, "queries");
+var saved = engine.Snapshot();
+ulong hash = engine.StateHash;
 Check(engine.Despawn(a) && !engine.Alive(a) && !engine.TryGet<Pos>(a, out _), "despawn");
+Check(engine.StateHash != hash, "the hash follows the state");
+engine.Restore(saved);
+Check(engine.Alive(a) && engine.Get<Pos>(a).X == 1 && engine.StateHash == hash, "restore");
+try { engine.Restore(new byte[] { 1, 2, 3 }); Check(false, "bad snapshot throws"); }
+catch (OverSightException) { Check(engine.Alive(a), "a failed restore changes nothing"); }
+engine.Despawn(a);
 var n = engine.Spawn();
 engine.Set(n, new Named { D = 1.5, B = 2 }); // 16 bytes aligned to 8
 Check(engine.Get<Named>(n).D == 1.5 && engine.Get<Named>(n).B == 2, "named component");

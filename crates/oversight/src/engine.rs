@@ -46,6 +46,9 @@ pub struct DrawState {
     pub space: Space,
 }
 
+/// Start of every snapshot; the digit changes when the format does
+const SNAPSHOT_MAGIC: &[u8; 4] = b"OVS1";
+
 pub struct Engine {
     pub renderer: Renderer,
     pub textures: Store<Texture>,
@@ -232,6 +235,43 @@ impl Engine {
             }
         }
         !self.quit
+    }
+
+    /// The game state as bytes: the entities and components, the random
+    /// generator and the tick counter. Restoring it continues the game
+    /// exactly from there (saves, rollback, replays). Textures, maps and
+    /// sounds are not in it: they are assets the game loads by itself.
+    pub fn snapshot(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(64);
+        out.extend_from_slice(SNAPSHOT_MAGIC);
+        out.extend_from_slice(&self.rng.state().to_le_bytes());
+        out.extend_from_slice(&self.time.tick_count.to_le_bytes());
+        self.world.save(&mut out);
+        out
+    }
+
+    /// Go back to a snapshot; on an error nothing changes
+    pub fn restore(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let mut r = crate::ecs::Reader { bytes, at: 0 };
+        if r.take(SNAPSHOT_MAGIC.len()).ok() != Some(&SNAPSHOT_MAGIC[..]) {
+            return Err("not an OverSight snapshot (or from another version)".into());
+        }
+        let rng = r.u64()?;
+        let ticks = r.u64()?;
+        self.world.load(&bytes[r.at..])?;
+        self.rng = Rng::new(rng);
+        self.time.tick_count = ticks;
+        Ok(())
+    }
+
+    /// A 64-bit fingerprint of the snapshot: two machines running the same
+    /// game in step have the same hash each tick, so a difference shows
+    /// where they went apart
+    pub fn state_hash(&self) -> u64 {
+        // FNV-1a
+        self.snapshot().iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
+            (h ^ b as u64).wrapping_mul(0x0100_0000_01b3)
+        })
     }
 
     /// Make the next `poll` return false
@@ -815,6 +855,60 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tiny game: entities drift by a random velocity each tick, and one
+    /// in ten ticks a new one spawns
+    fn simulate(e: &mut Engine, pos: u32, ticks: u32) {
+        for _ in 0..ticks {
+            e.time.tick_count += 1;
+            for ent in e.world.query(&[pos]) {
+                let dx = e.rng.range(-1.0, 1.0);
+                let p = e.world.ptr(ent, pos).unwrap() as *mut f32;
+                unsafe { *p += dx };
+            }
+            if e.rng.int(0, 9) == 0 {
+                let ent = e.world.spawn();
+                e.world.set(ent, pos, &[]);
+            }
+        }
+    }
+
+    #[test]
+    fn rollback_replays_the_same_game() {
+        let mut e = Engine::headless(8, 8).unwrap();
+        let pos = e.world.component("Pos", 4, 4).unwrap();
+        e.rng = Rng::new(5);
+        simulate(&mut e, pos, 50);
+        let saved = e.snapshot();
+        let saved_hash = e.state_hash();
+        simulate(&mut e, pos, 100);
+        let first_run = e.state_hash();
+        assert_ne!(first_run, saved_hash);
+
+        e.restore(&saved).unwrap();
+        assert_eq!(e.state_hash(), saved_hash);
+        assert_eq!(e.time.tick_count, 50);
+        simulate(&mut e, pos, 100);
+        assert_eq!(
+            e.state_hash(),
+            first_run,
+            "the same ticks from the same state"
+        );
+
+        // A fresh engine given the snapshot plays the same way
+        let mut other = Engine::headless(8, 8).unwrap();
+        other.restore(&saved).unwrap();
+        simulate(&mut other, pos, 100);
+        assert_eq!(other.state_hash(), first_run);
+
+        assert!(e.restore(b"nope").is_err());
+        assert!(e.restore(&saved[..saved.len() - 1]).is_err());
+        assert_eq!(
+            e.state_hash(),
+            first_run,
+            "a failed restore changes nothing"
+        );
+    }
 
     const RED: Color = Color::rgba(255, 0, 0, 255);
     const BLUE: Color = Color::rgba(0, 0, 255, 255);

@@ -343,6 +343,16 @@ bool ov_remove(OvEngine *e, OvEntity entity, uint32_t component);
 uint32_t ov_query(OvEngine *e, const uint32_t *components, uint32_t count, OvEntity *out, uint32_t capacity);
 void ov_world_clear(OvEngine *e); /* despawn everything; component types stay */
 
+/* Snapshots: the entities and components, the random generator and the
+ * tick counter as bytes. Restoring one continues the game exactly from
+ * there: saves, rollback, replays. Assets (textures, maps, sounds) are not
+ * in it. ov_snapshot returns the size and copies the bytes only when they
+ * fit, so call it with NULL first to learn the size. */
+size_t ov_snapshot(OvEngine *e, uint8_t *buf, size_t capacity);
+bool ov_restore(OvEngine *e, const uint8_t *data, size_t size); /* false + ov_last_error: nothing changed */
+/* Fingerprint of the snapshot: games running in step have equal hashes */
+uint64_t ov_state_hash(OvEngine *e);
+
 /* --- textures and fonts --- */
 uint32_t ov_load_texture(OvEngine *e, const char *path); /* PNG, JPEG */
 uint32_t ov_texture_from_rgba(OvEngine *e, uint32_t width, uint32_t height, const uint8_t *rgba);

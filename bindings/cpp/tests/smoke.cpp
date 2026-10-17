@@ -130,6 +130,10 @@ int main() {
     CHECK(engine.get<Pos>(b)->x == 5 && engine.get<Vel>(b) == nullptr);
     CHECK((engine.query<Pos>().size() == 2 && engine.query<Pos, Vel>().size() == 1));
     CHECK(engine.remove<Vel>(a) && !engine.has<Vel>(a));
+    auto saved = engine.snapshot();
+    engine.despawn(b);
+    engine.restore(saved);
+    CHECK(engine.alive(b) && engine.get<Pos>(b)->x == 5);
     engine.clear_world();
     CHECK(engine.entity_count() == 0 && !engine.alive(a));
 

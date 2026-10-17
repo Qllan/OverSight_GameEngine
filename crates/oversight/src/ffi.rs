@@ -400,6 +400,35 @@ pub unsafe extern "C" fn ov_query(
     found.len() as u32
 }
 
+/// # Safety
+/// `buf` is NULL or has room for `capacity` bytes
+#[no_mangle]
+pub unsafe extern "C" fn ov_snapshot(e: *mut OvEngine, buf: *mut u8, capacity: usize) -> usize {
+    let bytes = engine!(e, 0).snapshot();
+    if !buf.is_null() && capacity >= bytes.len() {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    }
+    bytes.len()
+}
+
+/// # Safety
+/// `data` points at `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn ov_restore(e: *mut OvEngine, data: *const u8, size: usize) -> bool {
+    let engine = engine!(e, false);
+    let bytes = if data.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(data, size)
+    };
+    result(engine.restore(bytes).map(|_| true), false)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_state_hash(e: *mut OvEngine) -> u64 {
+    engine!(e, 0).state_hash()
+}
+
 #[no_mangle]
 pub extern "C" fn ov_world_clear(e: *mut OvEngine) {
     engine!(e).world.clear();

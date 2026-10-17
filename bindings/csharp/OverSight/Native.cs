@@ -70,6 +70,9 @@ internal static class Native
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_remove(IntPtr e, ulong entity, uint component);
     [DllImport(Lib)] internal static extern uint ov_query(IntPtr e, uint[] components, uint count, ulong[]? @out, uint capacity);
     [DllImport(Lib)] internal static extern void ov_world_clear(IntPtr e);
+    [DllImport(Lib)] internal static extern nuint ov_snapshot(IntPtr e, byte[]? buf, nuint capacity);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_restore(IntPtr e, byte[] data, nuint size);
+    [DllImport(Lib)] internal static extern ulong ov_state_hash(IntPtr e);
     [DllImport(Lib)] internal static extern uint ov_load_texture(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Lib)] internal static extern uint ov_texture_from_rgba(IntPtr e, uint width, uint height, byte[] rgba);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_texture_size(IntPtr e, uint texture, out uint w, out uint h);

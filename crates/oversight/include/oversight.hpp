@@ -651,6 +651,17 @@ public:
         for (Entity en : query<Ts...>()) each_one<Ts...>(f, en, ids, std::index_sequence_for<Ts...>{});
     }
     void clear_world() { ov_world_clear(e_); }
+    /// Entities, components, random generator and tick counter as bytes
+    std::vector<uint8_t> snapshot() const {
+        std::vector<uint8_t> bytes(ov_snapshot(e_, nullptr, 0));
+        ov_snapshot(e_, bytes.data(), bytes.size());
+        return bytes;
+    }
+    /// Continue from a snapshot; throws (and changes nothing) on bad bytes
+    void restore(const std::vector<uint8_t> &bytes) {
+        if (!ov_restore(e_, bytes.data(), bytes.size())) throw Error(ov_last_error());
+    }
+    uint64_t state_hash() const { return ov_state_hash(e_); }
 
     // sound
     void stop_voice(uint32_t voice) { ov_stop_voice(e_, voice); }
