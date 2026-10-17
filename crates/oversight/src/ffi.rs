@@ -518,6 +518,51 @@ pub extern "C" fn ov_scene_cover(e: *mut OvEngine) -> f32 {
     engine!(e, 0.0).scenes.cover()
 }
 
+/// # Safety
+/// `points` is NULL or has `count` points
+#[no_mangle]
+pub unsafe extern "C" fn ov_create_polygon(
+    e: *mut OvEngine,
+    points: *const Vec2,
+    count: u32,
+) -> u32 {
+    let engine = engine!(e, 0);
+    let pts = if points.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(points, count as usize)
+    };
+    result(engine.create_polygon(pts), 0)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_free_polygon(e: *mut OvEngine, polygon: u32) {
+    engine!(e).polygons.remove(polygon);
+}
+
+/// # Safety
+/// `out` is NULL or points to an OvOverlap
+#[no_mangle]
+pub unsafe extern "C" fn ov_entity_overlap(
+    e: *mut OvEngine,
+    a: u64,
+    b: u64,
+    out: *mut crate::shapes::Overlap,
+) -> bool {
+    let Some(o) = engine!(e, false).entity_overlap(a, b) else {
+        return false;
+    };
+    if let Some(out) = out.as_mut() {
+        *out = o;
+    }
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn ov_debug_colliders(e: *mut OvEngine) {
+    engine!(e).debug_colliders();
+}
+
 #[no_mangle]
 pub extern "C" fn ov_world_clear(e: *mut OvEngine) {
     engine!(e).world.clear();
@@ -2180,6 +2225,93 @@ mod tests {
             assert!(ov_bindings_load(e, c"jump = key:Enter".as_ptr()));
             ov_get_binding(e, jump, 0, &mut got);
             assert_eq!(got.kind, 1);
+            ov_engine_destroy(e);
+        }
+    }
+
+    #[test]
+    fn colliders_follow_their_transforms() {
+        use crate::components::*;
+        let e = headless(64, 64);
+        unsafe {
+            let put = |pos: Vec2, rotation: f32, c: Collider| {
+                let ent = ov_spawn(e);
+                let t = Transform {
+                    pos,
+                    rotation,
+                    ..Transform::default()
+                };
+                ov_set(e, ent, TRANSFORM, &t as *const _ as *const c_void);
+                ov_set(e, ent, COLLIDER, &c as *const _ as *const c_void);
+                ent
+            };
+            let wall = put(
+                Vec2::new(10.0, 10.0),
+                0.0,
+                Collider {
+                    size: Vec2::new(10.0, 10.0),
+                    ..Collider::default()
+                },
+            );
+            let ball = put(
+                Vec2::new(17.0, 10.0),
+                0.0,
+                Collider {
+                    kind: COLLIDER_CIRCLE,
+                    radius: 3.0,
+                    ..Collider::default()
+                },
+            );
+            let mut o = crate::shapes::Overlap::default();
+            assert!(ov_entity_overlap(e, wall, ball, &mut o));
+            assert!(
+                (o.normal.x - 1.0).abs() < 1e-4 && (o.depth - 1.0).abs() < 1e-4,
+                "{o:?}"
+            );
+
+            // A triangle: the offset turns with the entity
+            let tri = [
+                Vec2::new(0.0, -2.0),
+                Vec2::new(2.0, 2.0),
+                Vec2::new(-2.0, 2.0),
+            ];
+            let id = ov_create_polygon(e, tri.as_ptr(), 3);
+            assert!(id != 0);
+            let bent = [
+                Vec2::new(0.0, 0.0),
+                Vec2::new(4.0, 0.0),
+                Vec2::new(2.0, 1.0),
+                Vec2::new(4.0, 4.0),
+            ];
+            assert_eq!(ov_create_polygon(e, bent.as_ptr(), 4), 0, "concave");
+            let poly = Collider {
+                kind: COLLIDER_POLYGON,
+                polygon: id,
+                offset: Vec2::new(10.0, 0.0),
+                ..Collider::default()
+            };
+            let spun = put(Vec2::new(40.0, 40.0), std::f32::consts::FRAC_PI_2, poly);
+            let probe = put(
+                Vec2::new(40.0, 50.0),
+                0.0,
+                Collider {
+                    kind: COLLIDER_CIRCLE,
+                    radius: 1.0,
+                    ..Collider::default()
+                },
+            );
+            assert!(
+                ov_entity_overlap(e, spun, probe, std::ptr::null_mut()),
+                "offset (10, 0) turned a quarter is (0, 10)"
+            );
+            assert!(!ov_entity_overlap(e, spun, wall, std::ptr::null_mut()));
+
+            // Outlines in the debug overlay
+            ov_set_debug(e, true);
+            ov_begin_frame(e, Color::BLACK);
+            ov_debug_colliders(e);
+            ov_end_frame(e);
+            assert_ne!(ov_pixel(e, 5, 8), Color::BLACK, "the wall's left edge");
             ov_engine_destroy(e);
         }
     }

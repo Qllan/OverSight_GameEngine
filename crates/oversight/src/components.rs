@@ -5,12 +5,18 @@
 
 use crate::collision::Contacts;
 use crate::ecs::World;
+use crate::shapes::{rotate, Shape};
 use crate::types::{Color, Rect, Vec2};
 
 pub const TRANSFORM: u32 = 1;
 pub const VELOCITY: u32 = 2;
 pub const SPRITE_RENDERER: u32 = 3;
 pub const BODY: u32 = 4;
+pub const COLLIDER: u32 = 5;
+
+pub const COLLIDER_BOX: u32 = 0;
+pub const COLLIDER_CIRCLE: u32 = 1;
+pub const COLLIDER_POLYGON: u32 = 2;
 
 /// Where an entity is
 #[repr(C)]
@@ -87,6 +93,81 @@ pub struct Body {
     pub contacts: Contacts,
 }
 
+/// A shape that collides with other colliders. It moves, turns and
+/// scales with the entity's Transform.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Collider {
+    /// COLLIDER_BOX, COLLIDER_CIRCLE or COLLIDER_POLYGON
+    pub kind: u32,
+    /// A polygon made with create_polygon (COLLIDER_POLYGON)
+    pub polygon: u32,
+    /// Centre of the shape from the position
+    pub offset: Vec2,
+    /// Box width and height
+    pub size: Vec2,
+    pub radius: f32,
+    /// What it is (bits)
+    pub layer: u32,
+    /// What it collides with: two colliders meet when each one's mask has
+    /// a bit of the other's layer
+    pub mask: u32,
+    /// Reports overlaps but never pushes
+    pub trigger: u8,
+    pub _pad: [u8; 3],
+}
+
+impl Default for Collider {
+    fn default() -> Self {
+        Collider {
+            kind: COLLIDER_BOX,
+            polygon: 0,
+            offset: Vec2::default(),
+            size: Vec2::default(),
+            radius: 0.0,
+            layer: 1,
+            mask: u32::MAX,
+            trigger: 0,
+            _pad: [0; 3],
+        }
+    }
+}
+
+impl Collider {
+    /// Whether the two can collide at all
+    pub fn meets(&self, other: &Collider) -> bool {
+        self.mask & other.layer != 0 && other.mask & self.layer != 0
+    }
+
+    /// The shape in the world for this transform; None for a polygon id
+    /// that does not exist
+    pub fn shape(
+        &self,
+        t: &Transform,
+        polygon: impl Fn(u32) -> Option<Vec<Vec2>>,
+    ) -> Option<Shape> {
+        let off = rotate(
+            Vec2::new(self.offset.x * t.scale.x, self.offset.y * t.scale.y),
+            t.rotation,
+        );
+        let center = Vec2::new(t.pos.x + off.x, t.pos.y + off.y);
+        match self.kind {
+            COLLIDER_CIRCLE => Some(Shape::Circle {
+                center,
+                radius: self.radius * t.scale.x.abs().max(t.scale.y.abs()),
+            }),
+            COLLIDER_POLYGON => {
+                polygon(self.polygon).map(|p| Shape::polygon(&p, center, t.rotation, t.scale))
+            }
+            _ => Some(Shape::rect(
+                center,
+                Vec2::new(self.size.x * t.scale.x.abs(), self.size.y * t.scale.y.abs()),
+                t.rotation,
+            )),
+        }
+    }
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -99,6 +180,7 @@ pub fn register(world: &mut World) {
             4,
         ),
         world.component("Body", size(std::mem::size_of::<Body>()), 4),
+        world.component("Collider", size(std::mem::size_of::<Collider>()), 4),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -106,7 +188,7 @@ pub fn register(world: &mut World) {
         .collect();
     debug_assert_eq!(
         ids,
-        [TRANSFORM, VELOCITY, SPRITE_RENDERER, BODY],
+        [TRANSFORM, VELOCITY, SPRITE_RENDERER, BODY, COLLIDER],
         "built-ins come first"
     );
 }
@@ -124,6 +206,7 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         VELOCITY => Some(bytes(Velocity::default())),
         SPRITE_RENDERER => Some(bytes(SpriteRenderer::default())),
         BODY => Some(bytes(Body::default())),
+        COLLIDER => Some(bytes(Collider::default())),
         _ => None,
     }
 }
@@ -154,6 +237,7 @@ mod tests {
         assert_eq!(std::mem::size_of::<Velocity>(), 12);
         assert_eq!(std::mem::size_of::<SpriteRenderer>(), 40);
         assert_eq!(std::mem::size_of::<Body>(), 24);
+        assert_eq!(std::mem::size_of::<Collider>(), 40);
         let mut w = World::new();
         register(&mut w);
         assert_eq!(w.component_id("Body"), Some(BODY));

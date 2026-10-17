@@ -110,6 +110,30 @@ struct Body : OvBody {
     constexpr Body() : OvBody{{0, 0, 0, 0}, 0, {false, false, false, false}} {}
     constexpr Body(Rect bounds, uint32_t tilemap = 0) : OvBody{bounds, tilemap, {false, false, false, false}} {}
 };
+struct Collider : OvCollider {
+    constexpr Collider() : OvCollider{OV_COLLIDER_BOX, 0, {0, 0}, {0, 0}, 0, 1, 0xFFFFFFFFu, 0, {0, 0, 0}} {}
+    static constexpr Collider box(Vec2 size, Vec2 offset = {}) {
+        Collider c;
+        c.size = size;
+        c.offset = offset;
+        return c;
+    }
+    static constexpr Collider circle(float radius, Vec2 offset = {}) {
+        Collider c;
+        c.kind = OV_COLLIDER_CIRCLE;
+        c.radius = radius;
+        c.offset = offset;
+        return c;
+    }
+    static constexpr Collider from_polygon(uint32_t id, Vec2 offset = {}) {
+        Collider c;
+        c.kind = OV_COLLIDER_POLYGON;
+        c.polygon = id;
+        c.offset = offset;
+        return c;
+    }
+};
+using Overlap = OvOverlap;
 template <>
 struct ComponentName<Transform> { static constexpr const char *value = "Transform"; };
 template <>
@@ -118,6 +142,8 @@ template <>
 struct ComponentName<SpriteRenderer> { static constexpr const char *value = "SpriteRenderer"; };
 template <>
 struct ComponentName<Body> { static constexpr const char *value = "Body"; };
+template <>
+struct ComponentName<Collider> { static constexpr const char *value = "Collider"; };
 
 enum class Transition : int32_t { Cut = OV_TRANSITION_CUT, Fade = OV_TRANSITION_FADE, Wipe = OV_TRANSITION_WIPE };
 enum class Space : int32_t { World = OV_SPACE_WORLD, Screen = OV_SPACE_SCREEN };
@@ -698,6 +724,20 @@ public:
     /// Move entities with Transform + Velocity by dt; with a Body on a tile
     /// map they slide along walls
     void update_motion(float dt) { ov_update_motion(e_, dt); }
+    /// A convex polygon for colliders, 3 to 64 corners in order
+    uint32_t create_polygon(const std::vector<Vec2> &points) {
+        uint32_t id = ov_create_polygon(e_, points.data(), uint32_t(points.size()));
+        if (id == 0) throw Error(ov_last_error());
+        return id;
+    }
+    void free_polygon(uint32_t id) { ov_free_polygon(e_, id); }
+    /// How the colliders of two entities overlap (layers aside)
+    std::optional<Overlap> overlap(Entity a, Entity b) const {
+        Overlap o{};
+        if (!ov_entity_overlap(e_, a, b, &o)) return std::nullopt;
+        return o;
+    }
+    void debug_colliders() { ov_debug_colliders(e_); }
     /// Draw every entity with Transform + SpriteRenderer
     void draw_entities() { ov_draw_entities(e_); }
     /// Entities, components, random generator and tick counter as bytes

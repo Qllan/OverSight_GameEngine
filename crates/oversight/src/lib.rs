@@ -26,6 +26,7 @@ pub mod particles;
 pub mod render;
 pub mod rng;
 pub mod scenes;
+pub mod shapes;
 pub mod text;
 pub mod texture;
 pub mod tiled;

@@ -378,3 +378,44 @@ public struct Binding : IEquatable<Binding>
     public static bool operator ==(Binding a, Binding b) => a.Equals(b);
     public static bool operator !=(Binding a, Binding b) => !a.Equals(b);
 }
+
+public enum ColliderKind : uint { Box = 0, Circle = 1, Polygon = 2 }
+
+/// <summary>A shape that collides with other colliders; it moves, turns and
+/// scales with the Transform. Create it with Collider.Box, Circle or Polygon.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Collider
+{
+    public ColliderKind Kind;
+    /// <summary>From Engine.CreatePolygon</summary>
+    public uint Polygon;
+    /// <summary>Centre of the shape from the position</summary>
+    public Vec2 Offset;
+    public Vec2 Size;
+    public float Radius;
+    /// <summary>What it is (bits); default 1</summary>
+    public uint Layer;
+    /// <summary>What it meets: each one's mask has a bit of the other's layer; default all</summary>
+    public uint Mask;
+    private byte trigger, pad0, pad1, pad2;
+
+    public Collider() { Layer = 1; Mask = uint.MaxValue; }
+
+    /// <summary>Reports overlaps, never pushes</summary>
+    public bool Trigger { readonly get => trigger != 0; set => trigger = (byte)(value ? 1 : 0); }
+
+    public static Collider Box(Vec2 size, Vec2 offset = default) => new() { Size = size, Offset = offset };
+    public static Collider Circle(float radius, Vec2 offset = default) =>
+        new() { Kind = ColliderKind.Circle, Radius = radius, Offset = offset };
+    public static Collider FromPolygon(uint polygon, Vec2 offset = default) =>
+        new() { Kind = ColliderKind.Polygon, Polygon = polygon, Offset = offset };
+}
+
+/// <summary>How two shapes overlap: move the second by Normal * Depth and they only touch</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Overlap
+{
+    /// <summary>From the first towards the second</summary>
+    public Vec2 Normal;
+    public float Depth;
+}

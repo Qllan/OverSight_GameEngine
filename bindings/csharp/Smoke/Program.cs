@@ -132,6 +132,20 @@ engine.DrawEntities();
 engine.EndFrame();
 Check(engine.Pixel(13, 21) == new Color(255, 0, 0), $"DrawEntities {engine.Pixel(13, 21)}");
 
+// Colliders: a box and a circle overlap along x
+var wall = engine.Spawn();
+engine.Set(wall, new Transform(new Vec2(100, 100)));
+engine.Set(wall, Collider.Box(new Vec2(10, 10)));
+var ball = engine.Spawn();
+engine.Set(ball, new Transform(new Vec2(107, 100)));
+engine.Set(ball, Collider.Circle(3));
+Check(engine.EntityOverlap(wall, ball) is { Depth: > 0.99f and < 1.01f } o && o.Normal.X > 0.99f, "EntityOverlap");
+Check(engine.Component<Collider>() == 5 && Marshal.SizeOf<Collider>() == 40, "Collider id and layout");
+uint tri = engine.CreatePolygon(new Vec2(0, -2), new Vec2(2, 2), new Vec2(-2, 2));
+Check(tri != 0, "CreatePolygon");
+engine.Despawn(wall);
+engine.Despawn(ball);
+
 // Scenes: a cut switches at the next frame, a push keeps the scene below
 Check(engine.GoScene(1, Transition.Cut) && engine.Scene == 0, "scene changes at the next frame");
 engine.Poll();

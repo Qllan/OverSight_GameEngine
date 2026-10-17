@@ -55,6 +55,8 @@ pub struct Engine {
     pub fonts: Store<Font>,
     pub tilemaps: Store<Tilemap>,
     pub emitters: Store<Emitter>,
+    /// Convex polygons for colliders, in local units
+    pub polygons: Store<Vec<Vec2>>,
     pub state: DrawState,
     pub input: Input,
     /// Named actions bound to keys, buttons and sticks
@@ -114,6 +116,7 @@ impl Engine {
             fonts,
             tilemaps: Store::default(),
             emitters: Store::default(),
+            polygons: Store::default(),
             state: DrawState::default(),
             input: Input::default(),
             actions: Default::default(),
@@ -335,6 +338,60 @@ impl Engine {
             }
             t.rotation += v.angular * dt;
             write(&mut self.world, ent, TRANSFORM, &t);
+        }
+    }
+
+    /// A convex polygon for colliders (3 to 64 corners in order)
+    pub fn create_polygon(&mut self, points: &[Vec2]) -> Result<u32, String> {
+        if points.len() > 64 {
+            return Err(format!(
+                "a polygon has at most 64 corners, not {}",
+                points.len()
+            ));
+        }
+        if !crate::shapes::is_convex(points) {
+            return Err("a collider polygon must be convex, with corners in order".into());
+        }
+        Ok(self.polygons.insert(points.to_vec()))
+    }
+
+    /// The entity's collider in the world (needs a Transform and a Collider)
+    pub fn collider_shape(&self, entity: u64) -> Option<crate::shapes::Shape> {
+        use crate::components::{read, Collider, Transform, COLLIDER, TRANSFORM};
+        let t = read::<Transform>(&self.world, entity, TRANSFORM)?;
+        let c = read::<Collider>(&self.world, entity, COLLIDER)?;
+        c.shape(&t, |id| self.polygons.get(id).cloned())
+    }
+
+    /// How the colliders of two entities overlap (layers and masks aside)
+    pub fn entity_overlap(&self, a: u64, b: u64) -> Option<crate::shapes::Overlap> {
+        self.collider_shape(a)?.overlap(&self.collider_shape(b)?)
+    }
+
+    /// Outline every collider in the debug overlay (shown while it is on)
+    pub fn debug_colliders(&mut self) {
+        use crate::components::{read, Collider, COLLIDER, TRANSFORM};
+        use crate::shapes::Shape;
+        if !self.debug.enabled {
+            return;
+        }
+        for ent in self.world.query(&[TRANSFORM, COLLIDER]) {
+            let trigger =
+                read::<Collider>(&self.world, ent, COLLIDER).is_some_and(|c| c.trigger != 0);
+            let color = if trigger {
+                Color::rgba(255, 200, 40, 255)
+            } else {
+                Color::rgba(60, 220, 255, 255)
+            };
+            match self.collider_shape(ent) {
+                Some(Shape::Circle { center, radius }) => self.debug_circle(center, radius, color),
+                Some(Shape::Polygon(p)) => {
+                    for i in 0..p.len() {
+                        self.debug_line(p[i], p[(i + 1) % p.len()], color);
+                    }
+                }
+                None => {}
+            }
         }
     }
 

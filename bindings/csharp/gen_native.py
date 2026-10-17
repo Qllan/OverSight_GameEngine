@@ -28,6 +28,7 @@ POINTERS = {
     "OvTilemapInfo": "out TilemapInfo", "OvMapObject": "out MapObjectData", "OvRayHit": "out RayHit",
     "const uint8_t": "byte[]", "const uint32_t": "uint[]", "char": "byte[]?",
     "const void": "IntPtr", "OvEntity": "ulong[]?", "uint8_t": "byte[]?", "OvBinding": "out Binding",
+    "const OvVec2": "Vec2[]", "OvOverlap": "out Overlap",
 }
 KEYWORDS = {"base", "in", "out", "string", "object", "params", "fixed", "event", "lock"}
 

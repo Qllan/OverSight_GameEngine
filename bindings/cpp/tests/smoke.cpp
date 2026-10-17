@@ -146,6 +146,17 @@ int main() {
     CHECK(engine.get<ov::Transform>(mover)->pos.x == 12 && engine.get<ov::Transform>(mover)->scale.x == 1);
     CHECK(engine.get<ov::Transform>(mover)->rotation == 0.5f);
 
+    // Colliders: a box and a circle overlap along x
+    ov::Entity wall = engine.spawn(), ball = engine.spawn();
+    engine.set(wall, ov::Transform{{100, 100}});
+    engine.set(wall, ov::Collider::box({10, 10}));
+    engine.set(ball, ov::Transform{{107, 100}});
+    engine.set(ball, ov::Collider::circle(3));
+    auto o = engine.overlap(wall, ball);
+    CHECK(o && o->normal.x > 0.99f && o->depth > 0.99f && o->depth < 1.01f);
+    CHECK(engine.component<ov::Collider>() == OV_COLLIDER);
+    CHECK(engine.create_polygon({{0, -2}, {2, 2}, {-2, 2}}) != 0);
+
     // Scenes: a push keeps the scene below, a pop resumes it
     CHECK(engine.go_scene(1, ov::Transition::Cut));
     engine.poll();

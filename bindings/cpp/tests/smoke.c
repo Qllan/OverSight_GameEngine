@@ -123,6 +123,11 @@ int main(void) {
     OvTransform *tr = (OvTransform *)ov_get(e, mover, OV_TRANSFORM);
     CHECK(tr->pos.x == 2 && tr->rotation == 0.5f && tr->scale.x == 1);
 
+    /* Colliders */
+    CHECK(sizeof(OvCollider) == 40);
+    OvVec2 bent[] = {{0, 0}, {4, 0}, {2, 1}, {4, 4}};
+    CHECK(ov_create_polygon(e, bent, 4) == 0); /* concave */
+
     /* Scenes: switched in the middle of the fade */
     CHECK(ov_scene_go(e, 5, OV_TRANSITION_FADE, 0.1f, OV_RGBA(0, 0, 0, 255)));
     int entered = 0;

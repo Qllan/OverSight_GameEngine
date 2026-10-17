@@ -352,6 +352,7 @@ void ov_world_clear(OvEngine *e); /* despawn everything; component types stay */
 #define OV_VELOCITY 2
 #define OV_SPRITE_RENDERER 3
 #define OV_BODY 4
+#define OV_COLLIDER 5
 
 typedef struct OvTransform {
     OvVec2 pos;
@@ -380,8 +381,35 @@ typedef struct OvBody {
     OvContacts contacts; /* what it stopped at or rests against */
 } OvBody;
 
+/* A shape that collides with other colliders; it moves, turns and scales
+ * with the Transform */
+#define OV_COLLIDER_BOX 0
+#define OV_COLLIDER_CIRCLE 1
+#define OV_COLLIDER_POLYGON 2
+typedef struct OvCollider {
+    uint32_t kind;    /* OV_COLLIDER_* */
+    uint32_t polygon; /* from ov_create_polygon */
+    OvVec2 offset;    /* centre of the shape from the position */
+    OvVec2 size;      /* box */
+    float radius;     /* circle */
+    uint32_t layer;   /* what it is (bits), default 1 */
+    uint32_t mask;    /* what it meets: each one's mask has a bit of the other's layer; default all */
+    uint8_t trigger;  /* reports overlaps, never pushes */
+    uint8_t pad_[3];
+} OvCollider;
+
+/* How two shapes overlap: move the second by normal * depth and they only touch */
+typedef struct OvOverlap {
+    OvVec2 normal; /* from the first towards the second */
+    float depth;
+} OvOverlap;
+
 void ov_update_motion(OvEngine *e, float dt); /* dt: ov_tick_dt in fixed ticks */
 void ov_draw_entities(OvEngine *e);
+uint32_t ov_create_polygon(OvEngine *e, const OvVec2 *points, uint32_t count); /* convex, 3..64 corners; 0 on error */
+void ov_free_polygon(OvEngine *e, uint32_t polygon);
+bool ov_entity_overlap(OvEngine *e, OvEntity a, OvEntity b, OvOverlap *out); /* layers aside */
+void ov_debug_colliders(OvEngine *e); /* outlines in the debug overlay */
 
 /* Snapshots: the entities and components, the random generator and the
  * tick counter as bytes. Restoring one continues the game exactly from

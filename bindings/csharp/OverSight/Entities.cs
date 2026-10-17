@@ -109,6 +109,15 @@ public sealed partial class Engine
     /// <summary>Move entities with Transform and Velocity by dt (TickDt in
     /// fixed ticks); with a Body on a tile map they slide along walls</summary>
     public void UpdateMotion(float dt) => Native.ov_update_motion(Handle, dt);
+    /// <summary>A convex polygon for colliders, 3 to 64 corners in order</summary>
+    public uint CreatePolygon(params Vec2[] points) =>
+        Check(Native.ov_create_polygon(Handle, points, (uint)points.Length), "polygon");
+    public void FreePolygon(uint polygon) => Native.ov_free_polygon(Handle, polygon);
+    /// <summary>How the colliders of two entities overlap (layers aside); null: they do not</summary>
+    public Overlap? EntityOverlap(Entity a, Entity b) => Native.ov_entity_overlap(Handle, a.Id, b.Id, out var o) ? o : null;
+    /// <summary>Outline every collider in the debug overlay</summary>
+    public void DebugColliders() => Native.ov_debug_colliders(Handle);
+
     /// <summary>Draw every entity with Transform and SpriteRenderer</summary>
     public void DrawEntities() => Native.ov_draw_entities(Handle);
 

@@ -72,6 +72,10 @@ internal static class Native
     [DllImport(Lib)] internal static extern void ov_world_clear(IntPtr e);
     [DllImport(Lib)] internal static extern void ov_update_motion(IntPtr e, float dt);
     [DllImport(Lib)] internal static extern void ov_draw_entities(IntPtr e);
+    [DllImport(Lib)] internal static extern uint ov_create_polygon(IntPtr e, Vec2[] points, uint count);
+    [DllImport(Lib)] internal static extern void ov_free_polygon(IntPtr e, uint polygon);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_entity_overlap(IntPtr e, ulong a, ulong b, out Overlap @out);
+    [DllImport(Lib)] internal static extern void ov_debug_colliders(IntPtr e);
     [DllImport(Lib)] internal static extern nuint ov_snapshot(IntPtr e, byte[]? buf, nuint capacity);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_restore(IntPtr e, byte[] data, nuint size);
     [DllImport(Lib)] internal static extern ulong ov_state_hash(IntPtr e);
