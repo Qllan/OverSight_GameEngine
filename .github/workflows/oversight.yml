@@ -81,6 +81,20 @@ jobs:
           dotnet run --project crates/oversight/sdk/test-csharp -c Release -p:OverSightSdk="$sdk"
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+      - name: New games from the SDK templates build
+        run: |
+          $sdk = (Get-ChildItem dist -Directory -Filter "oversight-sdk-*").FullName
+          New-Item -ItemType Directory -Force build/games | Out-Null
+          Set-Location build/games
+          & "$sdk/new-game.cmd" CoinCpp cpp
+          & "$sdk/new-game.cmd" CoinCs
+          cmake -S CoinCpp -B CoinCpp/build
+          cmake --build CoinCpp/build --config Release
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Test-Path CoinCpp/build/Release/oversight.dll)) { Write-Error "oversight.dll is not next to the game" }
+          dotnet build CoinCs -c Release -nologo
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - uses: actions/upload-artifact@v4
         with:
           name: oversight-sdk-windows-x64
@@ -129,3 +143,14 @@ jobs:
           cmake --build build/sdk
           ctest --test-dir build/sdk --output-on-failure
           dotnet run --project crates/oversight/sdk/test-csharp -c Release -p:OverSightSdk="$sdk"
+
+      - name: New games from the SDK templates build
+        run: |
+          sdk=$(echo $PWD/dist/oversight-sdk-*)
+          mkdir -p build/games && cd build/games
+          "$sdk/new-game.sh" CoinCpp cpp
+          "$sdk/new-game.sh" CoinCs
+          cmake -S CoinCpp -B CoinCpp/build
+          cmake --build CoinCpp/build
+          test -f CoinCpp/build/liboversight.so
+          dotnet build CoinCs -c Release -nologo

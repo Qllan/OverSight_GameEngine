@@ -100,6 +100,10 @@ def package(lib_dir, out, system, arch, csharp=True):
     )
     if csharp:
         pack_csharp(lib_dir, dest, version)
+    shutil.copytree(SDK / "templates", dest / "templates")
+    for script in ("new-game.cmd", "new-game.ps1", "new-game.sh"):
+        shutil.copy2(SDK / script, dest / script)
+    (dest / "VERSION").write_text(version + "\n", encoding="utf-8")
     shutil.copy2(SDK / "README.md", dest / "README.md")
     shutil.copy2(ROOT / "LICENSE", dest / "LICENSE")
 
@@ -110,8 +114,13 @@ def package(lib_dir, out, system, arch, csharp=True):
                 z.write(f, Path(name) / f.relative_to(dest))
     else:
         archive = out / f"{name}.tar.gz"
+        def executable(info):
+            if info.name.endswith(".sh"):
+                info.mode |= 0o755
+            return info
+
         with tarfile.open(archive, "w:gz") as t:
-            t.add(dest, arcname=name)
+            t.add(dest, arcname=name, filter=executable)
     print(f"{dest}\n{archive}")
     return dest
 

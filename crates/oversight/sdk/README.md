@@ -6,6 +6,29 @@
 - `bin/oversight.dll`, `lib/oversight.dll.lib` — библиотека для Windows; `lib/liboversight.so` — для Linux.
 - `cmake/` — пакет для CMake.
 - `nuget/OverSight.Net.<версия>.nupkg` — пакет для C#, библиотека движка уже внутри.
+- `new-game` и `templates/` — заготовки новой игры.
+
+## Новая игра за минуту
+
+В папке, где будет игра (PowerShell или cmd):
+
+```
+C:\oversight-sdk\new-game MyGame          # игра на C#
+C:\oversight-sdk\new-game MyGame cpp      # игра на C++
+```
+
+На Linux: `~/oversight-sdk/new-game.sh MyGame [cpp]`.
+
+Получится папка `MyGame` с маленькой игрой «собери монеты», уже настроенной на этот SDK. Запуск C#: `cd MyGame`, затем `dotnet run`. Запуск C++:
+
+```
+cd MyGame
+cmake -S . -B build
+cmake --build build --config Release
+.\build\Release\MyGame.exe
+```
+
+Картинки, звуки и карты кладите в `MyGame/assets`: при сборке они копируются рядом с игрой. SDK потом лучше не перемещать: игра помнит путь к нему (в `CMakeLists.txt` или `nuget.config`).
 
 ## Игра на C#
 
