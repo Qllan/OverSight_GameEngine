@@ -2051,7 +2051,7 @@ fn write_block(blocks: &mut [u8], offset: u64, size: (u32, u32), time: f32, p: &
     let n = p.len().min(12);
     values[4..4 + n].copy_from_slice(&p[..n]);
     let at = &mut blocks[offset as usize..][..BLOCK as usize];
-    for (dst, v) in at.chunks_exact_mut(4).zip(values) {
+    for (dst, v) in at.as_chunks_mut::<4>().0.iter_mut().zip(values) {
         dst.copy_from_slice(&v.to_le_bytes());
     }
 }
