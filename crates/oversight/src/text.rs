@@ -32,8 +32,8 @@ pub struct PlacedGlyph {
 
 impl Font {
     pub fn from_bytes(bytes: &[u8]) -> Result<Font, String> {
-        let data = FontData::from_bytes(bytes.to_vec(), FontSettings::default())
-            .map_err(|e| e.to_string())?;
+        let data =
+            FontData::from_bytes(bytes, FontSettings::default()).map_err(|e| e.to_string())?;
         Ok(Font {
             data,
             glyphs: HashMap::new(),
