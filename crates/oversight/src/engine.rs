@@ -24,7 +24,7 @@ use crate::ecs::World;
 use crate::gamepad::{GamepadAxis, GamepadButton};
 use crate::hotreload::{HotReload, MapFiles, Watched};
 use crate::input::{Input, Key, MouseButton};
-use crate::particles::{Emitter, EmitterConfig};
+use crate::particles::{Emitter, EmitterConfig, GpuEmitter};
 use crate::post::Effect;
 use crate::render::{DrawKind, Renderer, Shape};
 use crate::rng::Rng;
@@ -57,6 +57,7 @@ pub struct Engine {
     pub fonts: Store<Font>,
     pub tilemaps: Store<Tilemap>,
     pub emitters: Store<Emitter>,
+    pub gpu_emitters: Store<GpuEmitter>,
     /// Loaded skeleton files, shared by the skeletons made from them
     pub skeleton_data: Store<std::sync::Arc<SkeletonData>>,
     pub skeletons: Store<Skeleton>,
@@ -131,6 +132,7 @@ impl Engine {
             fonts,
             tilemaps: Store::default(),
             emitters: Store::default(),
+            gpu_emitters: Store::default(),
             skeleton_data: Store::default(),
             skeletons: Store::default(),
             polygons: Store::default(),
@@ -1186,15 +1188,56 @@ impl Engine {
         let Some(e) = self.emitters.get(id) else {
             return;
         };
-        let mut src = e.config.src;
-        if src.w <= 0.0 || src.h <= 0.0 {
-            let (w, h) = self
-                .textures
-                .get(e.config.texture)
-                .map_or((0, 0), |t| (t.width(), t.height()));
-            src = Rect::new(0.0, 0.0, w as f32, h as f32);
-        }
+        let src = self.particle_src(&e.config);
         e.draw(&mut self.renderer, src, self.state.depth, self.state.space);
+    }
+
+    /// The texture region particles show (the whole texture when the
+    /// config's is empty)
+    fn particle_src(&self, c: &EmitterConfig) -> Rect {
+        if c.src.w > 0.0 && c.src.h > 0.0 {
+            return c.src;
+        }
+        let (w, h) = self
+            .textures
+            .get(c.texture)
+            .map_or((0, 0), |t| (t.width(), t.height()));
+        Rect::new(0.0, 0.0, w as f32, h as f32)
+    }
+
+    /// An emitter for huge numbers of particles: only their births are
+    /// recorded, and the graphics card works out where they are (the
+    /// software renderer does the same maths)
+    pub fn create_gpu_emitter(&mut self, config: EmitterConfig, pos: Vec2) -> u32 {
+        self.gpu_emitters.insert(GpuEmitter::new(config, pos))
+    }
+
+    pub fn gpu_emitter(&self, id: u32) -> Option<&GpuEmitter> {
+        self.gpu_emitters.get(id)
+    }
+
+    pub fn gpu_emitter_mut(&mut self, id: u32) -> Option<&mut GpuEmitter> {
+        self.gpu_emitters.get_mut(id)
+    }
+
+    pub fn free_gpu_emitter(&mut self, id: u32) {
+        self.gpu_emitters.remove(id);
+    }
+
+    pub fn update_gpu_emitters(&mut self, dt: f32) {
+        for e in self.gpu_emitters.iter_mut() {
+            e.update(dt);
+        }
+    }
+
+    /// On the config's layer, at the current depth and space
+    pub fn draw_gpu_emitter(&mut self, id: u32) {
+        let Some(e) = self.gpu_emitters.get(id) else {
+            return;
+        };
+        let kind = DrawKind::Particles(Box::new(e.draw_data(self.particle_src(&e.config))));
+        let (layer, depth, space) = (e.config.layer, self.state.depth, self.state.space);
+        self.renderer.push(layer, depth, space, kind);
     }
 
     // --- skeletons -------------------------------------------------------------

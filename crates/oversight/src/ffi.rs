@@ -2235,6 +2235,100 @@ pub extern "C" fn ov_draw_emitter(e: *mut OvEngine, emitter: u32) {
     engine!(e).draw_emitter(emitter);
 }
 
+// --- GPU emitters: the same configs, for huge numbers of particles ----------------
+
+/// # Safety
+/// `config` is NULL (defaults) or a valid config
+#[no_mangle]
+pub unsafe extern "C" fn ov_create_gpu_emitter(
+    e: *mut OvEngine,
+    config: *const EmitterConfig,
+    pos: Vec2,
+) -> u32 {
+    let config = config.as_ref().copied().unwrap_or_default();
+    engine!(e, 0).create_gpu_emitter(config, pos)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_free_gpu_emitter(e: *mut OvEngine, emitter: u32) {
+    engine!(e).free_gpu_emitter(emitter);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gpu_emitter_config(e: *mut OvEngine, emitter: u32) -> EmitterConfig {
+    engine!(e, EmitterConfig::default())
+        .gpu_emitter(emitter)
+        .map(|em| em.config)
+        .unwrap_or_default()
+}
+
+/// # Safety
+/// `config` is a valid config
+#[no_mangle]
+pub unsafe extern "C" fn ov_set_gpu_emitter_config(
+    e: *mut OvEngine,
+    emitter: u32,
+    config: *const EmitterConfig,
+) -> bool {
+    let (Some(em), Some(c)) = (engine!(e, false).gpu_emitter_mut(emitter), config.as_ref()) else {
+        return false;
+    };
+    em.set_config(*c);
+    true
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_gpu_emitter_pos(e: *mut OvEngine, emitter: u32, pos: Vec2) {
+    if let Some(em) = engine!(e).gpu_emitter_mut(emitter) {
+        em.pos = pos;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gpu_emitter_pos(e: *mut OvEngine, emitter: u32) -> Vec2 {
+    engine!(e, Vec2::default())
+        .gpu_emitter(emitter)
+        .map_or(Vec2::default(), |em| em.pos)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_gpu_emitter_emitting(e: *mut OvEngine, emitter: u32, on: bool) {
+    if let Some(em) = engine!(e).gpu_emitter_mut(emitter) {
+        em.emitting = on;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gpu_emitter_burst(e: *mut OvEngine, emitter: u32, count: u32) {
+    if let Some(em) = engine!(e).gpu_emitter_mut(emitter) {
+        em.burst(count);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gpu_emitter_count(e: *mut OvEngine, emitter: u32) -> u32 {
+    engine!(e, 0)
+        .gpu_emitter(emitter)
+        .map_or(0, |em| em.count())
+}
+
+#[no_mangle]
+pub extern "C" fn ov_gpu_emitter_clear(e: *mut OvEngine, emitter: u32) {
+    if let Some(em) = engine!(e).gpu_emitter_mut(emitter) {
+        em.clear();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_update_gpu_emitters(e: *mut OvEngine, dt: f32) {
+    engine!(e).update_gpu_emitters(dt);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_draw_gpu_emitter(e: *mut OvEngine, emitter: u32) {
+    engine!(e).draw_gpu_emitter(emitter);
+}
+
 // --- skeletons -----------------------------------------------------------------
 
 /// # Safety

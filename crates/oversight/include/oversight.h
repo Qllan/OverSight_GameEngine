@@ -761,6 +761,26 @@ void ov_update_emitters(OvEngine *e, float dt);
 /* On the config's layer, at the current depth and space */
 void ov_draw_emitter(OvEngine *e, uint32_t emitter);
 
+/* --- GPU emitters ---
+ * The same configs as emitters, for huge numbers of particles: only each
+ * particle's birth is recorded, and the graphics card works out where it
+ * is now (the software renderer does the same maths). Drag follows the
+ * exact curve. Particles can be counted but not read one by one. A new
+ * max drops the living particles. */
+uint32_t ov_create_gpu_emitter(OvEngine *e, const OvEmitter *config, OvVec2 pos);
+void ov_free_gpu_emitter(OvEngine *e, uint32_t emitter);
+OvEmitter ov_gpu_emitter_config(OvEngine *e, uint32_t emitter);
+bool ov_set_gpu_emitter_config(OvEngine *e, uint32_t emitter, const OvEmitter *config);
+void ov_set_gpu_emitter_pos(OvEngine *e, uint32_t emitter, OvVec2 pos);
+OvVec2 ov_gpu_emitter_pos(OvEngine *e, uint32_t emitter);
+void ov_set_gpu_emitter_emitting(OvEngine *e, uint32_t emitter, bool on);
+void ov_gpu_emitter_burst(OvEngine *e, uint32_t emitter, uint32_t count);
+uint32_t ov_gpu_emitter_count(OvEngine *e, uint32_t emitter);
+void ov_gpu_emitter_clear(OvEngine *e, uint32_t emitter);
+void ov_update_gpu_emitters(OvEngine *e, float dt);
+/* On the config's layer, at the current depth and space */
+void ov_draw_gpu_emitter(OvEngine *e, uint32_t emitter);
+
 /* --- skeletons ---
  * A skeleton file (JSON) has bones, slots with attachments (regions of
  * one atlas texture) and animations; angles are degrees, clockwise.

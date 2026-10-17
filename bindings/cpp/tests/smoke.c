@@ -71,6 +71,13 @@ int main(void) {
     ov_update_emitters(e, 0.6f);
     CHECK(ov_emitter_count(e, sparks) == 0);
     ov_free_emitter(e, sparks);
+    uint32_t dust = ov_create_gpu_emitter(e, &cfg, (OvVec2){8, 8});
+    ov_gpu_emitter_burst(e, dust, 5);
+    CHECK(ov_gpu_emitter_count(e, dust) == 5 && ov_gpu_emitter_config(e, dust).rate == 0);
+    ov_draw_gpu_emitter(e, dust);
+    ov_update_gpu_emitters(e, 0.6f);
+    CHECK(ov_gpu_emitter_count(e, dust) == 0);
+    ov_free_gpu_emitter(e, dust);
 
     uint32_t frames[] = {7, 8, 9};
     CHECK(ov_anim_frame_at(frames, 3, 10.0f, OV_ANIM_ONCE, 5.0f) == 9);

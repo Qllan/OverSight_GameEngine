@@ -93,6 +93,25 @@ public sealed class Emitter : Resource
     public void Draw() => Native.ov_draw_emitter(E, Id);
 }
 
+/// <summary>The same configs as Emitter, for huge numbers of particles: the
+/// graphics card works out where each one is. They can be counted, not read.</summary>
+public sealed class GpuEmitter : Resource
+{
+    internal GpuEmitter(Engine e, uint id) : base(e, id) { }
+    protected override void Free(IntPtr e, uint id) => Native.ov_free_gpu_emitter(e, id);
+
+    private IntPtr E => Engine.Handle;
+
+    /// <summary>A new Max drops the living particles</summary>
+    public EmitterConfig Config { get => Native.ov_gpu_emitter_config(E, Id); set => Native.ov_set_gpu_emitter_config(E, Id, value); }
+    public Vec2 Pos { get => Native.ov_gpu_emitter_pos(E, Id); set => Native.ov_set_gpu_emitter_pos(E, Id, value); }
+    public bool Emitting { set => Native.ov_set_gpu_emitter_emitting(E, Id, value); }
+    public uint Count => Native.ov_gpu_emitter_count(E, Id);
+    public void Burst(uint count) => Native.ov_gpu_emitter_burst(E, Id, count);
+    public void Clear() => Native.ov_gpu_emitter_clear(E, Id);
+    public void Draw() => Native.ov_draw_gpu_emitter(E, Id);
+}
+
 /// <summary>A spawn point, trigger or other marker placed on a map</summary>
 public sealed class MapObject
 {
@@ -310,6 +329,11 @@ public sealed partial class Engine : IDisposable
         => new(this, Check(Native.ov_create_emitter(Handle, config, pos), "emitter"));
     /// <summary>Advance every emitter by dt seconds</summary>
     public void UpdateEmitters(float dt) => Native.ov_update_emitters(Handle, dt);
+
+    public GpuEmitter CreateGpuEmitter(EmitterConfig config, Vec2 pos = default) =>
+        new(this, Check(Native.ov_create_gpu_emitter(Handle, config, pos), "GPU emitter"));
+
+    public void UpdateGpuEmitters(float dt) => Native.ov_update_gpu_emitters(Handle, dt);
     public Sound LoadSound(string path) => new(this, Check(Native.ov_load_sound(Handle, path), path));
 
     // camera and draw state

@@ -247,6 +247,18 @@ internal static class Native
     [DllImport(Lib)] internal static extern void ov_update_emitter(IntPtr e, uint emitter, float dt);
     [DllImport(Lib)] internal static extern void ov_update_emitters(IntPtr e, float dt);
     [DllImport(Lib)] internal static extern void ov_draw_emitter(IntPtr e, uint emitter);
+    [DllImport(Lib)] internal static extern uint ov_create_gpu_emitter(IntPtr e, in EmitterConfig config, Vec2 pos);
+    [DllImport(Lib)] internal static extern void ov_free_gpu_emitter(IntPtr e, uint emitter);
+    [DllImport(Lib)] internal static extern EmitterConfig ov_gpu_emitter_config(IntPtr e, uint emitter);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_set_gpu_emitter_config(IntPtr e, uint emitter, in EmitterConfig config);
+    [DllImport(Lib)] internal static extern void ov_set_gpu_emitter_pos(IntPtr e, uint emitter, Vec2 pos);
+    [DllImport(Lib)] internal static extern Vec2 ov_gpu_emitter_pos(IntPtr e, uint emitter);
+    [DllImport(Lib)] internal static extern void ov_set_gpu_emitter_emitting(IntPtr e, uint emitter, [MarshalAs(UnmanagedType.U1)] bool on);
+    [DllImport(Lib)] internal static extern void ov_gpu_emitter_burst(IntPtr e, uint emitter, uint count);
+    [DllImport(Lib)] internal static extern uint ov_gpu_emitter_count(IntPtr e, uint emitter);
+    [DllImport(Lib)] internal static extern void ov_gpu_emitter_clear(IntPtr e, uint emitter);
+    [DllImport(Lib)] internal static extern void ov_update_gpu_emitters(IntPtr e, float dt);
+    [DllImport(Lib)] internal static extern void ov_draw_gpu_emitter(IntPtr e, uint emitter);
     [DllImport(Lib)] internal static extern uint ov_load_skeleton(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Lib)] internal static extern uint ov_skeleton_from_json(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
     [DllImport(Lib)] internal static extern void ov_free_skeleton_data(IntPtr e, uint data);

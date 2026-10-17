@@ -481,6 +481,23 @@ public:
     void draw() { ov_draw_emitter(e_, id_); }
 };
 
+/// The same configs as Emitter, for huge numbers of particles: the
+/// graphics card works out where each one is. They can be counted, not read.
+class GpuEmitter : public detail::Handle<ov_free_gpu_emitter> {
+public:
+    using Handle::Handle;
+    EmitterConfig config() const { return ov_gpu_emitter_config(e_, id_); }
+    /// A new max drops the living particles
+    void set_config(const EmitterConfig &c) { ov_set_gpu_emitter_config(e_, id_, &c); }
+    Vec2 pos() const { return ov_gpu_emitter_pos(e_, id_); }
+    void set_pos(Vec2 p) { ov_set_gpu_emitter_pos(e_, id_, p); }
+    void set_emitting(bool on) { ov_set_gpu_emitter_emitting(e_, id_, on); }
+    void burst(uint32_t count) { ov_gpu_emitter_burst(e_, id_, count); }
+    uint32_t count() const { return ov_gpu_emitter_count(e_, id_); }
+    void clear() { ov_gpu_emitter_clear(e_, id_); }
+    void draw() { ov_draw_gpu_emitter(e_, id_); }
+};
+
 /// A loaded skeleton file; skeletons made from it keep working after it goes
 class SkeletonData : public detail::Handle<ov_free_skeleton_data> {
 public:
@@ -707,6 +724,10 @@ public:
     }
     /// Advance every emitter by dt seconds
     void update_emitters(float dt) { ov_update_emitters(e_, dt); }
+    GpuEmitter create_gpu_emitter(const EmitterConfig &config, Vec2 pos = {}) {
+        return {e_, detail::check(ov_create_gpu_emitter(e_, &config, pos), "GPU emitter")};
+    }
+    void update_gpu_emitters(float dt) { ov_update_gpu_emitters(e_, dt); }
     SkeletonData load_skeleton(const std::string &path) {
         return {e_, detail::check(ov_load_skeleton(e_, path.c_str()), path)};
     }

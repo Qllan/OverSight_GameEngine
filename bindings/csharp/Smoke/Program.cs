@@ -50,6 +50,12 @@ Check(sparks.Count == 5 && sparks.Emitting, $"emitter rate {sparks.Count}");
 sparks.Emitting = false;
 sparks.Burst(3);
 Check(sparks.Count == 8 && sparks.Config.Rate == 10f, "burst and config");
+using (var dust = engine.CreateGpuEmitter(new EmitterConfig { Rate = 10 }, new Vec2(8, 8)))
+{
+    engine.UpdateGpuEmitters(0.55f);
+    dust.Burst(3);
+    Check(dust.Count == 8 && dust.Config.Rate == 10f, "GPU emitter");
+}
 
 Check(Animation.Range(4, 4, 8f).FrameAt(0.3f) == 6, "animation");
 

@@ -19,6 +19,7 @@ use tiny_skia::{Pixmap, Point, Transform};
 use wgpu::util::DeviceExt;
 
 use crate::light::LightPx;
+use crate::particles::Record;
 use crate::post::{self, Effect};
 use crate::render::{
     normal_map_of, normal_matrix, sprite_src, sprite_transform, visible, DrawCmd, DrawKind,
@@ -35,7 +36,7 @@ const MSAA: u32 = 4;
 /// Bytes between per-pass uniform blocks (the dynamic offset alignment)
 const SLOT: u64 = 256;
 /// Bytes of one uniform block the shaders see
-const BLOCK: u64 = 64;
+const BLOCK: u64 = SLOT;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -59,12 +60,36 @@ enum Source {
     White,
     Atlas,
     Texture(u32),
+    /// One GPU emitter's draw: an index into `particle_draws`
+    Particles(u32),
 }
 
 struct Batch {
     source: Source,
     start: u32,
     count: u32,
+}
+
+/// A GPU emitter's ring of particles, kept on the card between frames
+struct ParticleBuffer {
+    buffer: wgpu::Buffer,
+    len: usize,
+    epoch: u32,
+    written: u64,
+    /// Drawn this frame (rings not drawn are dropped)
+    used: bool,
+}
+
+/// One GPU emitter drawn in a pass
+struct ParticleDraw {
+    ring: u64,
+    len: u32,
+    /// The texture, or white for dots
+    texture: Option<u32>,
+    time: f32,
+    size: (u32, u32),
+    params: [f32; 28],
+    block: u64,
 }
 
 struct GpuTexture {
@@ -222,6 +247,10 @@ pub struct Gpu {
     light_pipeline: wgpu::RenderPipeline,
     /// 1 sample (crisp) and MSAA (antialiased) versions
     pipelines: [wgpu::RenderPipeline; 2],
+    /// The same for GPU emitters
+    particle_pipelines: [wgpu::RenderPipeline; 2],
+    particle_buffers: HashMap<u64, ParticleBuffer>,
+    particle_draws: Vec<ParticleDraw>,
     nearest: wgpu::Sampler,
     linear: wgpu::Sampler,
     white: wgpu::BindGroup,
@@ -307,6 +336,102 @@ fn blit_fs(i: BOut) -> @location(0) vec4<f32> {
     let c = textureSample(tex, samp, i.uv);
     // Premultiplied colour over black is its rgb
     return vec4<f32>(c.rgb, 1.0);
+}
+"#;
+
+/// GPU emitters: one quad per particle slot (instanced), placed from how
+/// the particle was born and the time, the same maths as
+/// `particles::ParticleDraw::each`. Dead slots collapse to nothing.
+const PARTICLE_SHADER: &str = r#"
+@group(1) @binding(0) var tex: texture_2d<f32>;
+@group(1) @binding(1) var samp: sampler;
+struct Part {
+    size: vec2<f32>, time: f32, pass_: f32,
+    // the world-to-pixels transform: x axis, y axis, then the offset
+    m0: vec4<f32>, m1: vec4<f32>,
+    // drag, size at birth, size at death, 1 for a texture
+    k: vec4<f32>,
+    c0: vec4<f32>, c1: vec4<f32>,
+    uv: vec4<f32>,
+    // region width and height, 1 for antialiased dots
+    src: vec4<f32>,
+};
+@group(0) @binding(0) var<uniform> part: Part;
+
+struct POut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+    @location(2) disc: vec2<f32>,
+    @location(3) radius: f32,
+};
+
+fn part_path(p0: vec2<f32>, v0: vec2<f32>, age: f32) -> vec2<f32> {
+    let g = part.m1.zw;
+    let k = part.k.x;
+    if k < 1e-4 {
+        return p0 + v0 * age + g * (0.5 * age * age);
+    }
+    let gk = g / k;
+    return p0 + gk * age + (v0 - gk) * ((1.0 - exp(-k * age)) / k);
+}
+
+@vertex
+fn part_vs(@builtin(vertex_index) vi: u32, @location(0) p0: vec2<f32>, @location(1) v0: vec2<f32>,
+           @location(2) r: vec4<f32>) -> POut {
+    var o: POut;
+    o.pos = vec4<f32>(-2.0, -2.0, 0.0, 1.0);
+    o.uv = vec2<f32>(0.5);
+    o.color = vec4<f32>(0.0);
+    o.disc = vec2<f32>(0.0);
+    o.radius = 0.0;
+    let age = part.time - r.x;
+    if age < 0.0 || age >= r.y {
+        return o;
+    }
+    let t = age / r.y;
+    let size = mix(part.k.y, part.k.z, t);
+    let c = floor(mix(part.c0, part.c1, t) * 255.0 + 0.5) / 255.0;
+    if size <= 0.0 || c.a <= 0.0 {
+        return o;
+    }
+    var corners = array<vec2<f32>, 6>(vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 0.0), vec2<f32>(1.0, 1.0),
+                                      vec2<f32>(0.0, 0.0), vec2<f32>(1.0, 1.0), vec2<f32>(0.0, 1.0));
+    let q = corners[vi];
+    var local: vec2<f32>;
+    if part.k.w > 0.5 {
+        let l = (q * part.src.xy - part.src.xy * 0.5) * (size / part.src.x);
+        let a = r.z + r.w * age;
+        let cs = cos(a);
+        let sn = sin(a);
+        local = vec2<f32>(l.x * cs - l.y * sn, l.x * sn + l.y * cs);
+        o.uv = part.uv.xy + q * part.uv.zw;
+    } else {
+        let px = length(part.m0.xy);
+        let radius = size * 0.5;
+        local = (q * 2.0 - 1.0) * (radius + 1.0 / max(px, 1e-6));
+        o.disc = local * px;
+        o.radius = radius * px;
+    }
+    let w = part_path(p0, v0, age) + local;
+    let s = vec2<f32>(part.m0.x * w.x + part.m0.z * w.y + part.m1.x, part.m0.y * w.x + part.m0.w * w.y + part.m1.y);
+    o.pos = vec4<f32>(s.x / part.size.x * 2.0 - 1.0, 1.0 - s.y / part.size.y * 2.0, 0.0, 1.0);
+    o.color = vec4<f32>(c.rgb * c.a, c.a);
+    return o;
+}
+
+@fragment
+fn part_fs(i: POut) -> @location(0) vec4<f32> {
+    let t = textureSample(tex, samp, i.uv);
+    if part.k.w > 0.5 {
+        return t * i.color;
+    }
+    let d = length(i.disc);
+    var cov = select(0.0, 1.0, d <= i.radius);
+    if part.src.z > 0.5 {
+        cov = clamp(i.radius - d + 0.5, 0.0, 1.0);
+    }
+    return i.color * cov;
 }
 "#;
 
@@ -712,6 +837,47 @@ impl Gpu {
             })
         };
         let pipelines = [pipeline(1), pipeline(MSAA)];
+        let part_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("particles"),
+            source: wgpu::ShaderSource::Wgsl(PARTICLE_SHADER.into()),
+        });
+        let particle_pipeline = |samples: u32| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("particles"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &part_module,
+                    entry_point: Some("part_vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<Record>() as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &wgpu::vertex_attr_array![
+                            0 => Float32x2, 1 => Float32x2, 2 => Float32x4
+                        ],
+                    })],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState {
+                    count: samples,
+                    ..Default::default()
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &part_module,
+                    entry_point: Some("part_fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: FORMAT,
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let particle_pipelines = [particle_pipeline(1), particle_pipeline(MSAA)];
         let fx_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("post"),
             bind_group_layouts: &[Some(&uniform_layout), Some(&post_layout)],
@@ -858,6 +1024,9 @@ impl Gpu {
             normal_pipeline,
             light_pipeline,
             pipelines,
+            particle_pipelines,
+            particle_buffers: HashMap::new(),
+            particle_draws: Vec::new(),
             nearest,
             linear,
             white,
@@ -932,6 +1101,10 @@ impl Gpu {
         self.vertices.clear();
         self.batches.clear();
         self.passes.clear();
+        self.particle_draws.clear();
+        for b in self.particle_buffers.values_mut() {
+            b.used = false;
+        }
         let mut sprites = 0;
         for pass in renderer.passes(commands) {
             let fits = pass.target == 0
@@ -975,6 +1148,11 @@ impl Gpu {
                         sprites += 1;
                     }
                     DrawKind::Shape { shape, color } => self.shape(shape, *color, base),
+                    DrawKind::Particles(d) => {
+                        if !d.textured() || d.texture != pass.target {
+                            self.particles(d, base, textures, renderer.antialias, pass.size);
+                        }
+                    }
                     DrawKind::Text {
                         font,
                         text,
@@ -1024,6 +1202,7 @@ impl Gpu {
                 block: 0,
             });
         }
+        self.particle_buffers.retain(|_, b| b.used);
         self.draw(renderer.antialias, time);
         sprites
     }
@@ -1179,6 +1358,121 @@ impl Gpu {
                 },
             ],
         })
+    }
+
+    /// Queue a GPU emitter's draw, bringing its ring on the card up to date
+    fn particles(
+        &mut self,
+        d: &crate::particles::ParticleDraw,
+        base: Transform,
+        textures: &Store<Texture>,
+        antialias: bool,
+        size: (u32, u32),
+    ) {
+        let ring = &d.ring;
+        let len = ring.records.len();
+        if len == 0 {
+            return;
+        }
+        let bytes = |r: &[Record]| {
+            // Record is repr(C) and made only of f32s, so it has no padding
+            unsafe { std::slice::from_raw_parts(r.as_ptr() as *const u8, std::mem::size_of_val(r)) }
+        };
+        let fresh = match self.particle_buffers.get(&ring.id) {
+            Some(b) => {
+                b.len != len
+                    || b.epoch != ring.epoch
+                    || ring.written < b.written
+                    || ring.written - b.written >= len as u64
+            }
+            None => true,
+        };
+        if fresh {
+            let same = self
+                .particle_buffers
+                .get(&ring.id)
+                .is_some_and(|b| b.len == len);
+            if !same {
+                let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("particles"),
+                    size: (len * std::mem::size_of::<Record>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let b = ParticleBuffer {
+                    buffer,
+                    len,
+                    epoch: 0,
+                    written: 0,
+                    used: true,
+                };
+                self.particle_buffers.insert(ring.id, b);
+            }
+            let b = &self.particle_buffers[&ring.id];
+            self.queue.write_buffer(&b.buffer, 0, bytes(&ring.records));
+        } else {
+            let b = &self.particle_buffers[&ring.id];
+            let size = std::mem::size_of::<Record>() as u64;
+            let (from, to) = (
+                (b.written % len as u64) as usize,
+                (ring.written % len as u64) as usize,
+            );
+            let write = |a: usize, z: usize| {
+                if z > a {
+                    self.queue
+                        .write_buffer(&b.buffer, a as u64 * size, bytes(&ring.records[a..z]));
+                }
+            };
+            if from <= to {
+                write(from, to);
+            } else {
+                write(from, len);
+                write(0, to);
+            }
+        }
+        if let Some(b) = self.particle_buffers.get_mut(&ring.id) {
+            b.epoch = ring.epoch;
+            b.written = ring.written;
+            b.used = true;
+        }
+        let textured = d.textured() && self.textures.contains_key(&d.texture);
+        let (tw, th) = textures
+            .get(d.texture)
+            .map_or((1.0, 1.0), |t| (t.width() as f32, t.height() as f32));
+        let o = map(base, 0.0, 0.0);
+        let (x, y) = (map(base, 1.0, 0.0), map(base, 0.0, 1.0));
+        let straight = |c: Color| [c.r, c.g, c.b, c.a].map(|v| v as f32 / 255.0);
+        let mut p = [0.0; 28];
+        p[..8].copy_from_slice(&[
+            x[0] - o[0],
+            x[1] - o[1],
+            y[0] - o[0],
+            y[1] - o[1],
+            o[0],
+            o[1],
+            d.gravity.x,
+            d.gravity.y,
+        ]);
+        p[8..12].copy_from_slice(&[d.drag, d.size[0], d.size[1], textured as u8 as f32]);
+        p[12..16].copy_from_slice(&straight(d.colors[0]));
+        p[16..20].copy_from_slice(&straight(d.colors[1]));
+        p[20..24].copy_from_slice(&[d.src.x / tw, d.src.y / th, d.src.w / tw, d.src.h / th]);
+        p[24..27].copy_from_slice(&[d.src.w, d.src.h, antialias as u8 as f32]);
+        let index = self.particle_draws.len() as u32;
+        self.particle_draws.push(ParticleDraw {
+            ring: ring.id,
+            len: len as u32,
+            texture: textured.then_some(d.texture),
+            time: d.time,
+            size,
+            params: p,
+            block: 0,
+        });
+        self.batches.push(Batch {
+            source: Source::Particles(index),
+            start: 0,
+            count: 0,
+        });
     }
 
     fn push(&mut self, source: Source, vertices: &[Vertex]) {
@@ -1388,7 +1682,7 @@ impl Gpu {
                 .filter(|p| p.effects.iter().any(|e| e.kind == post::EFFECT_LIGHTING))
                 .map(|p| p.lights.len() * 3 * p.effects.len())
                 .sum::<usize>();
-        let slots = (self.passes.len() + runs) as u64;
+        let slots = (self.passes.len() + self.particle_draws.len() + runs) as u64;
         if slots * SLOT > self.uniforms.size() {
             (self.uniforms, self.uniform_group) =
                 uniform_buffer(&self.device, &self.uniform_layout, slots * 2);
@@ -1451,6 +1745,11 @@ impl Gpu {
             pass.block = i as u64 * SLOT;
         }
         let mut slot = self.passes.len() as u64;
+        for d in &mut self.particle_draws {
+            d.block = slot * SLOT;
+            write_block(&mut blocks, d.block, d.size, d.time, &d.params);
+            slot += 1;
+        }
         let mut encoder = self.device.create_command_encoder(&Default::default());
         for pass in &self.passes {
             let (view, msaa) = if pass.target == 0 {
@@ -1496,10 +1795,30 @@ impl Gpu {
                     })],
                     ..Default::default()
                 });
-                rp.set_pipeline(&self.pipelines[resolve.is_some() as usize]);
+                let samples = resolve.is_some() as usize;
+                rp.set_pipeline(&self.pipelines[samples]);
                 rp.set_bind_group(0, &self.uniform_group, &[offset as u32]);
                 rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
                 for batch in &self.batches[pass.batches.clone()] {
+                    if let Source::Particles(i) = batch.source {
+                        let d = &self.particle_draws[i as usize];
+                        let Some(b) = self.particle_buffers.get(&d.ring) else {
+                            continue;
+                        };
+                        let group = match d.texture.and_then(|t| self.textures.get(&t)) {
+                            Some(t) => &t.bind_group,
+                            None => &self.white,
+                        };
+                        rp.set_pipeline(&self.particle_pipelines[samples]);
+                        rp.set_bind_group(0, &self.uniform_group, &[d.block as u32]);
+                        rp.set_bind_group(1, group, &[]);
+                        rp.set_vertex_buffer(0, b.buffer.slice(..));
+                        rp.draw(0..6, 0..d.len);
+                        rp.set_pipeline(&self.pipelines[samples]);
+                        rp.set_bind_group(0, &self.uniform_group, &[offset as u32]);
+                        rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                        continue;
+                    }
                     let group = match batch.source {
                         Source::White => &self.white,
                         Source::Atlas => &self.atlas.bind_group,
@@ -1507,6 +1826,7 @@ impl Gpu {
                             Some(t) => &t.bind_group,
                             None => continue,
                         },
+                        Source::Particles(_) => continue,
                     };
                     rp.set_bind_group(1, group, &[]);
                     rp.draw(batch.start..batch.start + batch.count, 0..1);
@@ -2042,13 +2362,13 @@ struct FxRun<'a> {
     time: f32,
 }
 
-/// One uniform block: size, time, then up to 12 numbers
+/// One uniform block: size, time, then up to 60 numbers
 fn write_block(blocks: &mut [u8], offset: u64, size: (u32, u32), time: f32, p: &[f32]) {
-    let mut values = [0f32; 16];
+    let mut values = [0f32; BLOCK as usize / 4];
     values[0] = size.0 as f32;
     values[1] = size.1 as f32;
     values[2] = time;
-    let n = p.len().min(12);
+    let n = p.len().min(values.len() - 4);
     values[4..4 + n].copy_from_slice(&p[..n]);
     let at = &mut blocks[offset as usize..][..BLOCK as usize];
     for (dst, v) in at.as_chunks_mut::<4>().0.iter_mut().zip(values) {
@@ -2444,5 +2764,100 @@ mod tests {
             gpu.save_screenshot("light_gpu.png").ok();
         }
         assert!(bad <= 0.01, "{:.2}% pixels differ", bad * 100.0);
+    }
+
+    /// GPU emitters: dots under gravity and drag, spinning textured
+    /// particles fading out, in a zoomed world
+    fn particle_scene(e: &mut Engine, antialias: bool, steps: u32) {
+        use crate::particles::EmitterConfig;
+        e.set_antialias(antialias);
+        e.set_camera(crate::camera::Camera {
+            center: Vec2::new(60.0, 40.0),
+            zoom: 1.5,
+            ..Default::default()
+        });
+        let mut rgba = Vec::new();
+        for i in 0..16u32 {
+            let on = (i % 4 + i / 4) % 2 == 0;
+            rgba.extend_from_slice(&if on {
+                [255, 255, 255, 255]
+            } else {
+                [255, 120, 0, 255]
+            });
+        }
+        let tex = e.texture_from_rgba(4, 4, &rgba).unwrap();
+        let dots = EmitterConfig {
+            rate: 120.0,
+            max: 2000,
+            life_min: 0.5,
+            life_max: 1.5,
+            speed_min: 20.0,
+            speed_max: 60.0,
+            spread: std::f32::consts::TAU,
+            gravity: Vec2::new(0.0, 40.0),
+            drag: 0.8,
+            size_start: 5.0,
+            size_end: 1.0,
+            color_start: Color::rgba(80, 200, 255, 255),
+            color_end: Color::rgba(255, 40, 40, 60),
+            ..EmitterConfig::default()
+        };
+        let a = e.create_gpu_emitter(dots, Vec2::new(40.0, 40.0));
+        let sprites = EmitterConfig {
+            texture: tex,
+            spin_min: -3.0,
+            spin_max: 3.0,
+            size_start: 6.0,
+            size_end: 10.0,
+            drag: 0.0,
+            seed: 9,
+            ..dots
+        };
+        let b = e.create_gpu_emitter(sprites, Vec2::new(80.0, 40.0));
+        for i in 0..steps {
+            e.update_gpu_emitters(1.0 / 60.0);
+            if i % 20 == 0 {
+                e.begin_frame(Color::rgba(10, 10, 20, 255));
+                e.draw_gpu_emitter(a);
+                e.draw_gpu_emitter(b);
+                e.end_frame();
+            }
+        }
+        e.begin_frame(Color::rgba(10, 10, 20, 255));
+        e.draw_gpu_emitter(a);
+        e.draw_gpu_emitter(b);
+        e.end_frame();
+    }
+
+    #[test]
+    fn gpu_particles_match_software() {
+        for antialias in [false, true] {
+            let Some(mut gpu) = gpu_engine(128, 96) else {
+                return;
+            };
+            let mut soft = Engine::headless(128, 96).unwrap();
+            // Drawn every 20 steps on the way, so the GPU copy is updated in
+            // pieces and wraps around its ring
+            particle_scene(&mut soft, antialias, 150);
+            particle_scene(&mut gpu, antialias, 150);
+            // Antialiased: 4x MSAA against coverage, as in gpu_frame_matches_software
+            let bad = differ(&mut soft, &mut gpu, if antialias { 48 } else { 24 });
+            if bad > 0.02 || std::env::var_os("OVERSIGHT_GPU_SHOTS").is_some() {
+                soft.save_screenshot(&format!("particles_{antialias}_software.png"))
+                    .ok();
+                gpu.save_screenshot(&format!("particles_{antialias}_gpu.png"))
+                    .ok();
+            }
+            assert!(
+                bad <= 0.02,
+                "antialias {antialias}: {:.2}% pixels differ",
+                bad * 100.0
+            );
+            let lit = (0..96).flat_map(|y| (0..128).map(move |x| (x, y)));
+            let shown = lit
+                .filter(|&(x, y)| gpu.pixel(x, y).unwrap().b > 40)
+                .count();
+            assert!(shown > 200, "particles are on screen: {shown}");
+        }
     }
 }

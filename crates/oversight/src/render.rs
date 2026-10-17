@@ -66,6 +66,8 @@ pub enum Shape {
 
 #[derive(Debug, Clone)]
 pub enum DrawKind {
+    /// A GPU emitter's particles
+    Particles(Box<crate::particles::ParticleDraw>),
     Sprite {
         texture: u32,
         sprite: Sprite,
@@ -354,6 +356,29 @@ impl Renderer {
                     }
                     DrawKind::Shape { shape, color } => {
                         draw_shape(&mut canvas, self.antialias, shape, *color, base)
+                    }
+                    DrawKind::Particles(d) => {
+                        let mut tex = textures.get_mut(d.texture).filter(|_| d.textured());
+                        if d.textured() && d.texture == pass.target {
+                            continue;
+                        }
+                        d.each(|pos, rotation, size, color| {
+                            let texture = if tex.is_some() { d.texture } else { 0 };
+                            let look = crate::particles::look(
+                                texture, d.src, 0, 0.0, pos, rotation, size, color,
+                            );
+                            match (look, tex.as_deref_mut()) {
+                                (Some(DrawKind::Sprite { sprite, .. }), Some(t)) => {
+                                    if self.draw_sprite(&mut canvas, t, &sprite, base) {
+                                        self.drawn_sprites += 1;
+                                    }
+                                }
+                                (Some(DrawKind::Shape { shape, color }), _) => {
+                                    draw_shape(&mut canvas, self.antialias, &shape, color, base)
+                                }
+                                _ => {}
+                            }
+                        });
                     }
                     DrawKind::Text {
                         font,

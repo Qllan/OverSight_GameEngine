@@ -76,6 +76,10 @@ int main() {
     sparks.burst(3);
     CHECK(sparks.count() == 8);
     CHECK(sparks.config().rate == 10.0f);
+    ov::GpuEmitter dust = engine.create_gpu_emitter(sparks_cfg, {8, 8});
+    engine.update_gpu_emitters(0.55f);
+    dust.burst(3);
+    CHECK(dust.count() == 8 && dust.config().rate == 10.0f);
 
     ov::Animation walk = ov::Animation::range(4, 4, 8.0f);
     CHECK(walk.frame_at(0.3f) == 6);
