@@ -48,6 +48,14 @@ int main() {
     auto hit = map.raycast({0, 30}, {0, 100});
     CHECK(hit && hit->cell_y == 7);
 
+    CHECK(ov::ease(ov::Ease::QuadIn, 0.5f) == 0.25f);
+    ov::Tween<ov::Vec2> slide({0, 0}, {10, 20}, 1.0f, ov::Ease::Linear, ov::Repeat::Once, 0.5f);
+    CHECK(slide.update(0.5f).x == 0.0f);
+    ov::Vec2 mid = slide.update(0.5f);
+    CHECK(mid.x == 5.0f && mid.y == 10.0f && !slide.done());
+    ov::Tween<ov::Color> fade(ov::Color::Black, ov::Color::White, 2.0f, ov::Ease::Linear, ov::Repeat::PingPong);
+    CHECK(fade.update(3.0f) == ov::Color(128, 128, 128));
+
     ov::Animation walk = ov::Animation::range(4, 4, 8.0f);
     CHECK(walk.frame_at(0.3f) == 6);
 

@@ -18,6 +18,7 @@ use crate::collision::{self, Contacts, MoveResult, RayHit};
 use crate::engine::{Engine, InputEvent};
 use crate::input::{key_from_u32, MouseButton};
 use crate::tilemap::{LayerDraw, Orientation, Property, Tilemap};
+use crate::tween::{self, Ease, Repeat};
 use crate::types::{Color, Rect, Space, Sprite, Vec2};
 
 /// The engine plus strings handed out to C
@@ -651,6 +652,31 @@ pub unsafe extern "C" fn ov_anim_frame_at(
     };
     let frames = std::slice::from_raw_parts(frames, count as usize);
     Animation::new(frames.to_vec(), fps, mode).frame_at(time)
+}
+
+// --- tweens and easing --------------------------------------------------------
+
+/// Eased progress for `t` in 0..1; unknown curves are linear
+#[no_mangle]
+pub extern "C" fn ov_ease(ease: i32, t: f32) -> f32 {
+    tween::ease(Ease::from_i32(ease), t)
+}
+
+/// Eased progress 0..1 of a tween `time` seconds after its start
+/// (negative time is the delay); repeat 0 once, 1 loop, 2 ping-pong
+#[no_mangle]
+pub extern "C" fn ov_tween_progress(time: f32, duration: f32, ease: i32, repeat: i32) -> f32 {
+    tween::progress(
+        time,
+        duration,
+        Ease::from_i32(ease),
+        Repeat::from_i32(repeat),
+    )
+}
+
+#[no_mangle]
+pub extern "C" fn ov_lerp_color(a: Color, b: Color, t: f32) -> Color {
+    tween::lerp_color(a, b, t)
 }
 
 // --- tile maps -----------------------------------------------------------------
@@ -1317,6 +1343,10 @@ mod tests {
 
             let frames = [3u32, 4, 5];
             assert_eq!(ov_anim_frame_at(frames.as_ptr(), 3, 10.0, 0, 0.15), 4);
+            assert_eq!(ov_ease(1, 0.5), 0.25);
+            assert_eq!(ov_ease(-5, 0.5), 0.5, "unknown curve is linear");
+            assert_eq!(ov_tween_progress(-0.2, 1.0, 0, 0), 0.0, "delay");
+            assert!((ov_tween_progress(1.25, 1.0, 0, 2) - 0.75).abs() < 1e-5);
             ov_inject_key(e, 1, true); // A
             ov_poll(e);
             assert!(ov_key_pressed(e, 1));

@@ -97,6 +97,18 @@ public struct SpriteSheet
 }
 
 public enum AnimMode { Loop = 0, Once = 1, PingPong = 2 }
+public enum Ease
+{
+    Linear,
+    QuadIn, QuadOut, QuadInOut,
+    CubicIn, CubicOut, CubicInOut,
+    SineIn, SineOut, SineInOut,
+    ExpoIn, ExpoOut, ExpoInOut,
+    BackIn, BackOut, BackInOut,
+    ElasticIn, ElasticOut, ElasticInOut,
+    BounceIn, BounceOut, BounceInOut,
+}
+public enum Repeat { Once = 0, Loop = 1, PingPong = 2 }
 public enum Space { World = 0, Screen = 1 }
 public enum Orientation { Orthogonal = 0, Isometric = 1 }
 public enum MouseButton { Left = 0, Right = 1, Middle = 2 }
@@ -164,6 +176,60 @@ public sealed class Animation
 
     public uint FrameAt(float time) => Native.ov_anim_frame_at(Frames, (uint)Frames.Length, Fps, (int)Mode, time);
     public float Duration => Fps > 0 ? Frames.Length / Fps : 0;
+}
+
+public static class Easing
+{
+    public static float Ease(Ease e, float t) => Native.ov_ease((int)e, t);
+    public static float Lerp(float a, float b, float t) => a + (b - a) * t;
+    public static Vec2 Lerp(Vec2 a, Vec2 b, float t) => new(Lerp(a.X, b.X, t), Lerp(a.Y, b.Y, t));
+    public static Color Lerp(Color a, Color b, float t) => Native.ov_lerp_color(a, b, t);
+}
+
+/// <summary>Timing of a tween: eased progress 0..1 over Duration seconds.
+/// Call Update(dt) every frame; FloatTween, Vec2Tween and ColorTween give the value.</summary>
+public abstract class TweenBase
+{
+    public float Duration;
+    public Ease Ease;
+    public Repeat Repeat;
+    /// <summary>Seconds since the start; negative while waiting out a delay</summary>
+    public float Time;
+    public bool Paused;
+
+    protected TweenBase(float duration, Ease ease, Repeat repeat, float delay)
+    {
+        Duration = duration; Ease = ease; Repeat = repeat; Time = -delay;
+    }
+
+    public float Progress => Native.ov_tween_progress(Time, Duration, (int)Ease, (int)Repeat);
+    public bool Done => Repeat == Repeat.Once && Time >= Duration;
+    public void Restart() => Time = 0;
+    protected void Advance(float dt) { if (!Paused) Time += dt; }
+}
+
+public sealed class FloatTween(float from, float to, float duration, Ease ease = Ease.Linear,
+    Repeat repeat = Repeat.Once, float delay = 0) : TweenBase(duration, ease, repeat, delay)
+{
+    public float From = from, To = to;
+    public float Value => Easing.Lerp(From, To, Progress);
+    public float Update(float dt) { Advance(dt); return Value; }
+}
+
+public sealed class Vec2Tween(Vec2 from, Vec2 to, float duration, Ease ease = Ease.Linear,
+    Repeat repeat = Repeat.Once, float delay = 0) : TweenBase(duration, ease, repeat, delay)
+{
+    public Vec2 From = from, To = to;
+    public Vec2 Value => Easing.Lerp(From, To, Progress);
+    public Vec2 Update(float dt) { Advance(dt); return Value; }
+}
+
+public sealed class ColorTween(Color from, Color to, float duration, Ease ease = Ease.Linear,
+    Repeat repeat = Repeat.Once, float delay = 0) : TweenBase(duration, ease, repeat, delay)
+{
+    public Color From = from, To = to;
+    public Color Value => Easing.Lerp(From, To, Progress);
+    public Color Update(float dt) { Advance(dt); return Value; }
 }
 
 public sealed class OverSightException : Exception

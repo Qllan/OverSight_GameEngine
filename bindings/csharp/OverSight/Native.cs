@@ -90,6 +90,9 @@ internal static class Native
     [DllImport(Lib)] internal static extern SpriteSheet ov_sheet_grid(uint texture_w, uint texture_h, uint frame_w, uint frame_h, uint margin, uint spacing);
     [DllImport(Lib)] internal static extern Rect ov_sheet_frame(SpriteSheet sheet, uint index);
     [DllImport(Lib)] internal static extern uint ov_anim_frame_at(uint[] frames, uint count, float fps, int mode, float time);
+    [DllImport(Lib)] internal static extern float ov_ease(int ease, float t);
+    [DllImport(Lib)] internal static extern float ov_tween_progress(float time, float duration, int ease, int repeat);
+    [DllImport(Lib)] internal static extern Color ov_lerp_color(Color a, Color b, float t);
     [DllImport(Lib)] internal static extern uint ov_load_tilemap(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Lib)] internal static extern uint ov_create_tilemap(IntPtr e, int orientation, uint width, uint height, uint tile_w, uint tile_h, uint layers);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_tilemap_add_tileset(IntPtr e, uint map, uint first_gid, uint texture, SpriteSheet sheet);

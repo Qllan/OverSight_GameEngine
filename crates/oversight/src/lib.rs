@@ -21,6 +21,7 @@ pub mod texture;
 pub mod tiled;
 pub mod tilemap;
 pub mod time;
+pub mod tween;
 pub mod types;
 #[cfg(feature = "window")]
 pub mod window;
@@ -35,6 +36,7 @@ pub use tilemap::{
     Tileset,
 };
 pub use time::Time;
+pub use tween::{ease, Ease, Repeat, Tween};
 pub use types::{Color, Rect, Space, Sprite, Vec2};
 #[cfg(feature = "window")]
 pub use window::WindowConfig;

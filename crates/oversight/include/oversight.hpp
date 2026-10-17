@@ -192,6 +192,51 @@ struct Animation {
     float duration() const { return fps > 0 ? frames.size() / fps : 0.0f; }
 };
 
+enum class Ease : int32_t {
+    Linear = OV_EASE_LINEAR,
+    QuadIn, QuadOut, QuadInOut,
+    CubicIn, CubicOut, CubicInOut,
+    SineIn, SineOut, SineInOut,
+    ExpoIn, ExpoOut, ExpoInOut,
+    BackIn, BackOut, BackInOut,
+    ElasticIn, ElasticOut, ElasticInOut,
+    BounceIn, BounceOut, BounceInOut,
+};
+enum class Repeat : int32_t { Once = OV_REPEAT_ONCE, Loop = OV_REPEAT_LOOP, PingPong = OV_REPEAT_PING_PONG };
+
+inline float ease(Ease e, float t) { return ov_ease(static_cast<int32_t>(e), t); }
+inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
+inline Vec2 lerp(Vec2 a, Vec2 b, float t) { return {lerp(a.x, b.x, t), lerp(a.y, b.y, t)}; }
+inline Color lerp(Color a, Color b, float t) { return ov_lerp_color(a, b, t); }
+
+/// A value going from `from` to `to` over `duration` seconds: float, Vec2 or
+/// Color. Call update(dt) every frame and read value().
+template <class T>
+struct Tween {
+    T from{}, to{};
+    float duration = 1.0f;
+    Ease ease = Ease::Linear;
+    Repeat repeat = Repeat::Once;
+    float time = 0.0f;  // negative while waiting out a delay
+    bool paused = false;
+
+    Tween() = default;
+    Tween(T from_, T to_, float duration_, Ease ease_ = Ease::Linear, Repeat repeat_ = Repeat::Once,
+          float delay = 0.0f)
+        : from(from_), to(to_), duration(duration_), ease(ease_), repeat(repeat_), time(-delay) {}
+
+    T update(float dt) {
+        if (!paused) time += dt;
+        return value();
+    }
+    float progress() const {
+        return ov_tween_progress(time, duration, static_cast<int32_t>(ease), static_cast<int32_t>(repeat));
+    }
+    T value() const { return ov::lerp(from, to, progress()); }
+    bool done() const { return repeat == Repeat::Once && time >= duration; }
+    void restart() { time = 0.0f; }
+};
+
 namespace detail {
 // A resource id that frees itself; move-only
 template <void (*Free)(OvEngine *, uint32_t)>

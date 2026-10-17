@@ -32,6 +32,14 @@ Check(grounded && player.Bottom == 56f, $"landed at {player}");
 var hit = map.Raycast(new Vec2(0, 30), new Vec2(0, 100));
 Check(hit is { CellY: 7 }, "raycast");
 
+Check(Easing.Ease(Ease.QuadIn, 0.5f) == 0.25f, "ease");
+var slide = new Vec2Tween(new Vec2(0, 0), new Vec2(10, 20), 1f, delay: 0.5f);
+Check(slide.Update(0.5f).X == 0f, "tween delay");
+var mid = slide.Update(0.5f);
+Check(mid.X == 5f && mid.Y == 10f && !slide.Done, $"tween middle {mid}");
+var fade = new ColorTween(Color.Black, Color.White, 2f, repeat: Repeat.PingPong);
+Check(fade.Update(3f) == new Color(128, 128, 128), "color ping-pong");
+
 Check(Animation.Range(4, 4, 8f).FrameAt(0.3f) == 6, "animation");
 
 engine.LookAt(new Vec2(32, 32));

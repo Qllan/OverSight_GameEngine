@@ -78,6 +78,18 @@ typedef struct OvSpriteSheet {
 } OvSpriteSheet;
 
 typedef enum OvAnimMode { OV_ANIM_LOOP = 0, OV_ANIM_ONCE = 1, OV_ANIM_PING_PONG = 2 } OvAnimMode;
+/* Easing curves, as on easings.net */
+typedef enum OvEase {
+    OV_EASE_LINEAR = 0,
+    OV_EASE_QUAD_IN, OV_EASE_QUAD_OUT, OV_EASE_QUAD_IN_OUT,
+    OV_EASE_CUBIC_IN, OV_EASE_CUBIC_OUT, OV_EASE_CUBIC_IN_OUT,
+    OV_EASE_SINE_IN, OV_EASE_SINE_OUT, OV_EASE_SINE_IN_OUT,
+    OV_EASE_EXPO_IN, OV_EASE_EXPO_OUT, OV_EASE_EXPO_IN_OUT,
+    OV_EASE_BACK_IN, OV_EASE_BACK_OUT, OV_EASE_BACK_IN_OUT,
+    OV_EASE_ELASTIC_IN, OV_EASE_ELASTIC_OUT, OV_EASE_ELASTIC_IN_OUT,
+    OV_EASE_BOUNCE_IN, OV_EASE_BOUNCE_OUT, OV_EASE_BOUNCE_IN_OUT
+} OvEase;
+typedef enum OvRepeat { OV_REPEAT_ONCE = 0, OV_REPEAT_LOOP = 1, OV_REPEAT_PING_PONG = 2 } OvRepeat;
 typedef enum OvSpace { OV_SPACE_WORLD = 0, OV_SPACE_SCREEN = 1 } OvSpace;
 typedef enum OvOrientation { OV_ORTHOGONAL = 0, OV_ISOMETRIC = 1 } OvOrientation;
 typedef enum OvMouseButton { OV_MOUSE_LEFT = 0, OV_MOUSE_RIGHT = 1, OV_MOUSE_MIDDLE = 2 } OvMouseButton;
@@ -294,6 +306,14 @@ OvSpriteSheet ov_sheet_grid(uint32_t texture_w, uint32_t texture_h, uint32_t fra
                             uint32_t margin, uint32_t spacing);
 OvRect ov_sheet_frame(OvSpriteSheet sheet, uint32_t index);
 uint32_t ov_anim_frame_at(const uint32_t *frames, uint32_t count, float fps, int32_t mode, float time);
+
+/* --- tweens and easing --- */
+/* Eased progress for t in 0..1 (clamped); ease is an OvEase */
+float ov_ease(int32_t ease, float t);
+/* Eased progress 0..1 of a tween `time` seconds after its start; a negative
+   time is the delay before it. repeat is an OvRepeat */
+float ov_tween_progress(float time, float duration, int32_t ease, int32_t repeat);
+OvColor ov_lerp_color(OvColor a, OvColor b, float t);
 
 /* --- tile maps --- */
 uint32_t ov_load_tilemap(OvEngine *e, const char *path); /* Tiled .tmj */
