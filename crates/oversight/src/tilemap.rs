@@ -402,7 +402,7 @@ impl Tilemap {
         if !layer.visible || layer.opacity <= 0.0 {
             return;
         }
-        let view = renderer.camera.visible_world(renderer.size());
+        let view = renderer.visible_world();
         let view = Rect::new(
             view.x - layer.offset.x,
             view.y - layer.offset.y,

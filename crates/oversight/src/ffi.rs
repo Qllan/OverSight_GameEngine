@@ -947,6 +947,74 @@ pub unsafe extern "C" fn ov_measure_text(
     engine!(e, Vec2::default()).measure_text(font, string(text), size)
 }
 
+// --- render targets, post effects, shaders and shake ---------------------------
+
+#[no_mangle]
+pub extern "C" fn ov_create_target(e: *mut OvEngine, width: u32, height: u32) -> u32 {
+    result(engine!(e, 0).create_target(width, height), 0)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_target(e: *mut OvEngine, target: u32) -> bool {
+    result(engine!(e, false).set_target(target).map(|_| true), false)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_get_target(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).target()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_clear_target(e: *mut OvEngine, target: u32, color: Color) {
+    engine!(e).clear_target(target, color);
+}
+
+/// # Safety
+/// `camera` is NULL (back to the main camera) or valid
+#[no_mangle]
+pub unsafe extern "C" fn ov_set_target_camera(
+    e: *mut OvEngine,
+    target: u32,
+    camera: *const Camera,
+) {
+    engine!(e).set_target_camera(target, camera.as_ref().copied());
+}
+
+/// # Safety
+/// `effects` is NULL or has `count` effects
+#[no_mangle]
+pub unsafe extern "C" fn ov_set_effects(
+    e: *mut OvEngine,
+    target: u32,
+    effects: *const crate::post::Effect,
+    count: u32,
+) -> bool {
+    let engine = engine!(e, false);
+    let list = if effects.is_null() {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(effects, count as usize)
+    };
+    result(engine.set_effects(target, list).map(|_| true), false)
+}
+
+/// # Safety
+/// `wgsl` is a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_create_shader(e: *mut OvEngine, wgsl: *const c_char) -> u32 {
+    result(engine!(e, 0).create_shader(string(wgsl)), 0)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_free_shader(e: *mut OvEngine, shader: u32) {
+    engine!(e).free_shader(shader);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_shake(e: *mut OvEngine, strength: f32, duration: f32) {
+    engine!(e).shake(strength, duration);
+}
+
 // --- camera and draw state ---------------------------------------------------
 
 #[no_mangle]
@@ -2899,6 +2967,54 @@ mod tests {
             // NULL handles are harmless
             assert!(!ov_poll(std::ptr::null_mut()));
             ov_engine_destroy(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn targets_effects_and_shake_through_c() {
+        let e = headless(16, 16);
+        unsafe {
+            let t = ov_create_target(e, 4, 4);
+            assert!(t != 0);
+            assert!(!ov_set_target(e, 999));
+            let red = Color::rgba(255, 0, 0, 255);
+            ov_begin_frame(e, Color::BLACK);
+            assert!(ov_set_target(e, t));
+            assert_eq!(ov_get_target(e), t);
+            ov_clear_target(e, t, red);
+            assert!(ov_set_target(e, 0));
+            ov_set_space(e, 1);
+            ov_draw_texture(e, t, 0.0, 0.0);
+            ov_end_frame(e);
+            assert_eq!(ov_pixel(e, 2, 2), red);
+            assert_eq!(ov_pixel(e, 8, 8), Color::BLACK);
+
+            let cam = Camera::default();
+            ov_set_target_camera(e, t, &cam);
+            ov_set_target_camera(e, t, std::ptr::null());
+            let grey = crate::post::Effect::grade(0.0, 1.0, 0.0, 1.0, Color::WHITE);
+            assert!(ov_set_effects(e, 0, &grey, 1));
+            ov_begin_frame(e, red);
+            ov_end_frame(e);
+            let p = ov_pixel(e, 0, 0);
+            assert!(p.r == p.g && p.g == p.b, "{:?}", p);
+            assert!(ov_set_effects(e, 0, std::ptr::null(), 0));
+            let bad = crate::post::Effect {
+                kind: 42,
+                ..Default::default()
+            };
+            assert!(!ov_set_effects(e, 0, &bad, 1));
+            let err = CStr::from_ptr(ov_last_error()).to_str().unwrap();
+            assert!(err.contains("42"), "{}", err);
+
+            let id = ov_create_shader(
+                e,
+                c"fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> { return load(vec2<i32>(pixel)); }".as_ptr(),
+            );
+            assert!(id != 0);
+            ov_free_shader(e, id);
+            ov_shake(e, 4.0, 0.2);
+            ov_engine_destroy(e);
         }
     }
 }

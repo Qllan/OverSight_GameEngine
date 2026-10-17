@@ -17,6 +17,8 @@ pub struct Texture {
     /// Unique per image, so a GPU copy can tell a reloaded or reused id
     /// from the image it uploaded
     pub generation: u64,
+    /// A render target: draw calls can go into it
+    pub target: bool,
 }
 
 impl Texture {
@@ -26,7 +28,22 @@ impl Texture {
             smooth: false,
             tinted: HashMap::new(),
             generation: NEXT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            target: false,
         }
+    }
+
+    /// A transparent render target
+    pub fn target(width: u32, height: u32) -> Result<Texture, String> {
+        let pixmap = Pixmap::new(width, height).ok_or("invalid target size")?;
+        Ok(Texture {
+            target: true,
+            ..Texture::from_pixmap(pixmap)
+        })
+    }
+
+    /// The pixels were drawn over: drop copies made from the old ones
+    pub fn changed(&mut self) {
+        self.tinted.clear();
     }
 
     /// Decode PNG or JPEG bytes

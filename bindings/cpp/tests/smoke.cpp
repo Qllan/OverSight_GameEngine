@@ -196,6 +196,34 @@ int main() {
     engine.load_bindings("jump = pad:LeftX+");
     CHECK(engine.bindings(jump).size() == 1 && engine.binding_text(engine.bindings(jump)[0]) == "pad:LeftX+");
 
+    // Render targets and post effects: a red target on screen, then greyed
+    engine.set_debug(false);
+    ov::Texture target = engine.create_target(8, 8);
+    engine.begin_frame(ov::Color::Black);
+    engine.draw_to(target);
+    engine.clear_target(target, {255, 0, 0});
+    engine.draw_to_screen();
+    engine.set_space(ov::Space::Screen);
+    engine.draw(target, 0, 0);
+    engine.end_frame();
+    CHECK(engine.pixel(4, 4) == ov::Color(255, 0, 0) && engine.pixel(20, 20) == ov::Color::Black);
+    engine.set_effects({ov::Effect::grade(0, 1, 0), ov::Effect::glow(), ov::Effect::crt(0, 0, 0, 0)});
+    engine.begin_frame(ov::Color(255, 0, 0));
+    engine.end_frame();
+    ov::Color grey = engine.pixel(30, 30);
+    CHECK(grey.r == grey.g && grey.g == grey.b && grey.r > 0);
+    engine.set_effects({});
+    ov::Shader keep = engine.create_shader(
+        "fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> { return load(vec2<i32>(pixel)); }");
+    bool bad_shader = false;
+    try {
+        engine.create_shader("fn effect() {}");
+    } catch (const ov::Error &) {
+        bad_shader = true;
+    }
+    CHECK(keep && bad_shader);
+    engine.shake(4, 0.2f);
+
     std::printf("smoke_cpp: ok\n");
     return 0;
 }

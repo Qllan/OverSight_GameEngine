@@ -201,6 +201,36 @@ Check(engine.BindingText(engine.Bindings(jump)[0]) == "pad1:LeftY-", "BindingTex
 try { engine.LoadBindings("jump = nope"); Check(false, "a bad line throws"); }
 catch (OverSightException) { Check(engine.Bindings(jump).Length == 1, "a bad line changes nothing"); }
 
+// Render targets and post effects: a red target on screen, then greyed
+engine.Debug = false;
+using (var target = engine.CreateTarget(8, 8))
+{
+    engine.BeginFrame(Color.Black);
+    engine.DrawTo(target);
+    engine.ClearTarget(target, new Color(255, 0, 0));
+    engine.DrawToScreen();
+    engine.Space = Space.Screen;
+    engine.Draw(target, 0, 0);
+    engine.EndFrame();
+    Check(engine.Pixel(4, 4) == new Color(255, 0, 0), "DrawTo");
+    engine.SetTargetCamera(target, new Camera(new Vec2(0, 0)));
+    engine.SetTargetCamera(target, null);
+}
+engine.SetEffects(Effect.Grade(saturation: 0), Effect.Glow(), Effect.Crt(0, 0, 0, 0));
+engine.BeginFrame(new Color(255, 0, 0));
+engine.EndFrame();
+var grey = engine.Pixel(30, 30);
+Check(grey.R == grey.G && grey.G == grey.B && grey.R > 0, $"SetEffects {grey.R} {grey.G} {grey.B}");
+engine.SetEffects();
+using (var shader = engine.CreateShader(
+    "fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> { return load(vec2<i32>(pixel)); }"))
+    Check(shader.Id != 0, "CreateShader");
+try { engine.CreateShader("fn effect() {}"); Check(false, "a bad shader throws"); }
+catch (OverSightException) { }
+try { engine.SetEffects(new Effect { Kind = (EffectKind)42 }); Check(false, "a bad effect throws"); }
+catch (OverSightException) { }
+engine.Shake(4, 0.2f);
+
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }

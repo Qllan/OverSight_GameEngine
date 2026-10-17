@@ -116,6 +116,15 @@ internal static class Native
     [DllImport(Lib)] internal static extern uint ov_load_font(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Lib)] internal static extern void ov_free_font(IntPtr e, uint font);
     [DllImport(Lib)] internal static extern Vec2 ov_measure_text(IntPtr e, uint font, [MarshalAs(UnmanagedType.LPUTF8Str)] string text, float size);
+    [DllImport(Lib)] internal static extern uint ov_create_target(IntPtr e, uint width, uint height);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_set_target(IntPtr e, uint target);
+    [DllImport(Lib)] internal static extern uint ov_get_target(IntPtr e);
+    [DllImport(Lib)] internal static extern void ov_clear_target(IntPtr e, uint target, Color color);
+    [DllImport(Lib)] internal static extern void ov_set_target_camera(IntPtr e, uint target, Camera[]? camera);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_set_effects(IntPtr e, uint target, Effect[]? effects, uint count);
+    [DllImport(Lib)] internal static extern uint ov_create_shader(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string wgsl);
+    [DllImport(Lib)] internal static extern void ov_free_shader(IntPtr e, uint shader);
+    [DllImport(Lib)] internal static extern void ov_shake(IntPtr e, float strength, float duration);
     [DllImport(Lib)] internal static extern Camera ov_get_camera(IntPtr e);
     [DllImport(Lib)] internal static extern void ov_set_camera(IntPtr e, Camera camera);
     [DllImport(Lib)] internal static extern Vec2 ov_world_to_screen(IntPtr e, Vec2 p);

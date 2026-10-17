@@ -154,6 +154,26 @@ int main(void) {
     char text[64];
     CHECK(ov_bindings_save(e, text, sizeof text) == strlen("fire = mouse:Left\n"));
 
+    /* Render targets and post effects */
+    CHECK(sizeof(OvEffect) == 40);
+    uint32_t target = ov_create_target(e, 4, 4);
+    CHECK(target != 0 && !ov_set_target(e, 12345));
+    ov_begin_frame(e, OV_RGBA(0, 0, 0, 255));
+    CHECK(ov_set_target(e, target) && ov_get_target(e) == target);
+    ov_clear_target(e, target, OV_RGBA(0, 0, 255, 255));
+    ov_set_target(e, 0);
+    ov_set_space(e, OV_SPACE_SCREEN);
+    ov_draw_texture(e, target, 0, 0);
+    ov_end_frame(e);
+    CHECK(ov_pixel(e, 1, 1).b == 255);
+    OvEffect blur = {OV_EFFECT_BLUR, 0, {2}};
+    CHECK(ov_set_effects(e, target, &blur, 1) && ov_set_effects(e, target, NULL, 0));
+    OvEffect bad = {OV_EFFECT_SHADER, 777, {0}};
+    CHECK(!ov_set_effects(e, 0, &bad, 1));
+    CHECK(ov_create_shader(e, "not wgsl") == 0);
+    ov_shake(e, 2, 0.1f);
+    ov_free_texture(e, target);
+
     ov_engine_destroy(e);
     printf("smoke_c: ok\n");
     return 0;

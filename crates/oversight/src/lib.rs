@@ -30,6 +30,7 @@ pub mod physics;
 #[cfg(not(feature = "physics"))]
 #[path = "physics_off.rs"]
 pub mod physics;
+pub mod post;
 pub mod render;
 pub mod rng;
 pub mod scenes;

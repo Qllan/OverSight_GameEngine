@@ -25,6 +25,7 @@ use crate::gamepad::{GamepadAxis, GamepadButton};
 use crate::hotreload::{HotReload, MapFiles, Watched};
 use crate::input::{Input, Key, MouseButton};
 use crate::particles::{Emitter, EmitterConfig};
+use crate::post::Effect;
 use crate::render::{DrawKind, Renderer, Shape};
 use crate::rng::Rng;
 use crate::text::{Font, DEFAULT_FONT};
@@ -57,6 +58,8 @@ pub struct Engine {
     pub emitters: Store<Emitter>,
     /// Convex polygons for colliders, in local units
     pub polygons: Store<Vec<Vec2>>,
+    /// WGSL sources of post effect shaders
+    pub shaders: Store<String>,
     pub state: DrawState,
     pub input: Input,
     /// Named actions bound to keys, buttons and sticks
@@ -121,6 +124,7 @@ impl Engine {
             tilemaps: Store::default(),
             emitters: Store::default(),
             polygons: Store::default(),
+            shaders: Store::default(),
             state: DrawState::default(),
             input: Input::default(),
             actions: Default::default(),
@@ -597,6 +601,108 @@ impl Engine {
     pub fn free_texture(&mut self, texture: u32) {
         self.textures.remove(texture);
         self.hot_reload.textures.remove(&texture);
+        self.renderer.targets.remove(&texture);
+        if self.renderer.target == texture {
+            self.renderer.target = 0;
+        }
+    }
+
+    // --- render targets, post effects and shaders --------------------------------
+
+    /// A transparent texture draw calls can go into (see `set_target`);
+    /// it is drawn like any other texture
+    pub fn create_target(&mut self, width: u32, height: u32) -> Result<u32, String> {
+        let id = self.textures.insert(Texture::target(width, height)?);
+        let state = crate::render::TargetState {
+            size: (width, height),
+            ..Default::default()
+        };
+        self.renderer.targets.insert(id, state);
+        Ok(id)
+    }
+
+    /// Draw calls from now on go into `target` (0: the screen). Every
+    /// frame starts on the screen.
+    pub fn set_target(&mut self, target: u32) -> Result<(), String> {
+        if self.renderer.set_target(target) {
+            Ok(())
+        } else {
+            Err(format!("texture {} is not a render target", target))
+        }
+    }
+
+    pub fn target(&self) -> u32 {
+        self.renderer.target
+    }
+
+    /// Clear a target before this frame's draw calls into it; a target
+    /// that is not cleared keeps its picture and is drawn over
+    pub fn clear_target(&mut self, target: u32, color: Color) {
+        self.renderer.clear_target(target, color);
+    }
+
+    /// The camera World draw calls into a target use (None: the main one)
+    pub fn set_target_camera(&mut self, target: u32, camera: Option<Camera>) {
+        if let Some(t) = self.renderer.targets.get_mut(&target) {
+            t.camera = camera;
+        }
+    }
+
+    /// The post effects of a target (0: the screen), run in order every
+    /// frame it is drawn
+    pub fn set_effects(&mut self, target: u32, effects: &[Effect]) -> Result<(), String> {
+        for e in effects {
+            match e.kind {
+                crate::post::EFFECT_GLOW..=crate::post::EFFECT_CRT => {}
+                crate::post::EFFECT_SHADER if self.shaders.get(e.shader).is_some() => {}
+                crate::post::EFFECT_SHADER => return Err(format!("no shader {}", e.shader)),
+                k => return Err(format!("unknown effect kind {}", k)),
+            }
+        }
+        let list = if target == 0 {
+            &mut self.renderer.effects
+        } else {
+            match self.renderer.targets.get_mut(&target) {
+                Some(t) => &mut t.effects,
+                None => return Err(format!("texture {} is not a render target", target)),
+            }
+        };
+        *list = effects.to_vec();
+        Ok(())
+    }
+
+    /// A post effect shader in WGSL: it defines
+    /// `fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32>` and may
+    /// use `source` (the picture so far, sampled with `samp` or read
+    /// with `load`), `post.size`, `post.time` and `post.p[0..2]` (the
+    /// effect's eight numbers). Only the graphics card runs them.
+    pub fn create_shader(&mut self, wgsl: &str) -> Result<u32, String> {
+        #[cfg(feature = "gpu")]
+        crate::gpu::validate_shader(wgsl)?;
+        let id = self.shaders.insert(wgsl.to_string());
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = self.gpu.as_mut() {
+            if let Err(e) = gpu.compile_shader(id, wgsl) {
+                self.shaders.remove(id);
+                return Err(e);
+            }
+        }
+        Ok(id)
+    }
+
+    /// Effects that still name it are skipped
+    pub fn free_shader(&mut self, shader: u32) {
+        self.shaders.remove(shader);
+        #[cfg(feature = "gpu")]
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.free_shader(shader);
+        }
+    }
+
+    /// Shake the world on screen by up to `strength` pixels, fading out
+    /// over `duration` seconds; the HUD (screen space) stays put
+    pub fn shake(&mut self, strength: f32, duration: f32) {
+        self.renderer.shake.start(strength, duration);
     }
 
     pub fn load_font(&mut self, path: &str) -> Result<u32, String> {
@@ -809,8 +915,11 @@ impl Engine {
             mouse_world: self.mouse_world(),
             renderer: self.renderer_name(),
         };
+        // The transition cover and the overlay go on the screen
+        self.renderer.target = 0;
         self.scenes.draw(&mut self.renderer);
         self.debug.flush(&mut self.renderer, &stats);
+        let dt = self.time.dt;
         #[cfg(feature = "gpu")]
         if let Some(gpu) = self.gpu.as_mut() {
             let commands = self.renderer.take_sorted();
@@ -819,9 +928,11 @@ impl Engine {
                 &commands,
                 &mut self.textures,
                 &mut self.fonts,
+                self.time.total as f32,
             );
             self.renderer.drawn_sprites = sprites;
             self.renderer.recycle(commands);
+            self.renderer.shake.update(dt);
             self.canvas_stale = true;
             #[cfg(feature = "window")]
             if let Some(window) = self.window.as_mut() {
@@ -835,6 +946,7 @@ impl Engine {
             return;
         }
         self.renderer.flush(&mut self.textures, &mut self.fonts);
+        self.renderer.shake.update(dt);
         #[cfg(feature = "window")]
         if let Some(window) = self.window.as_mut() {
             if let Err(e) = window.present(&self.renderer.canvas) {
@@ -1366,5 +1478,153 @@ mod tests {
             "{:?}",
             p
         );
+    }
+
+    #[test]
+    fn render_targets_are_drawn_first_and_shown_like_textures() {
+        let mut e = Engine::headless(16, 16).unwrap();
+        let a = e.create_target(4, 4).unwrap();
+        let b = e.create_target(8, 8).unwrap();
+        assert!(e.set_target(999).is_err());
+        e.begin_frame(Color::BLACK);
+        // The screen shows b, b shows a: a is opened first, so it is ready
+        e.set_space(Space::Screen);
+        e.draw_texture(b, 0.0, 0.0);
+        e.set_target(a).unwrap();
+        e.clear_target(a, RED);
+        e.set_target(b).unwrap();
+        e.clear_target(b, BLUE);
+        e.draw_texture(a, 2.0, 2.0);
+        e.set_target(0).unwrap();
+        e.fill_rect(Rect::new(12.0, 12.0, 4.0, 4.0), RED);
+        e.end_frame();
+        assert_eq!(e.pixel(0, 0), Some(BLUE));
+        assert_eq!(e.pixel(3, 3), Some(RED), "a inside b");
+        assert_eq!(e.pixel(7, 7), Some(BLUE));
+        assert_eq!(e.pixel(10, 10), Some(Color::BLACK), "b is 8x8");
+        assert_eq!(e.pixel(13, 13), Some(RED));
+        assert_eq!(e.target(), 0, "a frame ends on the screen");
+
+        // Not cleared: a keeps its picture and is drawn over
+        e.begin_frame(Color::BLACK);
+        assert_eq!(e.target(), 0, "every frame starts on the screen");
+        e.set_space(Space::Screen);
+        e.set_target(a).unwrap();
+        e.fill_rect(Rect::new(0.0, 0.0, 1.0, 1.0), BLUE);
+        e.set_target(0).unwrap();
+        e.draw_sprite(
+            a,
+            &Sprite {
+                scale: Vec2::new(4.0, 4.0),
+                ..Sprite::default()
+            },
+        );
+        e.end_frame();
+        assert_eq!(e.pixel(1, 1), Some(BLUE));
+        assert_eq!(e.pixel(9, 9), Some(RED), "last frame's red is still there");
+
+        e.free_texture(a);
+        assert!(e.set_target(a).is_err());
+    }
+
+    #[test]
+    fn targets_have_their_own_camera_and_effects() {
+        let mut e = Engine::headless(8, 8).unwrap();
+        let t = e.create_target(8, 8).unwrap();
+        e.set_camera(Camera {
+            center: Vec2::new(100.0, 100.0),
+            ..Camera::default()
+        });
+        let frame = |e: &mut Engine| {
+            e.begin_frame(Color::BLACK);
+            e.set_target(t).unwrap();
+            e.clear_target(t, Color::BLACK);
+            e.fill_rect(Rect::new(0.0, 0.0, 2.0, 2.0), RED);
+            e.set_target(0).unwrap();
+            e.set_space(Space::Screen);
+            e.draw_texture(t, 0.0, 0.0);
+            e.set_space(Space::World);
+            e.end_frame();
+        };
+        frame(&mut e);
+        assert_eq!(
+            e.pixel(4, 4),
+            Some(Color::BLACK),
+            "the main camera is far away"
+        );
+        e.set_target_camera(
+            t,
+            Some(Camera {
+                center: Vec2::new(1.0, 1.0),
+                ..Camera::default()
+            }),
+        );
+        frame(&mut e);
+        assert_eq!(
+            e.pixel(4, 4),
+            Some(RED),
+            "its own camera looks at the origin"
+        );
+        let grey = crate::post::Effect::grade(0.0, 1.0, 0.0, 1.0, Color::WHITE);
+        e.set_effects(t, &[grey]).unwrap();
+        frame(&mut e);
+        let p = e.pixel(4, 4).unwrap();
+        assert!(p.r == p.g && p.g == p.b && p.r > 0, "{:?}", p);
+        assert!(e
+            .set_effects(t, &[crate::post::Effect::shader(7, [0.0; 8])])
+            .is_err());
+        let bad = crate::post::Effect {
+            kind: 99,
+            ..Default::default()
+        };
+        assert!(e.set_effects(0, &[bad]).is_err());
+        assert!(e.set_effects(12345, &[]).is_err());
+    }
+
+    #[test]
+    fn shake_moves_the_world_but_not_the_hud() {
+        let mut e = Engine::headless(40, 40).unwrap();
+        let frame = |e: &mut Engine| {
+            e.poll();
+            e.begin_frame(Color::BLACK);
+            e.set_space(Space::World);
+            e.fill_rect(Rect::new(-1.0, -1.0, 2.0, 2.0), RED);
+            e.set_space(Space::Screen);
+            e.fill_rect(Rect::new(0.0, 0.0, 2.0, 2.0), BLUE);
+            e.end_frame();
+        };
+        e.shake(8.0, 0.5);
+        let mut moved = false;
+        for _ in 0..10 {
+            frame(&mut e);
+            moved |= e.pixel(20, 20) != Some(RED);
+            assert_eq!(e.pixel(1, 1), Some(BLUE));
+        }
+        assert!(moved, "the world shook");
+        for _ in 0..30 {
+            frame(&mut e);
+        }
+        assert_eq!(e.pixel(20, 20), Some(RED), "and settled");
+        assert_eq!(e.screen_to_world(Vec2::new(20.0, 20.0)), Vec2::default());
+    }
+
+    #[test]
+    fn shaders_are_checked_when_created() {
+        let mut e = Engine::headless(4, 4).unwrap();
+        let ok = "fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> {\n    return load(vec2<i32>(pixel));\n}";
+        #[cfg(feature = "gpu")]
+        {
+            let err = e.create_shader("fn effect(uv: vec2<f32>) -> f32 { return 1; }");
+            assert!(err.is_err());
+        }
+        let id = e.create_shader(ok).unwrap();
+        e.set_effects(0, &[crate::post::Effect::shader(id, [0.0; 8])])
+            .unwrap();
+        e.begin_frame(RED);
+        e.end_frame();
+        assert_eq!(e.pixel(0, 0), Some(RED), "left out in software");
+        e.free_shader(id);
+        e.begin_frame(RED);
+        e.end_frame();
     }
 }

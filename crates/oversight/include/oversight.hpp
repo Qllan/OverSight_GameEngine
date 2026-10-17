@@ -14,6 +14,7 @@
 
 #include <array>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -398,6 +399,48 @@ public:
     }
 };
 
+/// A WGSL post effect shader (see ov_create_shader); GPU only
+class Shader : public detail::Handle<ov_free_shader> {
+public:
+    using Handle::Handle;
+};
+
+/// One post effect of a chain
+struct Effect : OvEffect {
+    Effect() : OvEffect{} {}
+    /// Pixels brighter than `threshold` (0..1) spread light `radius` pixels
+    static Effect glow(float threshold = 0.6f, float strength = 1.0f, float radius = 8.0f) {
+        return make(OV_EFFECT_GLOW, {threshold, strength, radius});
+    }
+    static Effect blur(float radius) { return make(OV_EFFECT_BLUR, {radius}); }
+    static Effect grade(float brightness = 0.0f, float contrast = 1.0f, float saturation = 1.0f,
+                        float gamma = 1.0f, Color tint = Color::White) {
+        return make(OV_EFFECT_GRADE, {brightness, contrast, saturation, gamma, tint.r / 255.0f,
+                                      tint.g / 255.0f, tint.b / 255.0f});
+    }
+    static Effect crt(float scanlines = 0.3f, float curvature = 0.1f, float vignette = 0.5f,
+                      float aberration = 1.0f) {
+        return make(OV_EFFECT_CRT, {scanlines, curvature, vignette, aberration});
+    }
+    static Effect custom(const Shader &shader, std::array<float, 8> params = {}) {
+        Effect e;
+        e.kind = OV_EFFECT_SHADER;
+        e.shader = shader.id();
+        for (size_t i = 0; i < 8; ++i) e.p[i] = params[i];
+        return e;
+    }
+
+private:
+    static Effect make(uint32_t kind, std::initializer_list<float> values) {
+        Effect e;
+        e.kind = kind;
+        size_t i = 0;
+        for (float v : values) e.p[i++] = v;
+        return e;
+    }
+};
+static_assert(sizeof(Effect) == sizeof(OvEffect));
+
 class Font : public detail::Handle<ov_free_font> {
 public:
     using Handle::Handle;
@@ -605,6 +648,33 @@ public:
     /// Advance every emitter by dt seconds
     void update_emitters(float dt) { ov_update_emitters(e_, dt); }
     Sound load_sound(const std::string &path) { return {e_, detail::check(ov_load_sound(e_, path.c_str()), path)}; }
+
+    // render targets, post effects and shake
+    /// A transparent texture to draw into (draw_to), shown like any texture
+    Texture create_target(uint32_t width, uint32_t height) {
+        return {e_, detail::check(ov_create_target(e_, width, height), "render target")};
+    }
+    /// Draw calls go into `target` until draw_to_screen (or the next frame)
+    void draw_to(const Texture &target) {
+        if (!ov_set_target(e_, target.id())) throw Error(last_error());
+    }
+    void draw_to_screen() { ov_set_target(e_, 0); }
+    /// Clear a target this frame; one that is not cleared is drawn over
+    void clear_target(const Texture &target, Color c) { ov_clear_target(e_, target.id(), c); }
+    void set_target_camera(const Texture &target, const Camera &c) {
+        ov_set_target_camera(e_, target.id(), &c);
+    }
+    void reset_target_camera(const Texture &target) { ov_set_target_camera(e_, target.id(), nullptr); }
+    /// The screen's post effects, run in order every frame
+    void set_effects(const std::vector<Effect> &effects) { set_effects_of(0, effects); }
+    void set_effects(const Texture &target, const std::vector<Effect> &effects) {
+        set_effects_of(target.id(), effects);
+    }
+    Shader create_shader(const std::string &wgsl) {
+        return {e_, detail::check(ov_create_shader(e_, wgsl.c_str()), "shader")};
+    }
+    /// Shake the world on screen by up to `strength` pixels, fading out
+    void shake(float strength, float duration) { ov_shake(e_, strength, duration); }
 
     // camera and draw state
     Camera camera() const { return ov_get_camera(e_); }
@@ -887,6 +957,9 @@ public:
     void set_master_volume(float v) { ov_set_master_volume(e_, v); }
 
 private:
+    void set_effects_of(uint32_t target, const std::vector<Effect> &effects) {
+        if (!ov_set_effects(e_, target, effects.data(), uint32_t(effects.size()))) throw Error(last_error());
+    }
     template <class F>
     static std::vector<Entity> collect(F &&query) {
         std::vector<Entity> out(query(nullptr, 0));

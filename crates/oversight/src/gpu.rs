@@ -7,6 +7,10 @@
 //! shapes a 1x1 white texture, text a glyph atlas. Consecutive triangles
 //! with the same texture go out in one draw call, so the order of the
 //! draw calls (layer, depth, call order) is kept exactly.
+//!
+//! Render targets are textures drawn into the same way, each in its own
+//! pass before the screen. Post effects are full-screen passes that read
+//! the picture and write it into a scratch texture of the same size.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,7 +18,8 @@ use std::sync::Arc;
 use tiny_skia::{Pixmap, Point, Transform};
 use wgpu::util::DeviceExt;
 
-use crate::render::{sprite_src, sprite_transform, DrawCmd, DrawKind, Renderer, Shape};
+use crate::post::{self, Effect};
+use crate::render::{sprite_src, sprite_transform, visible, DrawCmd, DrawKind, Renderer, Shape};
 use crate::text::Font;
 use crate::texture::{Store, Texture};
 use crate::types::{Color, Rect, Vec2};
@@ -23,6 +28,10 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const ATLAS_SIZE: u32 = 2048;
 /// Samples per pixel when shapes are antialiased
 const MSAA: u32 = 4;
+/// Bytes between per-pass uniform blocks (the dynamic offset alignment)
+const SLOT: u64 = 256;
+/// Bytes of one uniform block the shaders see
+const BLOCK: u64 = 64;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -58,7 +67,59 @@ struct GpuTexture {
     generation: u64,
     smooth: bool,
     bind_group: wgpu::BindGroup,
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: (u32, u32),
+    /// Render targets only: the antialiased picture, made on first use
+    msaa: Option<wgpu::TextureView>,
+}
+
+/// One target's draw calls (a range of batches) and its effects
+struct GpuPass {
+    target: u32,
+    size: (u32, u32),
+    clear: Option<Color>,
+    batches: std::ops::Range<usize>,
+    effects: Vec<Effect>,
+}
+
+/// Built-in effect passes, in the order of `FX_ENTRIES`
+#[derive(Clone, Copy)]
+enum Fx {
+    GlowA,
+    GlowB,
+    BlurA,
+    BlurB,
+    Grade,
+    Crt,
+}
+
+const FX_ENTRIES: [&str; 6] = [
+    "fx_glow_a",
+    "fx_glow_b",
+    "fx_blur_a",
+    "fx_blur_b",
+    "fx_grade",
+    "fx_crt",
+];
+
+/// Which texture an effect pass reads or writes: the target itself or
+/// one of its two scratch textures
+#[derive(Clone, Copy, PartialEq)]
+enum Slot {
+    Main,
+    A,
+    B,
+}
+
+impl Slot {
+    /// A slot that is neither of these
+    fn other(a: Slot, b: Slot) -> Slot {
+        [Slot::Main, Slot::A, Slot::B]
+            .into_iter()
+            .find(|s| *s != a && *s != b)
+            .unwrap_or(Slot::A)
+    }
 }
 
 /// Glyph images packed into one texture, row by row
@@ -116,8 +177,17 @@ pub struct Gpu {
     queue: wgpu::Queue,
     pub adapter_name: String,
     texture_layout: wgpu::BindGroupLayout,
+    uniform_layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
     uniform_group: wgpu::BindGroup,
+    /// Two textures and a sampler, for effect passes
+    post_layout: wgpu::BindGroupLayout,
+    fx_layout: wgpu::PipelineLayout,
+    fx: Vec<wgpu::RenderPipeline>,
+    /// Compiled custom shaders by id
+    shaders: HashMap<u32, wgpu::RenderPipeline>,
+    /// Two scratch textures per picture size, for effect passes
+    scratch: HashMap<(u32, u32), [(wgpu::Texture, wgpu::TextureView); 2]>,
     /// 1 sample (crisp) and MSAA (antialiased) versions
     pipelines: [wgpu::RenderPipeline; 2],
     nearest: wgpu::Sampler,
@@ -130,6 +200,9 @@ pub struct Gpu {
     vertex_buffer: wgpu::Buffer,
     vertices: Vec<Vertex>,
     batches: Vec<Batch>,
+    passes: Vec<GpuPass>,
+    /// The next triangles start a new batch (a new pass begins)
+    split: bool,
 }
 
 const SHADER: &str = r#"
@@ -158,7 +231,8 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
     return textureSample(tex, samp, i.uv) * i.color;
 }
 
-// Scaling the canvas into the window: one triangle covering the viewport
+// Scaling the canvas into the window, and effect passes: one triangle
+// covering the viewport
 struct BOut {
     @builtin(position) pos: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -180,6 +254,169 @@ fn blit_fs(i: BOut) -> @location(0) vec4<f32> {
     return vec4<f32>(c.rgb, 1.0);
 }
 "#;
+
+/// What every effect shader (built-in or custom) starts with
+const FX_PRELUDE: &str = r#"
+struct Post { size: vec2<f32>, time: f32, pass_: f32, p: array<vec4<f32>, 2> };
+@group(0) @binding(0) var<uniform> post: Post;
+@group(1) @binding(0) var source: texture_2d<f32>;
+@group(1) @binding(2) var samp: sampler;
+
+struct FxOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn fx_vs(@builtin(vertex_index) i: u32) -> FxOut {
+    let uv = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u));
+    var o: FxOut;
+    o.pos = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.0, 1.0);
+    o.uv = uv;
+    return o;
+}
+
+// One pixel of the picture, clamped to its edges
+fn load(p: vec2<i32>) -> vec4<f32> {
+    return textureLoad(source, clamp(p, vec2<i32>(0), vec2<i32>(post.size) - 1), 0);
+}
+"#;
+
+/// The built-in effects; the same maths as `post.rs`
+const FX_SHADER: &str = r#"
+@group(1) @binding(1) var second: texture_2d<f32>;
+
+fn load2(p: vec2<i32>) -> vec4<f32> {
+    return textureLoad(second, clamp(p, vec2<i32>(0), vec2<i32>(post.size) - 1), 0);
+}
+
+fn luma(c: vec3<f32>) -> f32 {
+    return dot(c, vec3<f32>(0.2126, 0.7152, 0.0722));
+}
+
+fn radius(v: f32) -> i32 {
+    return i32(ceil(clamp(v, 1.0, 32.0)));
+}
+
+// Gaussian blur of `source` along `dir`; threshold >= 0 keeps only the
+// bright part of each tap
+fn blur(p: vec2<i32>, dir: vec2<i32>, r: i32, threshold: f32) -> vec4<f32> {
+    let sigma = f32(r) / 2.0;
+    var sum = vec4<f32>(0.0);
+    var total = 0.0;
+    for (var k = -r; k <= r; k++) {
+        let w = exp(-f32(k * k) / (2.0 * sigma * sigma));
+        var c = load(p + dir * k);
+        if threshold >= 0.0 {
+            c *= clamp((luma(c.rgb) - threshold) / max(1.0 - threshold, 1e-3), 0.0, 1.0);
+        }
+        sum += c * w;
+        total += w;
+    }
+    return sum / total;
+}
+
+fn pixel(pos: vec4<f32>) -> vec2<i32> {
+    return vec2<i32>(floor(pos.xy));
+}
+
+@fragment
+fn fx_glow_a(i: FxOut) -> @location(0) vec4<f32> {
+    return blur(pixel(i.pos), vec2<i32>(1, 0), radius(post.p[0].z), max(post.p[0].x, 0.0));
+}
+
+@fragment
+fn fx_glow_b(i: FxOut) -> @location(0) vec4<f32> {
+    let p = pixel(i.pos);
+    let s = load2(p);
+    let g = blur(p, vec2<i32>(0, 1), radius(post.p[0].z), -1.0);
+    let o = s.rgb + g.rgb * post.p[0].y;
+    let a = max(s.a, min(max(o.r, max(o.g, o.b)), 1.0));
+    return vec4<f32>(min(o, vec3<f32>(a)), a);
+}
+
+@fragment
+fn fx_blur_a(i: FxOut) -> @location(0) vec4<f32> {
+    return blur(pixel(i.pos), vec2<i32>(1, 0), radius(post.p[0].x), -1.0);
+}
+
+@fragment
+fn fx_blur_b(i: FxOut) -> @location(0) vec4<f32> {
+    return blur(pixel(i.pos), vec2<i32>(0, 1), radius(post.p[0].x), -1.0);
+}
+
+@fragment
+fn fx_grade(i: FxOut) -> @location(0) vec4<f32> {
+    let c = load(pixel(i.pos));
+    if c.a <= 0.0 {
+        return c;
+    }
+    let p0 = post.p[0];
+    let p1 = post.p[1];
+    var rgb = (c.rgb / c.a + p0.x - 0.5) * p0.y + 0.5;
+    let l = luma(rgb);
+    let s = clamp(vec3<f32>(l) + (rgb - vec3<f32>(l)) * p0.z, vec3<f32>(0.0), vec3<f32>(1.0));
+    let g = pow(max(s, vec3<f32>(1e-6)), vec3<f32>(1.0 / max(p0.w, 0.01)));
+    rgb = clamp(g * p1.xyz, vec3<f32>(0.0), vec3<f32>(1.0));
+    return vec4<f32>(rgb * c.a, c.a);
+}
+
+// Bilinear between texel centres; `s` is in texels
+fn sample_at(s: vec2<f32>) -> vec4<f32> {
+    let f0 = floor(s);
+    let f = s - f0;
+    let p = vec2<i32>(f0);
+    let top = mix(load(p), load(p + vec2<i32>(1, 0)), f.x);
+    let bottom = mix(load(p + vec2<i32>(0, 1)), load(p + vec2<i32>(1, 1)), f.x);
+    return mix(top, bottom, f.y);
+}
+
+@fragment
+fn fx_crt(i: FxOut) -> @location(0) vec4<f32> {
+    let p = pixel(i.pos);
+    let k = post.p[0];
+    let q = (vec2<f32>(p) + 0.5) / post.size * 2.0 - 1.0;
+    let r2 = dot(q, q);
+    let c = q * (1.0 + k.y * r2);
+    if abs(c.x) > 1.0 || abs(c.y) > 1.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
+    let s = (c * 0.5 + 0.5) * post.size - 0.5;
+    let g = sample_at(s);
+    var rgb = vec3<f32>(
+        sample_at(s + vec2<f32>(k.w, 0.0)).r,
+        g.g,
+        sample_at(s - vec2<f32>(k.w, 0.0)).b,
+    );
+    var dim = clamp(1.0 - k.z * r2 * 0.5, 0.0, 1.0);
+    if p.y % 2 == 1 {
+        dim *= 1.0 - clamp(k.x, 0.0, 1.0);
+    }
+    return vec4<f32>(rgb * dim, g.a);
+}
+"#;
+
+/// A custom effect shader with the prelude and its entry point around it
+fn shader_source(wgsl: &str) -> String {
+    format!(
+        "{}\n{}\n@fragment\nfn fx_custom(i: FxOut) -> @location(0) vec4<f32> {{\n    return effect(i.uv, floor(i.pos.xy));\n}}\n",
+        FX_PRELUDE, wgsl
+    )
+}
+
+/// Check a custom effect shader without a graphics card
+pub fn validate_shader(wgsl: &str) -> Result<(), String> {
+    use wgpu::naga;
+    let full = shader_source(wgsl);
+    let module = naga::front::wgsl::parse_str(&full).map_err(|e| e.emit_to_string(&full))?;
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    )
+    .validate(&module)
+    .map_err(|e| e.emit_to_string(&full))?;
+    Ok(())
+}
 
 impl Gpu {
     /// A GPU renderer for a canvas of `size`; with a window it also
@@ -258,14 +495,37 @@ impl Gpu {
             label: None,
             entries: &[wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: None,
                 },
                 count: None,
             }],
+        });
+        let texture_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let post_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("post"),
+            entries: &[
+                texture_entry(0),
+                texture_entry(1),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
         });
         let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -288,20 +548,7 @@ impl Gpu {
                 },
             ],
         });
-        let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let uniform_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &uniform_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniforms.as_entire_binding(),
-            }],
-        });
+        let (uniforms, uniform_group) = uniform_buffer(&device, &uniform_layout, 16);
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: None,
             bind_group_layouts: &[Some(&uniform_layout), Some(&texture_layout)],
@@ -344,6 +591,19 @@ impl Gpu {
             })
         };
         let pipelines = [pipeline(1), pipeline(MSAA)];
+        let fx_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("post"),
+            bind_group_layouts: &[Some(&uniform_layout), Some(&post_layout)],
+            immediate_size: 0,
+        });
+        let fx_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("effects"),
+            source: wgpu::ShaderSource::Wgsl(format!("{}{}", FX_PRELUDE, FX_SHADER).into()),
+        });
+        let fx = FX_ENTRIES
+            .iter()
+            .map(|entry| fx_pipeline(&device, &fx_layout, &fx_module, entry))
+            .collect();
         let sampler = |filter: wgpu::FilterMode| {
             device.create_sampler(&wgpu::SamplerDescriptor {
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -401,8 +661,14 @@ impl Gpu {
             queue,
             adapter_name,
             texture_layout,
+            uniform_layout,
             uniforms,
             uniform_group,
+            post_layout,
+            fx_layout,
+            fx,
+            shaders: HashMap::new(),
+            scratch: HashMap::new(),
             pipelines,
             nearest,
             linear,
@@ -414,6 +680,8 @@ impl Gpu {
             vertex_buffer,
             vertices: Vec::new(),
             batches: Vec::new(),
+            passes: Vec::new(),
+            split: true,
         };
         Ok((gpu, adapter))
     }
@@ -457,14 +725,16 @@ impl Gpu {
             })
     }
 
-    /// Draw a frame's sorted draw calls into the canvas texture; returns
-    /// how many sprites were drawn (after culling)
+    /// Draw a frame's sorted draw calls into the render targets and the
+    /// canvas texture, with their effects; returns how many sprites were
+    /// drawn (after culling). `time` is seconds, for custom shaders.
     pub fn render(
         &mut self,
         renderer: &Renderer,
         commands: &[DrawCmd],
         textures: &mut Store<Texture>,
         fonts: &mut Store<Font>,
+        time: f32,
     ) -> u32 {
         let size = renderer.size();
         if self.target.size != size {
@@ -473,49 +743,94 @@ impl Gpu {
         self.sync_textures(textures);
         self.vertices.clear();
         self.batches.clear();
+        self.passes.clear();
         let mut sprites = 0;
-        for cmd in commands {
-            let base = renderer.space_transform(cmd.space);
-            match &cmd.kind {
-                DrawKind::Sprite { texture, sprite } => {
-                    let Some(tex) = textures.get(*texture) else {
-                        continue;
-                    };
-                    let (tw, th) = (tex.width(), tex.height());
-                    let src = sprite_src(sprite, tw, th);
-                    let transform = base.pre_concat(sprite_transform(sprite, src));
-                    if !renderer.visible(Rect::new(0.0, 0.0, src.w, src.h), transform) {
-                        continue;
+        for pass in renderer.passes(commands) {
+            let fits = pass.target == 0
+                || self
+                    .textures
+                    .get(&pass.target)
+                    .is_some_and(|t| t.size == pass.size);
+            if !fits {
+                continue;
+            }
+            self.split = true;
+            let first = self.batches.len();
+            for cmd in &commands[pass.commands.clone()] {
+                let base = renderer.space_transform(cmd.space, pass.target);
+                match &cmd.kind {
+                    DrawKind::Sprite { texture, sprite } => {
+                        // A target cannot show itself while it is drawn
+                        if *texture == pass.target {
+                            continue;
+                        }
+                        let Some(tex) = textures.get(*texture) else {
+                            continue;
+                        };
+                        let (tw, th) = (tex.width(), tex.height());
+                        let src = sprite_src(sprite, tw, th);
+                        let transform = base.pre_concat(sprite_transform(sprite, src));
+                        if !visible(pass.size, Rect::new(0.0, 0.0, src.w, src.h), transform) {
+                            continue;
+                        }
+                        if !self.textures.contains_key(texture) {
+                            continue;
+                        }
+                        let uv = Rect::new(
+                            src.x / tw as f32,
+                            src.y / th as f32,
+                            src.w / tw as f32,
+                            src.h / th as f32,
+                        );
+                        let local = Rect::new(0.0, 0.0, src.w, src.h);
+                        self.quad(Source::Texture(*texture), local, uv, transform, sprite.tint);
+                        sprites += 1;
                     }
-                    if !self.textures.contains_key(texture) {
-                        continue;
-                    }
-                    let uv = Rect::new(
-                        src.x / tw as f32,
-                        src.y / th as f32,
-                        src.w / tw as f32,
-                        src.h / th as f32,
-                    );
-                    let local = Rect::new(0.0, 0.0, src.w, src.h);
-                    self.quad(Source::Texture(*texture), local, uv, transform, sprite.tint);
-                    sprites += 1;
-                }
-                DrawKind::Shape { shape, color } => self.shape(shape, *color, base),
-                DrawKind::Text {
-                    font,
-                    text,
-                    pos,
-                    size,
-                    color,
-                } => {
-                    if let Some(f) = fonts.get_mut(*font) {
-                        self.text(*font, f, text, *pos, *size, *color, base);
+                    DrawKind::Shape { shape, color } => self.shape(shape, *color, base),
+                    DrawKind::Text {
+                        font,
+                        text,
+                        pos,
+                        size,
+                        color,
+                    } => {
+                        if let Some(f) = fonts.get_mut(*font) {
+                            self.text(*font, f, text, *pos, *size, *color, base);
+                        }
                     }
                 }
             }
+            self.passes.push(GpuPass {
+                target: pass.target,
+                size: pass.size,
+                clear: pass.clear,
+                batches: first..self.batches.len(),
+                effects: renderer.effects_of(pass.target).to_vec(),
+            });
         }
-        self.draw(renderer.clear_color, renderer.antialias);
+        self.draw(renderer.antialias, time);
         sprites
+    }
+
+    /// Compile a custom effect shader (see `Engine::create_shader`)
+    pub fn compile_shader(&mut self, id: u32, wgsl: &str) -> Result<(), String> {
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let module = self
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("custom effect"),
+                source: wgpu::ShaderSource::Wgsl(shader_source(wgsl).into()),
+            });
+        let pipeline = fx_pipeline(&self.device, &self.fx_layout, &module, "fx_custom");
+        if let Some(e) = pollster::block_on(scope.pop()) {
+            return Err(e.to_string());
+        }
+        self.shaders.insert(id, pipeline);
+        Ok(())
+    }
+
+    pub fn free_shader(&mut self, id: u32) {
+        self.shaders.remove(&id);
     }
 
     /// Upload new or changed textures, drop freed ones
@@ -532,7 +847,7 @@ impl Gpu {
             let rebind = match self.textures.get(&id) {
                 Some(g) if g.smooth == tex.smooth => continue,
                 // Only the filter changed: same image, other sampler
-                Some(g) => Some(g._texture.create_view(&Default::default())),
+                Some(g) => Some(g.texture.create_view(&Default::default())),
                 None => None,
             };
             match rebind {
@@ -544,13 +859,15 @@ impl Gpu {
                     }
                 }
                 None => {
+                    let mut usage = wgpu::TextureUsages::TEXTURE_BINDING;
+                    if tex.target {
+                        usage |= wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::COPY_SRC
+                            | wgpu::TextureUsages::COPY_DST;
+                    }
                     let texture = self.device.create_texture_with_data(
                         &self.queue,
-                        &texture_desc(
-                            tex.width(),
-                            tex.height(),
-                            wgpu::TextureUsages::TEXTURE_BINDING,
-                        ),
+                        &texture_desc(tex.width(), tex.height(), usage),
                         Default::default(),
                         tex.pixmap.data(),
                     );
@@ -562,7 +879,10 @@ impl Gpu {
                             generation: tex.generation,
                             smooth: tex.smooth,
                             bind_group,
-                            _texture: texture,
+                            texture,
+                            view,
+                            size: (tex.width(), tex.height()),
+                            msaa: None,
                         },
                     );
                 }
@@ -591,8 +911,9 @@ impl Gpu {
     fn push(&mut self, source: Source, vertices: &[Vertex]) {
         let start = self.vertices.len() as u32;
         self.vertices.extend_from_slice(vertices);
+        let split = std::mem::take(&mut self.split);
         match self.batches.last_mut() {
-            Some(b) if b.source == source => b.count += vertices.len() as u32,
+            Some(b) if b.source == source && !split => b.count += vertices.len() as u32,
             _ => self.batches.push(Batch {
                 source,
                 start,
@@ -765,12 +1086,46 @@ impl Gpu {
         }
     }
 
-    fn draw(&mut self, clear: Color, antialias: bool) {
-        let (w, h) = self.target.size;
-        let mut uniforms = [0u8; 16];
-        uniforms[0..4].copy_from_slice(&(w as f32).to_le_bytes());
-        uniforms[4..8].copy_from_slice(&(h as f32).to_le_bytes());
-        self.queue.write_buffer(&self.uniforms, 0, &uniforms);
+    fn draw(&mut self, antialias: bool, time: f32) {
+        // Everything the passes need is made before encoding them
+        let runs: usize = self
+            .passes
+            .iter()
+            .flat_map(|p| &p.effects)
+            .map(|e| match e.kind {
+                post::EFFECT_GLOW | post::EFFECT_BLUR => 2,
+                _ => 1,
+            })
+            .sum();
+        let slots = (self.passes.len() + runs) as u64;
+        if slots * SLOT > self.uniforms.size() {
+            (self.uniforms, self.uniform_group) =
+                uniform_buffer(&self.device, &self.uniform_layout, slots * 2);
+        }
+        for i in 0..self.passes.len() {
+            let pass = &self.passes[i];
+            if !pass.effects.is_empty() && !self.scratch.contains_key(&pass.size) {
+                let make = || {
+                    let t = self.device.create_texture(&texture_desc(
+                        pass.size.0,
+                        pass.size.1,
+                        wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_SRC,
+                    ));
+                    let v = t.create_view(&Default::default());
+                    (t, v)
+                };
+                let pair = [make(), make()];
+                self.scratch.insert(pass.size, pair);
+            }
+            let (target, wants_msaa) = (pass.target, antialias && pass.clear.is_some());
+            if let Some(t) = self.textures.get_mut(&target) {
+                if wants_msaa && t.msaa.is_none() {
+                    t.msaa = Some(msaa_view(&self.device, t.size));
+                }
+            }
+        }
         let bytes = Vertex::bytes(&self.vertices);
         if bytes.len() as u64 > self.vertex_buffer.size() {
             self.vertex_buffer = vertex_buffer(&self.device, bytes.len() as u64 * 2);
@@ -778,49 +1133,195 @@ impl Gpu {
         if !bytes.is_empty() {
             self.queue.write_buffer(&self.vertex_buffer, 0, bytes);
         }
+        let mut blocks = vec![0u8; (slots * SLOT) as usize];
+        let mut slot = 0u64;
         let mut encoder = self.device.create_command_encoder(&Default::default());
-        {
-            let c = premultiplied(clear);
-            let (view, resolve) = match (&self.target.msaa, antialias) {
-                (Some(msaa), true) => (msaa, Some(&self.target.view)),
-                _ => (&self.target.view, None),
+        for pass in &self.passes {
+            let (view, msaa) = if pass.target == 0 {
+                (&self.target.view, self.target.msaa.as_ref())
+            } else {
+                match self.textures.get(&pass.target) {
+                    Some(t) => (&t.view, t.msaa.as_ref()),
+                    None => continue,
+                }
             };
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("frame"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: resolve,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: c[0] as f64,
-                            g: c[1] as f64,
-                            b: c[2] as f64,
-                            a: c[3] as f64,
-                        }),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-            let msaa = resolve.is_some();
-            pass.set_pipeline(&self.pipelines[msaa as usize]);
-            pass.set_bind_group(0, &self.uniform_group, &[]);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            for batch in &self.batches {
-                let group = match batch.source {
-                    Source::White => &self.white,
-                    Source::Atlas => &self.atlas.bind_group,
-                    Source::Texture(id) => match self.textures.get(&id) {
-                        Some(t) => &t.bind_group,
-                        None => continue,
-                    },
-                };
-                pass.set_bind_group(1, group, &[]);
-                pass.draw(batch.start..batch.start + batch.count, 0..1);
+            // A target that keeps its picture is drawn over without MSAA,
+            // so what it loads is exactly what it showed
+            let msaa = msaa.filter(|_| antialias && pass.clear.is_some());
+            let (attachment, resolve) = match msaa {
+                Some(m) => (m, Some(view)),
+                None => (view, None),
+            };
+            let load = match pass.clear {
+                Some(c) => {
+                    let c = premultiplied(c);
+                    wgpu::LoadOp::Clear(wgpu::Color {
+                        r: c[0] as f64,
+                        g: c[1] as f64,
+                        b: c[2] as f64,
+                        a: c[3] as f64,
+                    })
+                }
+                None => wgpu::LoadOp::Load,
+            };
+            let offset = slot * SLOT;
+            write_block(&mut blocks, offset, pass.size, time, &[0.0; 8]);
+            slot += 1;
+            {
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("frame"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: attachment,
+                        depth_slice: None,
+                        resolve_target: resolve,
+                        ops: wgpu::Operations {
+                            load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                rp.set_pipeline(&self.pipelines[resolve.is_some() as usize]);
+                rp.set_bind_group(0, &self.uniform_group, &[offset as u32]);
+                rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                for batch in &self.batches[pass.batches.clone()] {
+                    let group = match batch.source {
+                        Source::White => &self.white,
+                        Source::Atlas => &self.atlas.bind_group,
+                        Source::Texture(id) => match self.textures.get(&id) {
+                            Some(t) => &t.bind_group,
+                            None => continue,
+                        },
+                    };
+                    rp.set_bind_group(1, group, &[]);
+                    rp.draw(batch.start..batch.start + batch.count, 0..1);
+                }
+            }
+            let texture = if pass.target == 0 {
+                &self.target.texture
+            } else {
+                &self.textures[&pass.target].texture
+            };
+            self.effects(
+                &mut encoder,
+                pass,
+                (texture, view),
+                &mut blocks,
+                &mut slot,
+                time,
+            );
+        }
+        self.queue.write_buffer(&self.uniforms, 0, &blocks);
+        self.queue.submit([encoder.finish()]);
+    }
+
+    /// Run a pass's effect chain over its picture, ping-ponging between
+    /// the picture and two scratch textures, and leave the result in it
+    fn effects(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pass: &GpuPass,
+        main: (&wgpu::Texture, &wgpu::TextureView),
+        blocks: &mut [u8],
+        slot: &mut u64,
+        time: f32,
+    ) {
+        let Some(scratch) = self.scratch.get(&pass.size) else {
+            return;
+        };
+        let view = |s: Slot| match s {
+            Slot::Main => main.1,
+            Slot::A => &scratch[0].1,
+            Slot::B => &scratch[1].1,
+        };
+        let mut run =
+            |pipeline: &wgpu::RenderPipeline, from: Slot, second: Slot, to: Slot, p: &[f32; 8]| {
+                let offset = *slot * SLOT;
+                write_block(blocks, offset, pass.size, time, p);
+                *slot += 1;
+                let group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.post_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(view(from)),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(view(second)),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.linear),
+                        },
+                    ],
+                });
+                let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("effect"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: view(to),
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                rp.set_pipeline(pipeline);
+                rp.set_bind_group(0, &self.uniform_group, &[offset as u32]);
+                rp.set_bind_group(1, &group, &[]);
+                rp.draw(0..3, 0..1);
+            };
+        let fx = |f: Fx| &self.fx[f as usize];
+        let mut cur = Slot::Main;
+        for e in &pass.effects {
+            match e.kind {
+                post::EFFECT_GLOW => {
+                    let a = Slot::other(cur, cur);
+                    let b = Slot::other(cur, a);
+                    run(fx(Fx::GlowA), cur, cur, a, &e.p);
+                    run(fx(Fx::GlowB), a, cur, b, &e.p);
+                    cur = b;
+                }
+                post::EFFECT_BLUR => {
+                    let a = Slot::other(cur, cur);
+                    run(fx(Fx::BlurA), cur, cur, a, &e.p);
+                    run(fx(Fx::BlurB), a, a, cur, &e.p);
+                }
+                post::EFFECT_GRADE | post::EFFECT_CRT | post::EFFECT_SHADER => {
+                    let pipeline = match e.kind {
+                        post::EFFECT_GRADE => fx(Fx::Grade),
+                        post::EFFECT_CRT => fx(Fx::Crt),
+                        _ => match self.shaders.get(&e.shader) {
+                            Some(p) => p,
+                            None => continue,
+                        },
+                    };
+                    let to = Slot::other(cur, cur);
+                    run(pipeline, cur, cur, to, &e.p);
+                    cur = to;
+                }
+                _ => {}
             }
         }
-        self.queue.submit([encoder.finish()]);
+        if cur != Slot::Main {
+            let from = match cur {
+                Slot::A => &scratch[0].0,
+                _ => &scratch[1].0,
+            };
+            encoder.copy_texture_to_texture(
+                from.as_image_copy(),
+                main.0.as_image_copy(),
+                wgpu::Extent3d {
+                    width: pass.size.0,
+                    height: pass.size.1,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
     }
 
     /// Show the last frame in the window, scaled like the software
@@ -983,15 +1484,11 @@ fn make_target(
         size.1,
         wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::TEXTURE_BINDING
-            | wgpu::TextureUsages::COPY_SRC,
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
     ));
     let view = texture.create_view(&Default::default());
-    let msaa = device
-        .create_texture(&wgpu::TextureDescriptor {
-            sample_count: MSAA,
-            ..texture_desc(size.0, size.1, wgpu::TextureUsages::RENDER_ATTACHMENT)
-        })
-        .create_view(&Default::default());
+    let msaa = msaa_view(device, size);
     let blit_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None,
         layout,
@@ -1013,6 +1510,84 @@ fn make_target(
         msaa: Some(msaa),
         blit_group,
     }
+}
+
+fn msaa_view(device: &wgpu::Device, size: (u32, u32)) -> wgpu::TextureView {
+    device
+        .create_texture(&wgpu::TextureDescriptor {
+            sample_count: MSAA,
+            ..texture_desc(size.0, size.1, wgpu::TextureUsages::RENDER_ATTACHMENT)
+        })
+        .create_view(&Default::default())
+}
+
+/// A buffer of `slots` uniform blocks, and its bind group
+fn uniform_buffer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    slots: u64,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("uniforms"),
+        size: slots.max(1) * SLOT,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None,
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &buffer,
+                offset: 0,
+                size: wgpu::BufferSize::new(BLOCK),
+            }),
+        }],
+    });
+    (buffer, group)
+}
+
+/// One uniform block: size, time, then the effect's numbers
+fn write_block(blocks: &mut [u8], offset: u64, size: (u32, u32), time: f32, p: &[f32; 8]) {
+    let mut values = [0f32; 12];
+    values[0] = size.0 as f32;
+    values[1] = size.1 as f32;
+    values[2] = time;
+    values[4..].copy_from_slice(p);
+    let at = &mut blocks[offset as usize..][..48];
+    for (dst, v) in at.chunks_exact_mut(4).zip(values) {
+        dst.copy_from_slice(&v.to_le_bytes());
+    }
+}
+
+fn fx_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    entry: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(entry),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("fx_vs"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: Default::default(),
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            targets: &[Some(FORMAT.into())],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn vertex_buffer(device: &wgpu::Device, size: u64) -> wgpu::Buffer {
@@ -1043,6 +1618,7 @@ fn premultiplied(c: Color) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use crate::engine::Engine;
+    use crate::post::Effect;
     use crate::types::{Color, Rect, Space, Sprite, Vec2};
 
     /// A GPU engine, or None when the machine has no adapter at all (CI
@@ -1195,5 +1771,101 @@ mod tests {
         assert_eq!(green, red, "the id is reused");
         draw(&mut e, green);
         assert_eq!(e.pixel(1, 1), Some(Color::rgba(0, 255, 0, 255)));
+    }
+
+    /// Targets and every built-in effect, the same through either renderer
+    fn effects_scene(e: &mut Engine, effects: &[Effect]) {
+        e.set_antialias(false);
+        let t = e.create_target(48, 32).unwrap();
+        e.set_effects(t, &[Effect::grade(0.1, 1.2, 0.5, 1.0, Color::WHITE)])
+            .unwrap();
+        e.set_effects(0, effects).unwrap();
+        e.begin_frame(Color::rgba(10, 20, 40, 255));
+        e.set_target(t).unwrap();
+        e.clear_target(t, Color::rgba(0, 0, 0, 0));
+        e.set_space(Space::Screen);
+        e.fill_circle(Vec2::new(24.0, 16.0), 10.0, Color::rgba(255, 120, 0, 255));
+        e.set_target(0).unwrap();
+        e.draw_sprite(
+            t,
+            &Sprite {
+                pos: Vec2::new(10.0, 20.0),
+                scale: Vec2::new(2.0, 2.0),
+                ..Sprite::default()
+            },
+        );
+        e.fill_rect(Rect::new(80.0, 10.0, 30.0, 6.0), Color::WHITE);
+        e.fill_rect(
+            Rect::new(70.0, 50.0, 40.0, 30.0),
+            Color::rgba(40, 200, 90, 255),
+        );
+        e.end_frame();
+    }
+
+    #[test]
+    fn gpu_targets_and_effects_match_software() {
+        let chains: [(&str, Vec<Effect>); 5] = [
+            ("none", vec![]),
+            ("glow", vec![Effect::glow(0.6, 1.5, 6.0)]),
+            ("blur", vec![Effect::blur(3.0)]),
+            ("crt", vec![Effect::crt(0.4, 0.15, 0.6, 1.5)]),
+            (
+                "chain",
+                vec![
+                    Effect::glow(0.5, 1.0, 4.0),
+                    Effect::grade(0.0, 1.1, 1.3, 1.2, Color::rgba(255, 230, 200, 255)),
+                    Effect::crt(0.3, 0.1, 0.4, 1.0),
+                ],
+            ),
+        ];
+        for (name, chain) in chains {
+            let Some(mut gpu) = gpu_engine(128, 96) else {
+                return;
+            };
+            let mut soft = Engine::headless(128, 96).unwrap();
+            effects_scene(&mut soft, &chain);
+            effects_scene(&mut gpu, &chain);
+            let bad = differ(&mut soft, &mut gpu, 6);
+            if bad > 0.01 || std::env::var_os("OVERSIGHT_GPU_SHOTS").is_some() {
+                soft.save_screenshot(&format!("fx_{name}_software.png"))
+                    .ok();
+                gpu.save_screenshot(&format!("fx_{name}_gpu.png")).ok();
+            }
+            assert!(bad <= 0.01, "{name}: {:.2}% pixels differ", bad * 100.0);
+        }
+    }
+
+    #[test]
+    fn gpu_runs_custom_shaders() {
+        let Some(mut e) = gpu_engine(8, 8) else {
+            return;
+        };
+        let invert = "fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> {
+            let c = load(vec2<i32>(pixel));
+            return vec4<f32>(vec3<f32>(c.a) - c.rgb, c.a) * post.p[0].x;
+        }";
+        let id = e.create_shader(invert).unwrap();
+        e.set_effects(
+            0,
+            &[Effect::shader(id, [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])],
+        )
+        .unwrap();
+        e.begin_frame(Color::rgba(255, 0, 0, 255));
+        e.end_frame();
+        assert_eq!(e.pixel(3, 3), Some(Color::rgba(0, 255, 255, 255)));
+        let err = e
+            .create_shader(
+                "fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> { return nope; }",
+            )
+            .unwrap_err();
+        assert!(err.contains("nope"), "{err}");
+        e.free_shader(id);
+        e.begin_frame(Color::rgba(255, 0, 0, 255));
+        e.end_frame();
+        assert_eq!(
+            e.pixel(3, 3),
+            Some(Color::rgba(255, 0, 0, 255)),
+            "skipped once freed"
+        );
     }
 }

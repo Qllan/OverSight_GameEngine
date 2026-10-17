@@ -523,6 +523,41 @@ uint32_t ov_load_font(OvEngine *e, const char *path); /* TTF, OTF */
 void ov_free_font(OvEngine *e, uint32_t font);
 OvVec2 ov_measure_text(OvEngine *e, uint32_t font, const char *text, float size);
 
+/* --- render targets, post effects and shake ---
+ * A render target is a texture draw calls can go into: draw into it after
+ * ov_set_target(e, tex), go back with ov_set_target(e, 0), and draw it
+ * like any texture. Every frame starts on the screen. Targets are drawn in
+ * the order they are first used in the frame, the screen last. One that is
+ * not cleared keeps its picture and is drawn over (trails, paint).
+ *
+ * Post effects run over a target (0: the screen) every frame it is drawn,
+ * in order. Both renderers run the built-in ones the same way; custom
+ * shaders are WGSL and run only on the graphics card:
+ *     fn effect(uv: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> {
+ *         let c = load(vec2<i32>(pixel));   // or textureSample(source, samp, uv)
+ *         return vec4<f32>(c.rgb * post.p[0].x, c.a); // p[0..2]: the eight numbers
+ *     }
+ * post.size is the picture size and post.time seconds since start. */
+#define OV_EFFECT_GLOW 1   /* p: threshold 0..1, strength, radius px (1..32) */
+#define OV_EFFECT_BLUR 2   /* p: radius px (1..32) */
+#define OV_EFFECT_GRADE 3  /* p: brightness (+-), contrast (1), saturation (1), gamma (1), tint r, g, b (1) */
+#define OV_EFFECT_CRT 4    /* p: scanlines 0..1, curvature 0..0.5, vignette 0..1, aberration px */
+#define OV_EFFECT_SHADER 5 /* shader from ov_create_shader; p goes to post.p */
+typedef struct OvEffect {
+    uint32_t kind;
+    uint32_t shader;
+    float p[8];
+} OvEffect;
+uint32_t ov_create_target(OvEngine *e, uint32_t width, uint32_t height); /* a texture id; 0 on error */
+bool ov_set_target(OvEngine *e, uint32_t target); /* 0: the screen; false: not a target */
+uint32_t ov_get_target(OvEngine *e);
+void ov_clear_target(OvEngine *e, uint32_t target, OvColor color); /* this frame, before its draw calls */
+void ov_set_target_camera(OvEngine *e, uint32_t target, const OvCamera *camera); /* NULL: the main camera */
+bool ov_set_effects(OvEngine *e, uint32_t target, const OvEffect *effects, uint32_t count);
+uint32_t ov_create_shader(OvEngine *e, const char *wgsl); /* 0 and ov_last_error on a compile error */
+void ov_free_shader(OvEngine *e, uint32_t shader);
+void ov_shake(OvEngine *e, float strength, float duration); /* the world on screen, pixels; fades out */
+
 /* --- camera and draw state --- */
 OvCamera ov_get_camera(OvEngine *e);
 void ov_set_camera(OvEngine *e, OvCamera camera);

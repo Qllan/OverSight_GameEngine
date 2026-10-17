@@ -1,10 +1,19 @@
 //! Renderer: draw calls are collected during a frame, sorted by layer,
 //! depth and call order, then rasterized into the canvas here (the
 //! software renderer) or drawn by the graphics card (`gpu`).
+//!
+//! Draw calls can go into a render target (a texture) instead of the
+//! screen. Targets are drawn in the order they were first opened in the
+//! frame, the screen last, so a target can show another one opened before
+//! it. Each target and the screen can run a chain of post effects.
+
+use std::collections::BTreeMap;
+use std::ops::Range;
 
 use tiny_skia::{FillRule, Paint, PathBuilder, Pattern, Pixmap, SpreadMode, Stroke, Transform};
 
 use crate::camera::Camera;
+use crate::post::{Effect, Shake};
 use crate::text::Font;
 use crate::texture::{Store, Texture};
 use crate::types::{Color, Rect, Space, Sprite, Vec2};
@@ -79,7 +88,27 @@ pub struct DrawCmd {
     pub depth: f32,
     pub space: Space,
     pub kind: DrawKind,
+    /// Texture id of the render target; 0 is the screen
+    pub target: u32,
     seq: u32,
+}
+
+/// A render target's settings, kept across frames
+#[derive(Debug, Clone, Default)]
+pub struct TargetState {
+    pub size: (u32, u32),
+    /// None: the main camera, fitted to the target's size
+    pub camera: Option<Camera>,
+    pub effects: Vec<Effect>,
+}
+
+/// The draw calls of one target, in drawing order
+pub struct Pass {
+    pub target: u32,
+    pub size: (u32, u32),
+    /// None keeps what the target showed before
+    pub clear: Option<Color>,
+    pub commands: Range<usize>,
 }
 
 pub struct Renderer {
@@ -92,6 +121,14 @@ pub struct Renderer {
     seq: u32,
     /// Sprites drawn in the last frame (after culling)
     pub drawn_sprites: u32,
+    /// Where draw calls go now (0: the screen)
+    pub target: u32,
+    pub targets: BTreeMap<u32, TargetState>,
+    /// The screen's post effects
+    pub effects: Vec<Effect>,
+    pub shake: Shake,
+    /// Targets opened this frame, in order, with their clear colour
+    opened: Vec<(u32, Option<Color>)>,
 }
 
 impl Renderer {
@@ -106,6 +143,11 @@ impl Renderer {
             commands: Vec::new(),
             seq: 0,
             drawn_sprites: 0,
+            target: 0,
+            targets: BTreeMap::new(),
+            effects: Vec::new(),
+            shake: Shake::default(),
+            opened: Vec::new(),
         })
     }
 
@@ -117,41 +159,148 @@ impl Renderer {
         self.clear_color = clear;
         self.commands.clear();
         self.seq = 0;
+        self.target = 0;
+        self.opened.clear();
     }
 
     pub fn push(&mut self, layer: i32, depth: f32, space: Space, kind: DrawKind) {
+        let target = self.target;
+        if target != 0 {
+            self.open(target);
+        }
         self.commands.push(DrawCmd {
             layer,
             depth,
             space,
             kind,
+            target,
             seq: self.seq,
         });
         self.seq += 1;
+    }
+
+    /// Send draw calls to a render target (0: the screen); false when
+    /// `target` is not one
+    pub fn set_target(&mut self, target: u32) -> bool {
+        if target != 0 && !self.targets.contains_key(&target) {
+            return false;
+        }
+        self.target = target;
+        true
+    }
+
+    fn open(&mut self, target: u32) -> usize {
+        match self.opened.iter().position(|o| o.0 == target) {
+            Some(i) => i,
+            None => {
+                self.opened.push((target, None));
+                self.opened.len() - 1
+            }
+        }
+    }
+
+    /// Clear a target before this frame's draw calls into it
+    pub fn clear_target(&mut self, target: u32, color: Color) {
+        if self.targets.contains_key(&target) {
+            let i = self.open(target);
+            self.opened[i].1 = Some(color);
+        }
+    }
+
+    /// Size of what draw calls go into now
+    pub fn target_size(&self) -> (u32, u32) {
+        self.target_size_of(self.target)
+    }
+
+    fn target_size_of(&self, target: u32) -> (u32, u32) {
+        match self.targets.get(&target) {
+            Some(t) if target != 0 => t.size,
+            _ => self.size(),
+        }
+    }
+
+    /// The camera World draw calls into `target` use
+    pub fn camera_of(&self, target: u32) -> Camera {
+        self.targets
+            .get(&target)
+            .and_then(|t| t.camera)
+            .unwrap_or(self.camera)
+    }
+
+    /// World rectangle the current target shows (for culling)
+    pub fn visible_world(&self) -> Rect {
+        self.camera_of(self.target)
+            .visible_world(self.target_size())
+    }
+
+    pub fn effects_of(&self, target: u32) -> &[Effect] {
+        if target == 0 {
+            &self.effects
+        } else {
+            self.targets.get(&target).map_or(&[], |t| &t.effects)
+        }
     }
 
     pub fn pending(&self) -> usize {
         self.commands.len()
     }
 
-    pub(crate) fn space_transform(&self, space: Space) -> Transform {
+    pub(crate) fn space_transform(&self, space: Space, target: u32) -> Transform {
         match space {
-            Space::World => self.camera.transform(self.size()),
+            Space::World => {
+                let t = self
+                    .camera_of(target)
+                    .transform(self.target_size_of(target));
+                if target != 0 {
+                    return t;
+                }
+                // The shake moves only the screen's world, never its HUD
+                let o = self.shake.offset();
+                Transform::from_translate(o.x, o.y).pre_concat(t)
+            }
             Space::Screen => Transform::identity(),
         }
     }
 
-    /// This frame's draw calls in drawing order; give them back with
-    /// `recycle` to keep the allocation
+    /// This frame's draw calls in drawing order, grouped by target (see
+    /// `passes`); give them back with `recycle` to keep the allocation
     pub fn take_sorted(&mut self) -> Vec<DrawCmd> {
         let mut commands = std::mem::take(&mut self.commands);
+        let rank = |t: u32| match t {
+            0 => usize::MAX,
+            t => self.opened.iter().position(|o| o.0 == t).unwrap_or(0),
+        };
         commands.sort_by(|a, b| {
-            a.layer
-                .cmp(&b.layer)
+            rank(a.target)
+                .cmp(&rank(b.target))
+                .then(a.layer.cmp(&b.layer))
                 .then(a.depth.total_cmp(&b.depth))
                 .then(a.seq.cmp(&b.seq))
         });
         commands
+    }
+
+    /// One pass per target opened this frame, then the screen
+    pub fn passes(&self, sorted: &[DrawCmd]) -> Vec<Pass> {
+        let mut passes = Vec::with_capacity(self.opened.len() + 1);
+        let mut start = 0;
+        let targets = self.opened.iter().copied();
+        for (target, clear) in targets.chain([(0, Some(self.clear_color))]) {
+            let n = sorted[start..]
+                .iter()
+                .take_while(|c| c.target == target)
+                .count();
+            if target == 0 || self.targets.contains_key(&target) {
+                passes.push(Pass {
+                    target,
+                    size: self.target_size_of(target),
+                    clear,
+                    commands: start..start + n,
+                });
+            }
+            start += n;
+        }
+        passes
     }
 
     pub fn recycle(&mut self, mut commands: Vec<DrawCmd>) {
@@ -159,43 +308,84 @@ impl Renderer {
         self.commands = commands;
     }
 
-    /// Sort and rasterize this frame's draw calls into the canvas
+    /// Sort and rasterize this frame's draw calls into the canvas and the
+    /// render targets, then run their post effects
     pub fn flush(&mut self, textures: &mut Store<Texture>, fonts: &mut Store<Font>) {
         let commands = self.take_sorted();
-        self.canvas.fill(self.clear_color.to_skia());
         self.drawn_sprites = 0;
-        for cmd in &commands {
-            let base = self.space_transform(cmd.space);
-            match &cmd.kind {
-                DrawKind::Sprite { texture, sprite } => {
-                    if let Some(tex) = textures.get_mut(*texture) {
-                        if self.draw_sprite(tex, sprite, base) {
-                            self.drawn_sprites += 1;
+        for pass in self.passes(&commands) {
+            // Worked out before the canvas is taken out (the screen's size
+            // is the canvas's)
+            let world = self.space_transform(Space::World, pass.target);
+            let mut canvas = if pass.target == 0 {
+                std::mem::replace(&mut self.canvas, empty())
+            } else {
+                match textures.get_mut(pass.target) {
+                    Some(t) if (t.width(), t.height()) == pass.size => {
+                        std::mem::replace(&mut t.pixmap, empty())
+                    }
+                    _ => continue,
+                }
+            };
+            if let Some(clear) = pass.clear {
+                canvas.fill(clear.to_skia());
+            }
+            for cmd in &commands[pass.commands.clone()] {
+                let base = match cmd.space {
+                    Space::World => world,
+                    Space::Screen => Transform::identity(),
+                };
+                match &cmd.kind {
+                    DrawKind::Sprite { texture, sprite } => {
+                        // A target cannot show itself while it is drawn
+                        if *texture == pass.target {
+                            continue;
+                        }
+                        if let Some(tex) = textures.get_mut(*texture) {
+                            if self.draw_sprite(&mut canvas, tex, sprite, base) {
+                                self.drawn_sprites += 1;
+                            }
+                        }
+                    }
+                    DrawKind::Shape { shape, color } => {
+                        draw_shape(&mut canvas, self.antialias, shape, *color, base)
+                    }
+                    DrawKind::Text {
+                        font,
+                        text,
+                        pos,
+                        size,
+                        color,
+                    } => {
+                        if let Some(font) = fonts.get_mut(*font) {
+                            draw_text(&mut canvas, font, text, *pos, *size, *color, base);
                         }
                     }
                 }
-                DrawKind::Shape { shape, color } => self.draw_shape(shape, *color, base),
-                DrawKind::Text {
-                    font,
-                    text,
-                    pos,
-                    size,
-                    color,
-                } => {
-                    if let Some(font) = fonts.get_mut(*font) {
-                        self.draw_text(font, text, *pos, *size, *color, base);
-                    }
-                }
+            }
+            crate::post::apply(&mut canvas, self.effects_of(pass.target));
+            if pass.target == 0 {
+                self.canvas = canvas;
+            } else if let Some(t) = textures.get_mut(pass.target) {
+                t.pixmap = canvas;
+                t.changed();
             }
         }
         self.recycle(commands);
     }
 
     /// Returns false when the sprite was culled
-    fn draw_sprite(&mut self, tex: &mut Texture, s: &Sprite, base: Transform) -> bool {
+    fn draw_sprite(
+        &self,
+        canvas: &mut Pixmap,
+        tex: &mut Texture,
+        s: &Sprite,
+        base: Transform,
+    ) -> bool {
         let src = sprite_src(s, tex.width(), tex.height());
         let transform = base.pre_concat(sprite_transform(s, src));
-        if !self.visible(Rect::new(0.0, 0.0, src.w, src.h), transform) {
+        let size = (canvas.width(), canvas.height());
+        if !visible(size, Rect::new(0.0, 0.0, src.w, src.h), transform) {
             return false;
         }
         let quality = tex.quality();
@@ -213,133 +403,140 @@ impl Renderer {
             ..Paint::default()
         };
         if let Some(rect) = tiny_skia::Rect::from_xywh(0.0, 0.0, src.w, src.h) {
-            self.canvas.fill_rect(rect, &paint, transform, None);
+            canvas.fill_rect(rect, &paint, transform, None);
         }
         true
-    }
-
-    /// Whether a local rectangle can touch the canvas
-    pub(crate) fn visible(&self, rect: Rect, transform: Transform) -> bool {
-        let mut corners = [
-            tiny_skia::Point::from_xy(rect.x, rect.y),
-            tiny_skia::Point::from_xy(rect.right(), rect.y),
-            tiny_skia::Point::from_xy(rect.x, rect.bottom()),
-            tiny_skia::Point::from_xy(rect.right(), rect.bottom()),
-        ];
-        transform.map_points(&mut corners);
-        let (w, h) = (self.canvas.width() as f32, self.canvas.height() as f32);
-        let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
-        let max_x = corners
-            .iter()
-            .map(|p| p.x)
-            .fold(f32::NEG_INFINITY, f32::max);
-        let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
-        let max_y = corners
-            .iter()
-            .map(|p| p.y)
-            .fold(f32::NEG_INFINITY, f32::max);
-        max_x >= 0.0 && max_y >= 0.0 && min_x <= w && min_y <= h
-    }
-
-    fn draw_shape(&mut self, shape: &Shape, color: Color, transform: Transform) {
-        let mut paint = Paint {
-            anti_alias: self.antialias,
-            ..Paint::default()
-        };
-        paint.set_color(color.to_skia());
-        let (path, filled, thickness) = match shape {
-            Shape::Rect {
-                rect, filled: true, ..
-            } => {
-                if let Some(r) = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.w, rect.h) {
-                    self.canvas.fill_rect(r, &paint, transform, None);
-                }
-                return;
-            }
-            Shape::Rect {
-                rect,
-                filled: false,
-                thickness,
-            } => (
-                tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.w, rect.h)
-                    .map(PathBuilder::from_rect),
-                false,
-                *thickness,
-            ),
-            Shape::Line {
-                from,
-                to,
-                thickness,
-            } => {
-                let mut pb = PathBuilder::new();
-                pb.move_to(from.x, from.y);
-                pb.line_to(to.x, to.y);
-                (pb.finish(), false, *thickness)
-            }
-            Shape::Circle {
-                center,
-                radius,
-                filled,
-                thickness,
-            } => (
-                PathBuilder::from_circle(center.x, center.y, *radius),
-                *filled,
-                *thickness,
-            ),
-        };
-        let Some(path) = path else { return };
-        if filled {
-            self.canvas
-                .fill_path(&path, &paint, FillRule::Winding, transform, None);
-        } else {
-            let stroke = Stroke {
-                width: thickness.max(0.1),
-                ..Stroke::default()
-            };
-            self.canvas
-                .stroke_path(&path, &paint, &stroke, transform, None);
-        }
-    }
-
-    fn draw_text(
-        &mut self,
-        font: &mut Font,
-        text: &str,
-        pos: Vec2,
-        size: f32,
-        color: Color,
-        base: Transform,
-    ) {
-        let (glyphs, _) = font.layout(text, size, color);
-        let transform = base.pre_translate(pos.x, pos.y);
-        for placed in glyphs {
-            let Some(pixmap) = font.cached(&placed.key).and_then(|g| g.pixmap.as_ref()) else {
-                continue;
-            };
-            let (x, y) = (placed.pos.x.round(), placed.pos.y.round());
-            let pattern = Pattern::new(
-                pixmap.as_ref(),
-                SpreadMode::Pad,
-                tiny_skia::FilterQuality::Bilinear,
-                1.0,
-                Transform::from_translate(x, y),
-            );
-            let paint = Paint {
-                shader: pattern,
-                anti_alias: false,
-                ..Paint::default()
-            };
-            let rect =
-                tiny_skia::Rect::from_xywh(x, y, pixmap.width() as f32, pixmap.height() as f32);
-            if let Some(rect) = rect {
-                self.canvas.fill_rect(rect, &paint, transform, None);
-            }
-        }
     }
 
     /// RGBA (straight alpha) of one canvas pixel, for tests and tools
     pub fn pixel(&self, x: u32, y: u32) -> Option<Color> {
         let p = self.canvas.pixel(x, y)?.demultiply();
         Some(Color::rgba(p.red(), p.green(), p.blue(), p.alpha()))
+    }
+}
+
+/// Whether a local rectangle can touch a canvas of `size`
+pub(crate) fn visible(size: (u32, u32), rect: Rect, transform: Transform) -> bool {
+    let mut corners = [
+        tiny_skia::Point::from_xy(rect.x, rect.y),
+        tiny_skia::Point::from_xy(rect.right(), rect.y),
+        tiny_skia::Point::from_xy(rect.x, rect.bottom()),
+        tiny_skia::Point::from_xy(rect.right(), rect.bottom()),
+    ];
+    transform.map_points(&mut corners);
+    let (w, h) = (size.0 as f32, size.1 as f32);
+    let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+    let max_x = corners
+        .iter()
+        .map(|p| p.x)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+    let max_y = corners
+        .iter()
+        .map(|p| p.y)
+        .fold(f32::NEG_INFINITY, f32::max);
+    max_x >= 0.0 && max_y >= 0.0 && min_x <= w && min_y <= h
+}
+
+fn empty() -> Pixmap {
+    Pixmap::new(1, 1).expect("1x1 pixmap")
+}
+
+fn draw_shape(
+    canvas: &mut Pixmap,
+    antialias: bool,
+    shape: &Shape,
+    color: Color,
+    transform: Transform,
+) {
+    let mut paint = Paint {
+        anti_alias: antialias,
+        ..Paint::default()
+    };
+    paint.set_color(color.to_skia());
+    let (path, filled, thickness) = match shape {
+        Shape::Rect {
+            rect, filled: true, ..
+        } => {
+            if let Some(r) = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.w, rect.h) {
+                canvas.fill_rect(r, &paint, transform, None);
+            }
+            return;
+        }
+        Shape::Rect {
+            rect,
+            filled: false,
+            thickness,
+        } => (
+            tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.w, rect.h).map(PathBuilder::from_rect),
+            false,
+            *thickness,
+        ),
+        Shape::Line {
+            from,
+            to,
+            thickness,
+        } => {
+            let mut pb = PathBuilder::new();
+            pb.move_to(from.x, from.y);
+            pb.line_to(to.x, to.y);
+            (pb.finish(), false, *thickness)
+        }
+        Shape::Circle {
+            center,
+            radius,
+            filled,
+            thickness,
+        } => (
+            PathBuilder::from_circle(center.x, center.y, *radius),
+            *filled,
+            *thickness,
+        ),
+    };
+    let Some(path) = path else { return };
+    if filled {
+        canvas.fill_path(&path, &paint, FillRule::Winding, transform, None);
+    } else {
+        let stroke = Stroke {
+            width: thickness.max(0.1),
+            ..Stroke::default()
+        };
+        canvas.stroke_path(&path, &paint, &stroke, transform, None);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_text(
+    canvas: &mut Pixmap,
+    font: &mut Font,
+    text: &str,
+    pos: Vec2,
+    size: f32,
+    color: Color,
+    base: Transform,
+) {
+    let (glyphs, _) = font.layout(text, size, color);
+    let transform = base.pre_translate(pos.x, pos.y);
+    for placed in glyphs {
+        let Some(pixmap) = font.cached(&placed.key).and_then(|g| g.pixmap.as_ref()) else {
+            continue;
+        };
+        let (x, y) = (placed.pos.x.round(), placed.pos.y.round());
+        let pattern = Pattern::new(
+            pixmap.as_ref(),
+            SpreadMode::Pad,
+            tiny_skia::FilterQuality::Bilinear,
+            1.0,
+            Transform::from_translate(x, y),
+        );
+        let paint = Paint {
+            shader: pattern,
+            anti_alias: false,
+            ..Paint::default()
+        };
+        let rect = tiny_skia::Rect::from_xywh(x, y, pixmap.width() as f32, pixmap.height() as f32);
+        if let Some(rect) = rect {
+            canvas.fill_rect(rect, &paint, transform, None);
+        }
     }
 }
