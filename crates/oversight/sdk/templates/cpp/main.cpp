@@ -16,6 +16,7 @@ int main() try {
     config.scale = 4;     // ...shown 4 times bigger
     config.integer_scale = true;
     ov::Engine engine(config);
+    engine.look_at({160, 90});   // the camera looks at the middle of the field
 
     std::mt19937 rng(1);
     auto random_spot = [&] {

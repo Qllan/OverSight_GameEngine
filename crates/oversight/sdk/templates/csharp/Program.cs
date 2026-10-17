@@ -9,6 +9,7 @@ using var engine = new Engine(new Config
     Scale = 4,                 // ...shown 4 times bigger
     IntegerScale = true,
 });
+engine.LookAt(new Vec2(160, 90)); // the camera looks at the middle of the field
 
 var rng = new Random(1);
 Vec2 RandomSpot() => new(16 + rng.NextSingle() * 288, 24 + rng.NextSingle() * 140);
