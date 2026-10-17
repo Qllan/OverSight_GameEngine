@@ -251,23 +251,26 @@ impl ScriptProject {
         if let Err(e) = self.write_csproj() {
             return failed(e);
         }
-        let out = Command::new("dotnet")
-            .args(["build", "-nologo", "-v", "q", "-clp:NoSummary", "-o"])
-            .arg(self.dll().parent().unwrap())
-            .arg(self.csproj())
-            .output();
-        let out = match out {
-            Ok(out) => out,
+        let out = self.dll().parent().unwrap().to_path_buf();
+        let log = self.root.join(BUILD_DIR).join("build.log");
+        let built = dotnet_build(
+            &[
+                "-clp:NoSummary".as_ref(),
+                "-o".as_ref(),
+                out.as_os_str(),
+                self.csproj().as_os_str(),
+            ],
+            &log,
+        );
+        let (ok, text) = match built {
+            Ok(built) => built,
             Err(e) => {
                 return failed(format!(
                     "dotnet did not run ({e}); install the .NET 8 SDK to build C# scripts"
                 ))
             }
         };
-        let text = String::from_utf8_lossy(&out.stdout).to_string()
-            + &String::from_utf8_lossy(&out.stderr);
         let mut messages = build_messages(&text, &self.root);
-        let ok = out.status.success();
         if ok {
             let stamp = format!("{} {}\n", sources.count, sources.newest);
             let _ = std::fs::write(self.stamp_file(), stamp);
@@ -280,6 +283,28 @@ impl ScriptProject {
             sources,
         }
     }
+}
+
+/// `dotnet build` with `args`; whether it succeeded, and its output. The
+/// output goes through the file `log`, not a pipe: build servers that
+/// dotnet leaves running inherit the handle, and on Windows a pipe would
+/// then never close.
+pub fn dotnet_build(args: &[&std::ffi::OsStr], log: &Path) -> std::io::Result<(bool, String)> {
+    if let Some(dir) = log.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let file = std::fs::File::create(log)?;
+    let status = Command::new("dotnet")
+        .args(["build", "-nologo", "-v", "q", "-nodeReuse:false"])
+        .args(args)
+        .stdout(file.try_clone()?)
+        .stderr(file)
+        .stdin(std::process::Stdio::null())
+        .status()?;
+    Ok((
+        status.success(),
+        std::fs::read_to_string(log).unwrap_or_default(),
+    ))
 }
 
 /// The errors and warnings in dotnet's output, once each, with paths
@@ -378,12 +403,10 @@ pub mod tests {
     /// without one, unless ORST_REQUIRE_DOTNET is set (CI)
     pub fn host() -> Option<PathBuf> {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bindings/csharp/Scripting");
-        let built = Command::new("dotnet")
-            .args(["build", "-c", "Release", "-nologo", "-v", "q"])
-            .arg(&dir)
-            .output();
+        let log = std::env::temp_dir().join(format!("orst-host-{}.log", std::process::id()));
+        let built = dotnet_build(&["-c".as_ref(), "Release".as_ref(), dir.as_os_str()], &log);
         match built {
-            Ok(out) if out.status.success() => Some(dir.join("bin/Release/net8.0")),
+            Ok((true, _)) => Some(dir.join("bin/Release/net8.0")),
             other => {
                 assert!(
                     std::env::var_os("ORST_REQUIRE_DOTNET").is_none(),
