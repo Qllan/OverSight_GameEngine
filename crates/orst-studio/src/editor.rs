@@ -10,7 +10,7 @@ use crate::inspector::{self, Action};
 use crate::play::{self, Play};
 use crate::project::{Language, Project};
 use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
-use crate::scripts::{self, BuildResult, ScriptProject, Scripts, Sources};
+use crate::scripts::{self, BuildResult, ScriptHost, ScriptProject, Scripts, Sources};
 use orst::components::{
     read, write, Name, SpriteRenderer, Transform, NAME, SPRITE_RENDERER, TRANSFORM,
 };
@@ -61,11 +61,11 @@ pub struct Editor {
     pub scripts: ScriptState,
 }
 
-/// C# scripts: built when a .cs file under Assets changes, loaded in
-/// place when the build is good (after Stop, while playing)
+/// Scripts in C# or C++: built when a script under Assets changes,
+/// loaded in place when the build is good (after Stop, while playing)
 #[derive(Default)]
 pub struct ScriptState {
-    pub host: Option<Scripts>,
+    pub host: Option<Box<dyn ScriptHost>>,
     project: Option<ScriptProject>,
     /// The sources of the build loaded or running now
     sources: Sources,
@@ -117,41 +117,60 @@ impl Editor {
         .with_main_scene()
     }
 
-    /// Start .NET and load the scripts before the scene, which may hold
-    /// their components; a build out of date is made again first
+    /// Start the script host and load the scripts before the scene, which
+    /// may hold their components; a build out of date is made again first
     fn with_scripts(mut self) -> Editor {
         // .NET is one per process: editor tests must not take it from the
-        // scripts test running beside them
-        if self.project.file.language != Language::CSharp || cfg!(test) {
+        // scripts tests running beside them
+        if cfg!(test) {
             return self;
         }
         let Ok(view) = &mut self.scene else {
             return self;
         };
-        let Some(host) = Scripts::host_dir() else {
-            self.console
-                .warn("C# scripts are off: ORST.Scripting was not found next to ORST.exe");
-            return self;
-        };
-        match Scripts::start(&host, &mut view.engine) {
-            Ok(s) => self.scripts.host = Some(s),
-            Err(e) => {
-                self.console.warn(format!("C# scripts are off: {e}"));
-                return self;
+        let language = self.project.file.language;
+        let host = match language {
+            Language::CSharp => {
+                let Some(host) = Scripts::host_dir() else {
+                    self.console
+                        .warn("C# scripts are off: ORST.Scripting was not found next to ORST.exe");
+                    return self;
+                };
+                match Scripts::start(&host, &mut view.engine) {
+                    Ok(s) => self.scripts.host = Some(Box::new(s)),
+                    Err(e) => {
+                        self.console.warn(format!("C# scripts are off: {e}"));
+                        return self;
+                    }
+                }
+                host
             }
-        }
+            Language::Cpp => {
+                let Some(include) = crate::native::include_dir() else {
+                    self.console.warn(
+                        "C++ scripts are off: orst_script.hpp was not found next to ORST.exe",
+                    );
+                    return self;
+                };
+                let loaded = self.project.root.join("Library/Scripts/loaded");
+                let native = crate::native::NativeScripts::new(&mut view.engine, loaded);
+                self.scripts.host = Some(Box::new(native));
+                include
+            }
+        };
         let project = ScriptProject {
             root: self.project.root.clone(),
+            language,
             host,
         };
-        if let Err(e) = project.write_csproj() {
+        if let Err(e) = project.write_project() {
             self.console.error(e);
         }
         let sources = project.sources();
         self.scripts.sources = sources;
         self.scripts.project = Some(project.clone());
         if sources.count > 0 {
-            if project.built() != Some(sources) || !project.dll().is_file() {
+            if project.built() != Some(sources) || !project.library().is_file() {
                 self.console.info("Building scripts");
                 let result = project.build();
                 self.build_done(result);
@@ -200,7 +219,7 @@ impl Editor {
             return;
         };
         let before = layouts(&view.engine.world);
-        match host.load(&project.dll()) {
+        match host.load(&project.library()) {
             Ok(n) => self.console.info(format!(
                 "Scripts loaded: {n} behaviour{}",
                 if n == 1 { "" } else { "s" }
@@ -798,7 +817,8 @@ impl Editor {
         }
         if let (Some(p), Ok(view)) = (&mut self.play, &mut self.scene) {
             let dt = ctx.input(|i| i.stable_dt);
-            p.advance(&mut view.engine, self.scripts.host.as_mut(), dt);
+            let scripts = self.scripts.host.as_deref_mut();
+            p.advance(&mut view.engine, scripts.map(|s| s as _), dt);
             if !p.paused {
                 ctx.request_repaint();
             }
@@ -919,18 +939,23 @@ impl Editor {
         }
     }
 
-    /// Assets/Scripts/<class>.cs from the template, opened in the
-    /// system's editor for .cs files; the watcher builds it
+    /// Assets/Scripts/<class>.cs (or .cpp) from the template, opened in
+    /// the system's editor for such files; the watcher builds it
     pub fn create_script(&mut self, name: &str) -> Result<(), String> {
         let class = crate::project::class_name(name)?;
-        let path = format!("{}/{class}.cs", crate::project::SCRIPTS);
+        let language = self.project.file.language;
+        let path = format!(
+            "{}/{class}.{}",
+            crate::project::SCRIPTS,
+            language.extension()
+        );
         let file = self.project.assets.file(&path);
         if file.exists() {
             return Err(format!("{path} already exists"));
         }
         let io = |e: std::io::Error| format!("{path}: {e}");
         std::fs::create_dir_all(file.parent().unwrap()).map_err(io)?;
-        std::fs::write(&file, crate::project::script_source(&class)).map_err(io)?;
+        std::fs::write(&file, crate::project::script_source(&class, language)).map_err(io)?;
         self.rescan();
         self.selected_asset = Some(path.clone());
         self.console.info(format!("Created {path}"));
@@ -1033,11 +1058,14 @@ impl Editor {
 
     /// The Assets folder as a tree
     fn project_ui(&mut self, ui: &mut egui::Ui) {
-        if self.project.file.language == Language::CSharp
-            && ui
-                .small_button("New C# script")
-                .on_hover_text("A Behaviour in Assets/Scripts")
-                .clicked()
+        let new = match self.project.file.language {
+            Language::CSharp => "New C# script",
+            Language::Cpp => "New C++ script",
+        };
+        if ui
+            .small_button(new)
+            .on_hover_text("A Behaviour in Assets/Scripts")
+            .clicked()
         {
             self.new_script = Some("NewBehaviour".into());
         }

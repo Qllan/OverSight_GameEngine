@@ -1,6 +1,6 @@
 # ORST Studio
 
-Редактор ORST Game Engine: сцены, инспектор, игра в окне редактора и скрипты на C#, как в Unity.
+Редактор ORST Game Engine: сцены, инспектор, игра в окне редактора и скрипты на C# или C++, как в Unity.
 
 ## Запуск
 
@@ -9,7 +9,7 @@ dotnet build -c Release bindings/csharp/Scripting
 cargo run --release -p orst-studio -- path/to/MyGame
 ```
 
-Без пути открывается стартовый экран: новый проект или один из недавних. Для скриптов нужен .NET 8 SDK. Без него редактор работает, но скрипты выключены, о чём пишет Console.
+Без пути открывается стартовый экран: новый проект или один из недавних. Для скриптов на C# нужен .NET 8 SDK, для скриптов на C++ — CMake и компилятор C++ (на Windows — Visual Studio с C++). Без них редактор работает, но скрипты не собираются, о чём пишет Console.
 
 ## Проект
 
@@ -20,7 +20,7 @@ MyGame/
   Library/       то, что редактор может пересобрать; не для git
 ```
 
-Новый проект на C# сразу получает `Assets/Scripts/PlayerMove.cs`: ходьба стрелками или WASD.
+Новый проект сразу получает `Assets/Scripts/PlayerMove.cs` (или `.cpp`): ходьба стрелками или WASD.
 
 ## Скрипты на C#
 
@@ -44,6 +44,31 @@ public class Spin : Behaviour
 - `Log`, `Warn`, `Error` и `Console.WriteLine` пишут в окно Console.
 
 Кнопка **New C# script** в окне Project создаёт скрипт по шаблону и открывает его в редакторе кода. Двойной клик по `.cs` тоже открывает его. Редактор сам собирает скрипты при каждом сохранении файла (`Library/Scripts/Scripts.csproj`; его можно открыть в IDE для подсказок). Ошибки компилятора идут в Console, а удачная сборка подменяет старую на месте, сохраняя значения полей по именам. Во время игры новая сборка ждёт Stop.
+
+## Скрипты на C++
+
+То же самое на C++. Скрипт — класс от `orst::Behaviour` и строка `ORST_BEHAVIOUR`. Поля, перечисленные в статической функции `fields`, становятся компонентом с именем класса.
+
+```cpp
+#include "orst_script.hpp"
+
+using namespace orst;
+
+struct Spin : Behaviour {
+    float speed = 2;
+
+    static void fields(Fields<Spin> &f) { f("Speed", &Spin::speed).range(0, 10); }
+
+    void update(float dt) override { transform().rotation += speed * dt; }
+};
+ORST_BEHAVIOUR(Spin);
+```
+
+- `start()`, `update(dt)`, `on_contact_begin(other, contact)` и `on_contact_end` вызываются так же, как в C#.
+- `get_behaviour<T>(entity)`, `find_behaviour<T>()`, `destroy(entity)`, `log`, `warn`, `error`.
+- `engine()` — весь движок из `orst.hpp`, `transform()` — Transform сущности.
+
+Редактор собирает все `.cpp` из Assets через CMake в одну библиотеку (`Library/Scripts/CMakeLists.txt`; файл `Library/Scripts/cmake/compile_commands.json` даёт подсказки в редакторе кода) и подгружает её на место старой. Исключение в скрипте попадает в Console и не роняет редактор, но падение внутри C++ кода (например, обращение по нулевому указателю) закрывает редактор, так что сохраняйте сцену перед Play.
 
 ## Игра в редакторе
 

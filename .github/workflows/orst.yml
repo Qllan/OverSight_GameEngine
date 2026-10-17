@@ -37,10 +37,13 @@ jobs:
       - name: ORST Studio tests and ORST.exe
         env:
           ORST_REQUIRE_DOTNET: "1"
+          ORST_REQUIRE_CMAKE: "1"
         run: |
           cargo test -p orst-studio
           cargo build --release -p orst-studio
           dotnet build bindings/csharp/Scripting -c Release -nologo -o target/release/Scripting
+          New-Item -ItemType Directory -Force target/release/include | Out-Null
+          Copy-Item crates/orst/include/orst.h, crates/orst/include/orst.hpp, crates/orst/include/orst_script.hpp target/release/include/
 
       - name: C and C++ smoke tests (MSVC)
         run: |
@@ -115,6 +118,7 @@ jobs:
           path: |
             target/release/ORST.exe
             target/release/Scripting/
+            target/release/include/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -149,6 +153,7 @@ jobs:
         env:
           ORST_REQUIRE_GPU: "1"
           ORST_REQUIRE_DOTNET: "1"
+          ORST_REQUIRE_CMAKE: "1"
         run: cargo test -p orst -p orst-studio
 
       - name: Package the SDK and build a game against it

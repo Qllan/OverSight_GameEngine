@@ -15,15 +15,46 @@ use std::path::{Path, PathBuf};
 pub const PROJECT_FILE: &str = "project.orst";
 pub const ASSETS: &str = "Assets";
 pub const LIBRARY: &str = "Library";
-/// Where new C# scripts go, under Assets
+/// Where new scripts go, under Assets
 pub const SCRIPTS: &str = "Scripts";
 
 /// The script a new C# project starts with: the Coins sample's own
 const PLAYER_MOVE: &str =
     include_str!("../../../samples/studio/Coins/Assets/Scripts/PlayerMove.cs");
+/// The same in C++
+const PLAYER_MOVE_CPP: &str = include_str!("../templates/PlayerMove.cpp");
+
+impl Language {
+    /// The extension of its script files
+    pub fn extension(self) -> &'static str {
+        match self {
+            Language::CSharp => "cs",
+            Language::Cpp => "cpp",
+        }
+    }
+}
 
 /// A new script's source: a Behaviour named `class`
-pub fn script_source(class: &str) -> String {
+pub fn script_source(class: &str, language: Language) -> String {
+    if language == Language::Cpp {
+        return format!(
+            r#"#include "orst_script.hpp"
+
+using namespace orst;
+
+struct {class} : Behaviour {{
+    // Fields listed in fields() show in the Inspector and scenes save them:
+    // float speed = 2;
+    // static void fields(Fields<{class}> &f) {{ f("Speed", &{class}::speed); }}
+
+    void start() override {{}}
+
+    void update(float dt) override {{}}
+}};
+ORST_BEHAVIOUR({class});
+"#
+        );
+    }
     format!(
         r#"using ORST;
 
@@ -41,10 +72,10 @@ public class {class} : Behaviour
     )
 }
 
-/// What the user typed as a script name, as a C# class name: "enemy
+/// What the user typed as a script name, as a class name: "enemy
 /// spawner" becomes EnemySpawner
 pub fn class_name(name: &str) -> Result<String, String> {
-    let name = name.trim().trim_end_matches(".cs");
+    let name = name.trim().trim_end_matches(".cs").trim_end_matches(".cpp");
     let class: String = name
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .filter(|w| !w.is_empty())
@@ -114,11 +145,13 @@ impl Project {
             main_scene: None,
         };
         write_project_file(root, &file)?;
-        if language == Language::CSharp {
-            let scripts = root.join(ASSETS).join(SCRIPTS);
-            std::fs::create_dir_all(&scripts).map_err(io)?;
-            std::fs::write(scripts.join("PlayerMove.cs"), PLAYER_MOVE).map_err(io)?;
-        }
+        let scripts = root.join(ASSETS).join(SCRIPTS);
+        std::fs::create_dir_all(&scripts).map_err(io)?;
+        let (file, text) = match language {
+            Language::CSharp => ("PlayerMove.cs", PLAYER_MOVE),
+            Language::Cpp => ("PlayerMove.cpp", PLAYER_MOVE_CPP),
+        };
+        std::fs::write(scripts.join(file), text).map_err(io)?;
         Ok(Project::open(root)?.0)
     }
 
@@ -247,7 +280,9 @@ mod tests {
         assert_eq!(class_name("hp_bar").unwrap(), "Hp_bar");
         assert!(class_name("2d").is_err() && class_name("").is_err());
         assert!(class_name("Монета").is_err());
-        assert!(script_source("Coin").contains("public class Coin : Behaviour"));
+        assert!(script_source("Coin", Language::CSharp).contains("public class Coin : Behaviour"));
+        assert!(script_source("Coin", Language::Cpp).contains("ORST_BEHAVIOUR(Coin);"));
+        assert_eq!(class_name("coin.cpp").unwrap(), "Coin");
     }
 
     #[test]

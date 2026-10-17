@@ -1,10 +1,12 @@
-//! C# scripts inside the editor. .NET runs in the editor's own process:
-//! the ORST.Scripting assembly (bindings/csharp/Scripting) gets the
-//! editor's engine as a C handle, and the scripts call the C API that
-//! ORST.exe exports, so they change the very world the editor shows.
-//! A new build of the scripts replaces the old one in place.
+//! Scripts inside the editor, in C# here and C++ in `native`. Both run
+//! in the editor's own process and call the C API that ORST.exe exports
+//! on the editor's engine, so they change the very world the editor
+//! shows. For C#, .NET runs in-process: the ORST.Scripting assembly
+//! (bindings/csharp/Scripting) gets the engine as a C handle. A new build
+//! of the scripts replaces the old one in place.
 
 use crate::console::Level;
+use crate::project::Language;
 use orst::ffi::OrstEngine;
 use std::ffi::{c_void, CStr, CString};
 use std::path::{Path, PathBuf};
@@ -17,7 +19,7 @@ type LogFn = extern "system" fn(u32, *const u8, usize);
 /// What scripts printed, until the editor puts it in the Console
 static LOG: Mutex<Vec<(Level, String)>> = Mutex::new(Vec::new());
 
-extern "system" fn log(level: u32, text: *const u8, len: usize) {
+pub extern "system" fn log(level: u32, text: *const u8, len: usize) {
     let text = match text.is_null() {
         true => String::new(),
         // SAFETY: the host passes len valid bytes for the call's duration
@@ -36,6 +38,19 @@ pub fn take_log() -> Vec<(Level, String)> {
     std::mem::take(&mut *LOG.lock().unwrap())
 }
 
+/// What the editor needs from scripts, in any language
+pub trait ScriptHost {
+    /// Load a build in place of the one before; the number of Behaviours
+    fn load(&mut self, built: &Path) -> Result<u32, String>;
+    /// Drop the scripts; false when they are still held in memory
+    fn unload(&mut self) -> bool;
+    fn begin_play(&mut self);
+    /// One tick of every script; how many calls threw
+    fn tick(&mut self, dt: f32) -> u32;
+    fn end_play(&mut self);
+}
+
+/// C# scripts, through .NET
 #[derive(Clone, Copy)]
 pub struct Scripts {
     load: extern "system" fn(*const u8) -> i32,
@@ -92,32 +107,30 @@ impl Scripts {
         // SAFETY: the host keeps its last error as a NUL-terminated string
         unsafe { CStr::from_ptr(p.cast()) }.to_string_lossy().into()
     }
+}
 
-    /// Load a build of the scripts in place of the one before; the
-    /// number of Behaviours in it
-    pub fn load(&mut self, dll: &Path) -> Result<u32, String> {
+impl ScriptHost for Scripts {
+    fn load(&mut self, dll: &Path) -> Result<u32, String> {
         let path = CString::new(dll.to_string_lossy().as_bytes()).map_err(|e| e.to_string())?;
         let n = (self.load)(path.as_ptr().cast());
         self.count = u32::try_from(n).map_err(|_| self.error())?;
         Ok(self.count)
     }
 
-    /// Drop the scripts; false when .NET still holds them
-    pub fn unload(&mut self) -> bool {
+    fn unload(&mut self) -> bool {
         self.count = 0;
         (self.unload)() == 0
     }
 
-    pub fn begin_play(&mut self) {
+    fn begin_play(&mut self) {
         (self.start)();
     }
 
-    /// One tick of every script; how many threw
-    pub fn tick(&mut self, dt: f32) -> u32 {
+    fn tick(&mut self, dt: f32) -> u32 {
         (self.tick)(dt).max(0) as u32
     }
 
-    pub fn end_play(&mut self) {
+    fn end_play(&mut self) {
         (self.stop)();
     }
 }
@@ -125,17 +138,19 @@ impl Scripts {
 /// Where a project's scripts are built, under its Library
 const BUILD_DIR: &str = "Library/Scripts";
 
-/// The C# side of a project: every .cs file under Assets builds into one
-/// assembly, Scripts.dll, with a project file the editor writes (open it
-/// in an IDE for completion)
+/// The code of a project: every script under Assets builds into one
+/// library (Scripts.dll for C#, a shared library for C++) from a project
+/// file the editor writes in Library/Scripts (open it in an IDE for
+/// completion)
 #[derive(Debug, Clone)]
 pub struct ScriptProject {
     pub root: PathBuf,
-    /// Where ORST.Scripting.dll is
+    pub language: Language,
+    /// C#: where ORST.Scripting.dll is; C++: where orst_script.hpp is
     pub host: PathBuf,
 }
 
-/// What the .cs files under Assets are like: their number and the newest
+/// What the scripts under Assets are like: their number and the newest
 /// change, enough to see an edit, a new file or a deleted one
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Sources {
@@ -157,8 +172,22 @@ impl ScriptProject {
         self.root.join(BUILD_DIR).join("Scripts.csproj")
     }
 
-    pub fn dll(&self) -> PathBuf {
-        self.root.join(BUILD_DIR).join("out/Scripts.dll")
+    /// The library a good build makes
+    pub fn library(&self) -> PathBuf {
+        let out = self.root.join(BUILD_DIR).join("out");
+        match self.language {
+            Language::CSharp => out.join("Scripts.dll"),
+            Language::Cpp => out.join(format!("Scripts.{}", std::env::consts::DLL_EXTENSION)),
+        }
+    }
+
+    /// Whether `path` is one of this language's sources
+    fn is_source(&self, path: &Path) -> bool {
+        let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("");
+        match self.language {
+            Language::CSharp => ext == "cs",
+            Language::Cpp => matches!(ext, "cpp" | "cc" | "cxx" | "hpp" | "h"),
+        }
     }
 
     fn stamp_file(&self) -> PathBuf {
@@ -176,15 +205,15 @@ impl ScriptProject {
     }
 
     pub fn sources(&self) -> Sources {
-        fn walk(dir: &Path, s: &mut Sources) {
+        fn walk(p: &ScriptProject, dir: &Path, s: &mut Sources) {
             let Ok(entries) = std::fs::read_dir(dir) else {
                 return;
             };
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    walk(&path, s);
-                } else if path.extension().is_some_and(|x| x == "cs") {
+                    walk(p, &path, s);
+                } else if p.is_source(&path) {
                     s.count += 1;
                     let changed = entry.metadata().and_then(|m| m.modified()).ok();
                     let at = changed
@@ -195,7 +224,7 @@ impl ScriptProject {
             }
         }
         let mut s = Sources::default();
-        walk(&self.root.join(crate::project::ASSETS), &mut s);
+        walk(self, &self.root.join(crate::project::ASSETS), &mut s);
         s
     }
 
@@ -228,19 +257,15 @@ impl ScriptProject {
         )
     }
 
-    /// Write the project file when it is missing or out of date
-    pub fn write_csproj(&self) -> Result<(), String> {
-        let path = self.csproj();
-        let text = self.csproj_text();
-        if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
-            return Ok(());
+    /// Write the project files when they are missing or out of date
+    pub fn write_project(&self) -> Result<(), String> {
+        match self.language {
+            Language::CSharp => write_if_changed(&self.csproj(), &self.csproj_text()),
+            Language::Cpp => crate::native::write_project(self),
         }
-        let io = |e: std::io::Error| format!("{}: {e}", path.display());
-        std::fs::create_dir_all(path.parent().unwrap()).map_err(io)?;
-        std::fs::write(&path, text).map_err(io)
     }
 
-    /// Build with dotnet; blocks for as long as the build takes
+    /// Build with dotnet or CMake; blocks for as long as the build takes
     pub fn build(&self) -> BuildResult {
         let sources = self.sources();
         let failed = |text: String| BuildResult {
@@ -248,27 +273,29 @@ impl ScriptProject {
             messages: vec![(Level::Error, text)],
             sources,
         };
-        if let Err(e) = self.write_csproj() {
+        if let Err(e) = self.write_project() {
             return failed(e);
         }
-        let out = self.dll().parent().unwrap().to_path_buf();
+        let out = self.library().parent().unwrap().to_path_buf();
         let log = self.root.join(BUILD_DIR).join("build.log");
-        let built = dotnet_build(
-            &[
-                "-clp:NoSummary".as_ref(),
-                "-o".as_ref(),
-                out.as_os_str(),
-                self.csproj().as_os_str(),
-            ],
-            &log,
-        );
+        let built = match self.language {
+            Language::CSharp => dotnet_build(
+                &[
+                    "-clp:NoSummary".as_ref(),
+                    "-o".as_ref(),
+                    out.as_os_str(),
+                    self.csproj().as_os_str(),
+                ],
+                &log,
+            )
+            .map_err(|e| {
+                format!("dotnet did not run ({e}); install the .NET 8 SDK to build C# scripts")
+            }),
+            Language::Cpp => crate::native::build(self, &log),
+        };
         let (ok, text) = match built {
             Ok(built) => built,
-            Err(e) => {
-                return failed(format!(
-                    "dotnet did not run ({e}); install the .NET 8 SDK to build C# scripts"
-                ))
-            }
+            Err(e) => return failed(e),
         };
         let mut messages = build_messages(&text, &self.root);
         if ok {
@@ -285,18 +312,36 @@ impl ScriptProject {
     }
 }
 
-/// `dotnet build` with `args`; whether it succeeded, and its output. The
-/// output goes through the file `log`, not a pipe: build servers that
-/// dotnet leaves running inherit the handle, and on Windows a pipe would
-/// then never close.
+/// Write `text` to `path` unless it already holds it, so the build tools
+/// do not see a change
+pub fn write_if_changed(path: &Path, text: &str) -> Result<(), String> {
+    if std::fs::read_to_string(path).ok().as_deref() == Some(text) {
+        return Ok(());
+    }
+    let io = |e: std::io::Error| format!("{}: {e}", path.display());
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(io)?;
+    std::fs::write(path, text).map_err(io)
+}
+
+/// `dotnet build` with `args`; whether it succeeded, and its output
 pub fn dotnet_build(args: &[&std::ffi::OsStr], log: &Path) -> std::io::Result<(bool, String)> {
+    let mut dotnet = Command::new("dotnet");
+    dotnet
+        .args(["build", "-nologo", "-v", "q", "-nodeReuse:false"])
+        .args(args);
+    run_logged(&mut dotnet, log)
+}
+
+/// Run a build tool; whether it succeeded, and its output. The output
+/// goes through the file `log`, not a pipe: build servers the tools leave
+/// running inherit the handle, and on Windows a pipe would then never
+/// close.
+pub fn run_logged(command: &mut Command, log: &Path) -> std::io::Result<(bool, String)> {
     if let Some(dir) = log.parent() {
         std::fs::create_dir_all(dir)?;
     }
     let file = std::fs::File::create(log)?;
-    let status = Command::new("dotnet")
-        .args(["build", "-nologo", "-v", "q", "-nodeReuse:false"])
-        .args(args)
+    let status = command
         .stdout(file.try_clone()?)
         .stderr(file)
         .stdin(std::process::Stdio::null())
@@ -316,9 +361,16 @@ pub fn build_messages(text: &str, root: &Path) -> Vec<(Level, String)> {
     }
     let mut out: Vec<(Level, String)> = Vec::new();
     for line in text.lines() {
-        let level = if line.contains(": error ") {
+        // MSVC and dotnet write "x.cs(3,5): error CS1002: ...", GCC and
+        // Clang "x.cpp:3:5: error: ..."
+        let has = |what: &str| {
+            [" ", ":"]
+                .iter()
+                .any(|end| line.contains(&format!(": {what}{end}")))
+        };
+        let level = if has("error") || has("fatal error") {
             Level::Error
-        } else if line.contains(": warning ") {
+        } else if has("warning") {
             Level::Warning
         } else {
             continue;
@@ -418,12 +470,13 @@ pub mod tests {
         }
     }
 
-    /// Writes `source` as Assets/Mover.cs of the project in `root` and
+    /// Writes `source` as Assets/Mover.cs (or .cpp) of the project and
     /// builds it
     pub fn build(project: &ScriptProject, source: &str) -> BuildResult {
         let assets = project.root.join(crate::project::ASSETS);
         std::fs::create_dir_all(&assets).unwrap();
-        std::fs::write(assets.join("Mover.cs"), source).unwrap();
+        let file = format!("Mover.{}", project.language.extension());
+        std::fs::write(assets.join(file), source).unwrap();
         project.build()
     }
 
@@ -452,8 +505,9 @@ public class Mover : Behaviour
 }
 "#;
 
-    /// .NET is one per process: tests that use it take turns
-    static DOTNET: Mutex<()> = Mutex::new(());
+    /// .NET is one per process and the log is shared: tests that run
+    /// scripts take turns
+    pub static DOTNET: Mutex<()> = Mutex::new(());
 
     #[test]
     fn scripts_run_on_the_editors_engine_and_reload_in_place() {
@@ -466,13 +520,14 @@ public class Mover : Behaviour
         let mut scripts = Scripts::start(&host, &mut engine).unwrap();
         let project = ScriptProject {
             root: dir.clone(),
+            language: Language::CSharp,
             host: host.clone(),
         };
         assert_eq!(project.sources().count, 0);
         let built = build(&project, FIRST);
         assert!(built.ok, "{:?}", built.messages);
         assert_eq!(project.built(), Some(project.sources()));
-        assert_eq!(scripts.load(&project.dll()), Ok(1));
+        assert_eq!(scripts.load(&project.library()), Ok(1));
 
         let world = &mut engine.world;
         let id = world.component_id("Mover").expect("the script's component");
@@ -527,7 +582,7 @@ public class Mover : Behaviour
         engine.world.set_field(e, id, "Speed", Value::F32(5.0));
         let built = build(&project, SECOND);
         assert!(built.ok, "{:?}", built.messages);
-        assert_eq!(scripts.load(&project.dll()), Ok(1));
+        assert_eq!(scripts.load(&project.library()), Ok(1));
         assert_eq!(engine.world.component_id("Mover"), Some(id));
         assert_eq!(engine.world.field(e, id, "Speed"), Some(Value::F32(5.0)));
         assert_eq!(engine.world.field(e, id, "Jump"), Some(Value::F32(7.0)));
@@ -565,7 +620,11 @@ public class Mover : Behaviour
         let root = dir.join("new");
         let language = crate::project::Language::CSharp;
         crate::project::Project::create(&root, "New", language).unwrap();
-        let fresh = ScriptProject { root, host };
+        let fresh = ScriptProject {
+            root,
+            language,
+            host,
+        };
         let built = fresh.build();
         assert!(
             built.ok && built.messages.is_empty(),
@@ -607,6 +666,7 @@ public class Mover : Behaviour
         let mut scripts = Scripts::start(&host, &mut engine).unwrap();
         let code = ScriptProject {
             root: root.clone(),
+            language: Language::CSharp,
             host,
         };
         let built = code.build();
@@ -615,7 +675,7 @@ public class Mover : Behaviour
             "{:?}",
             built.messages
         );
-        assert_eq!(scripts.load(&code.dll()), Ok(5));
+        assert_eq!(scripts.load(&code.library()), Ok(5));
         let main = project.file.main_scene.clone().unwrap();
         let text = std::fs::read_to_string(project.assets.file(&main)).unwrap();
         let loaded = engine.load_scene(&text, &mut project.assets).unwrap();

@@ -699,9 +699,15 @@ public:
         e_ = orst_engine_create(&oc);
         if (!e_) throw Error(std::string("cannot start the engine: ") + orst_last_error());
     }
+    /// An engine made and owned elsewhere: ORST Studio's, for the scripts
+    /// it hosts. The destructor leaves it running.
+    struct Borrowed {};
+    Engine(OrstEngine *e, Borrowed) : e_(e), owned_(false) {}
     Engine(const Engine &) = delete;
     Engine &operator=(const Engine &) = delete;
-    ~Engine() { orst_engine_destroy(e_); }
+    ~Engine() {
+        if (owned_) orst_engine_destroy(e_);
+    }
 
     OrstEngine *raw() { return e_; }
 
@@ -1141,6 +1147,7 @@ private:
     }
 
     OrstEngine *e_ = nullptr;
+    bool owned_ = true;
 };
 
 }  // namespace orst

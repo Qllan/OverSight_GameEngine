@@ -4,7 +4,7 @@
 //! changes while playing is thrown away, as in Unity.
 
 use crate::history::History;
-use crate::scripts::Scripts;
+use crate::scripts::ScriptHost;
 use orst::ecs::Entity;
 use orst::{Camera, Engine};
 
@@ -60,7 +60,7 @@ impl Play {
     pub fn advance(
         &mut self,
         engine: &mut Engine,
-        mut scripts: Option<&mut Scripts>,
+        mut scripts: Option<&mut dyn ScriptHost>,
         real_dt: f32,
     ) -> u32 {
         let mut n = 0;

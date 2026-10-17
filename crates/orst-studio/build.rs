@@ -13,6 +13,12 @@ fn main() {
     let names = functions(&text);
     assert!(!names.is_empty(), "no functions found in orst.h");
 
+    // The list again for the editor, which writes it into an import
+    // library so C++ scripts can link against ORST.exe on Windows
+    let list: String = names.iter().map(|n| format!("    {n:?},\n")).collect();
+    let rs = PathBuf::from(env::var("OUT_DIR").unwrap()).join("exports.rs");
+    fs::write(rs, format!("pub const EXPORTS: &[&str] = &[\n{list}];\n")).unwrap();
+
     let os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let msvc = env::var("CARGO_CFG_TARGET_ENV").unwrap() == "msvc";
     if os == "windows" {
