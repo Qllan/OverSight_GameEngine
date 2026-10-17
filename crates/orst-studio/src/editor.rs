@@ -7,6 +7,7 @@ use crate::egui;
 use crate::gizmo::Tool;
 use crate::history::History;
 use crate::inspector::{self, Action};
+use crate::play::{self, Play};
 use crate::project::Project;
 use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
 use orst::components::{
@@ -50,6 +51,8 @@ pub struct Editor {
     save_as: Option<(String, Option<After>)>,
     want_close: bool,
     title: String,
+    /// The game is running in the editor; Stop throws its changes away
+    pub play: Option<Play>,
 }
 
 /// What waits for unsaved changes to be saved or dropped
@@ -86,6 +89,7 @@ impl Editor {
             save_as: None,
             want_close: false,
             title: String::new(),
+            play: None,
         }
         .with_main_scene()
     }
@@ -171,8 +175,46 @@ impl Editor {
         Ok(())
     }
 
+    /// Run the scene as the game, from how it is now
+    pub fn start_play(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
+        let Ok(view) = &mut self.scene else { return };
+        let history = std::mem::take(&mut self.history);
+        self.play = Some(Play::start(
+            &mut view.engine,
+            history,
+            self.dirty,
+            self.selected,
+        ));
+        self.center = Center::Game;
+        self.console.info("Play");
+    }
+
+    /// Stop the game and put the scene back as it was at Play
+    pub fn stop_play(&mut self) {
+        let (Some(play), Ok(view)) = (self.play.take(), &mut self.scene) else {
+            return;
+        };
+        let (restored, history, dirty, selected) = play.stop(&mut view.engine);
+        if let Err(e) = restored {
+            self.console
+                .error(format!("The scene could not be put back: {e}"));
+        }
+        self.history = history;
+        self.dirty = dirty;
+        self.selected = selected;
+        self.center = Center::Scene;
+    }
+
     /// Save to the scene's own file, or ask for a name the first time
     fn save(&mut self, then: Option<After>) {
+        if self.play.is_some() {
+            self.console
+                .warn("Stop the game to save: changes made while playing are not kept");
+            return;
+        }
         match self.scene_path.clone() {
             Some(path) => match self.save_scene(&path) {
                 Ok(()) => {
@@ -196,6 +238,7 @@ impl Editor {
     }
 
     fn proceed(&mut self, after: After) {
+        self.stop_play();
         match after {
             After::New => self.new_scene(),
             After::Open(path) => {
@@ -215,7 +258,7 @@ impl Editor {
         self.history.close();
         let e = engine.world.spawn();
         let t = Transform {
-            pos: engine.camera().center,
+            pos: view.camera.center,
             ..Default::default()
         };
         write(&mut engine.world, e, TRANSFORM, &t);
@@ -376,9 +419,7 @@ impl Editor {
                     }
                 });
                 ui.separator();
-                ui.add_enabled(false, egui::Button::new("Play"));
-                ui.add_enabled(false, egui::Button::new("Pause"));
-                ui.add_enabled(false, egui::Button::new("Step"));
+                self.play_buttons(ui);
                 ui.separator();
                 ui.label(&self.project.file.name);
                 ui.weak(self.scene_title());
@@ -464,13 +505,19 @@ impl Editor {
                 (Center::Scene, Err(e)) => {
                     ui.colored_label(ui.visuals().error_fg_color, e.as_str());
                 }
-                (Center::Game, _) => {
-                    ui.centered_and_justified(|ui| {
-                        ui.weak("Press Play to run the game here");
-                    });
+                (Center::Game, Ok(view)) => {
+                    let camera = match &self.play {
+                        Some(p) => p.camera,
+                        None => play::game_camera(&mut view.engine),
+                    };
+                    view.game_ui(ui, camera);
+                }
+                (Center::Game, Err(e)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, e.as_str());
                 }
             }
         });
+        self.run_game(ui.ctx());
         let save = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
         if ui.input_mut(|i| i.consume_shortcut(&save)) {
             self.save(None);
@@ -515,6 +562,62 @@ impl Editor {
             self.title = title;
         }
         *close |= std::mem::take(&mut self.want_close);
+    }
+
+    fn play_buttons(&mut self, ui: &mut egui::Ui) {
+        let playing = self.play.is_some();
+        let label = if playing { "Stop" } else { "Play" };
+        let play = egui::Button::new(label).selected(playing);
+        if ui.add(play).on_hover_text("Ctrl+P").clicked() {
+            if playing {
+                self.stop_play();
+            } else {
+                self.start_play();
+            }
+        }
+        let paused = self.play.as_ref().is_some_and(|p| p.paused);
+        if ui
+            .add_enabled(playing, egui::Button::new("Pause").selected(paused))
+            .clicked()
+        {
+            if let Some(p) = &mut self.play {
+                p.paused = !p.paused;
+            }
+        }
+        if ui
+            .add_enabled(playing, egui::Button::new("Step"))
+            .on_hover_text("One tick, then pause")
+            .clicked()
+        {
+            if let Some(p) = &mut self.play {
+                p.step_once();
+            }
+        }
+        if let Some(p) = &self.play {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("Playing, tick {}", p.ticks),
+            );
+        }
+    }
+
+    /// Run the ticks of this frame while playing; Ctrl+P starts and stops
+    fn run_game(&mut self, ctx: &egui::Context) {
+        let toggle = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::P);
+        if ctx.input_mut(|i| i.consume_shortcut(&toggle)) {
+            if self.play.is_some() {
+                self.stop_play();
+            } else {
+                self.start_play();
+            }
+        }
+        if let (Some(p), Ok(view)) = (&mut self.play, &mut self.scene) {
+            let dt = ctx.input(|i| i.stable_dt);
+            p.advance(&mut view.engine, dt);
+            if !p.paused {
+                ctx.request_repaint();
+            }
+        }
     }
 
     /// "Level 1.scene", with a star while there are unsaved changes
@@ -946,6 +1049,38 @@ mod tests {
 
     fn image_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {
         image::save_buffer(path, rgba, w, h, image::ColorType::Rgba8).unwrap();
+    }
+
+    #[test]
+    fn stop_throws_away_what_play_changed() {
+        let mut ed = editor("play");
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        let v = orst::components::Velocity {
+            linear: orst::Vec2::new(60.0, 0.0),
+            ..Default::default()
+        };
+        write(world, e, orst::components::VELOCITY, &v);
+        let ctx = egui::Context::default();
+        ed.start_play();
+        assert_eq!(ed.center, Center::Game);
+        ed.save(None);
+        ed.play.as_mut().unwrap().step_once();
+        frame(&ctx, &mut ed);
+        frame(&ctx, &mut ed);
+        assert_eq!(ed.play.as_ref().unwrap().ticks, 1);
+        ed.delete_selected();
+        ed.stop_play();
+        let world = &ed.scene.as_ref().unwrap().engine.world;
+        let t: Transform = read(world, e, TRANSFORM).unwrap();
+        assert_eq!(t.pos, orst::Vec2::new(0.0, 0.0));
+        assert_eq!(ed.selected, Some(e), "the entity deleted in play is back");
+        assert!(
+            ed.history.can_undo() && ed.dirty,
+            "the editor's history is back"
+        );
+        assert!(ed.scene_path.is_none(), "nothing was saved while playing");
     }
 
     #[test]

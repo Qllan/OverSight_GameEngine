@@ -8,6 +8,7 @@ mod editor;
 mod gizmo;
 mod history;
 mod inspector;
+mod play;
 mod project;
 mod scene_view;
 

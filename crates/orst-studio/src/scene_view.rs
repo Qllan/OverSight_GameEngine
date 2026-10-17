@@ -26,6 +26,8 @@ pub struct SceneView {
     /// Holds the edited world; never runs game code
     pub engine: Engine,
     pub tool: Tool,
+    /// The editor's own camera; the game's camera is the engine's
+    pub camera: Camera,
     /// The entity being dragged, and how
     drag: Option<(Entity, Drag)>,
     shown: Shown,
@@ -72,6 +74,7 @@ impl SceneView {
         let mut view = SceneView {
             engine,
             tool: Tool::default(),
+            camera: Camera::default(),
             drag: None,
             shown,
         };
@@ -79,10 +82,13 @@ impl SceneView {
         Ok(view)
     }
 
-    /// The view filling `ui`
-    pub fn ui(&mut self, ui: &mut egui::Ui, selected: Option<Entity>) -> Vec<SceneEvent> {
-        let (rect, response) =
-            ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
+    /// The canvas filling `ui`, sized to it in physical pixels
+    fn canvas(
+        &mut self,
+        ui: &mut egui::Ui,
+        sense: egui::Sense,
+    ) -> (egui::Rect, egui::Response, (u32, u32)) {
+        let (rect, response) = ui.allocate_exact_size(ui.available_size(), sense);
         let ppp = ui.ctx().pixels_per_point();
         let size = (
             (rect.width() * ppp).round().max(1.0) as u32,
@@ -91,11 +97,45 @@ impl SceneView {
         if self.engine.size() != size {
             self.engine.resize_canvas(size.0, size.1);
         }
+        (rect, response, size)
+    }
+
+    /// Show the last frame in `rect`, with the engine's error if any
+    fn present(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        if let Some(id) = self.texture(ui.ctx()) {
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            ui.painter().image(id, rect, uv, egui::Color32::WHITE);
+        }
+        if let Some(e) = self.engine.take_error() {
+            ui.painter().text(
+                rect.left_top() + egui::vec2(8.0, 8.0),
+                egui::Align2::LEFT_TOP,
+                e,
+                egui::FontId::proportional(14.0),
+                ui.visuals().error_fg_color,
+            );
+        }
+    }
+
+    /// The Game window: the world as the game sees it, through `camera`
+    pub fn game_ui(&mut self, ui: &mut egui::Ui, camera: Camera) {
+        let (rect, _, _) = self.canvas(ui, egui::Sense::hover());
+        self.engine.set_camera(camera);
+        self.engine.begin_frame(Color::BLACK);
+        self.engine.draw_entities();
+        self.engine.end_frame();
+        self.present(ui, rect);
+    }
+
+    /// The view filling `ui`
+    pub fn ui(&mut self, ui: &mut egui::Ui, selected: Option<Entity>) -> Vec<SceneEvent> {
+        let (rect, response, size) = self.canvas(ui, egui::Sense::click_and_drag());
+        let ppp = ui.ctx().pixels_per_point();
         let to_canvas =
             |p: egui::Pos2| Vec2::new((p.x - rect.min.x) * ppp, (p.y - rect.min.y) * ppp);
         let mut events = Vec::new();
 
-        let mut camera = self.engine.camera();
+        let mut camera = self.camera;
         if response.dragged_by(egui::PointerButton::Middle)
             || response.dragged_by(egui::PointerButton::Secondary)
         {
@@ -108,6 +148,7 @@ impl SceneView {
                 camera = zoom_at(camera, to_canvas(pointer), size, (scroll * 0.002).exp());
             }
         }
+        self.camera = camera;
         self.engine.set_camera(camera);
 
         if !ui.ctx().egui_wants_keyboard_input() {
@@ -157,19 +198,7 @@ impl SceneView {
 
         let gizmo = selected.map(|_| (self.tool, self.drag.map(|(_, d)| d.handle)));
         draw(&mut self.engine, selected, gizmo);
-        if let Some(id) = self.texture(ui.ctx()) {
-            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-            ui.painter().image(id, rect, uv, egui::Color32::WHITE);
-        }
-        if let Some(e) = self.engine.take_error() {
-            ui.painter().text(
-                rect.left_top() + egui::vec2(8.0, 8.0),
-                egui::Align2::LEFT_TOP,
-                e,
-                egui::FontId::proportional(14.0),
-                ui.visuals().error_fg_color,
-            );
-        }
+        self.present(ui, rect);
         events
     }
 
