@@ -141,6 +141,22 @@ Check(!engine.GoScene(3), "one change at a time");
 for (int i = 0; i < 10; i++) engine.Poll();
 Check(engine.Scene == 2 && engine.SceneDepth == 2 && !engine.SceneTransitioning, "PushScene");
 
+// Actions: two inputs on one action, rebinding by capture, saved as text
+var jump = engine.Action("jump");
+Check(engine.Bind(jump, Binding.Key(Key.J)) && engine.Bind(jump, Binding.Button(Pad.North)), "Bind");
+engine.InjectKey(Key.J, true);
+engine.Poll();
+Check(engine.ActionPressed(jump) && engine.CapturedBinding == Binding.Key(Key.J), "ActionPressed");
+engine.InjectKey(Key.J, false);
+engine.Poll();
+Check(engine.ActionReleased(jump) && engine.CapturedBinding == null, "ActionReleased");
+Check(engine.SaveBindings() == "jump = key:J pad:North\n", $"SaveBindings {engine.SaveBindings()}");
+engine.LoadBindings("jump = pad1:LeftY-");
+Check(engine.Bindings(jump).Single() == Binding.Axis(PadAxis.LeftY, -1, 1), "LoadBindings");
+Check(engine.BindingText(engine.Bindings(jump)[0]) == "pad1:LeftY-", "BindingText");
+try { engine.LoadBindings("jump = nope"); Check(false, "a bad line throws"); }
+catch (OverSightException) { Check(engine.Bindings(jump).Length == 1, "a bad line changes nothing"); }
+
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }

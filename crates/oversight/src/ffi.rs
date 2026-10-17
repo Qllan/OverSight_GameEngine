@@ -12,12 +12,13 @@
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CStr, CString};
 
+use crate::actions::Binding;
 use crate::anim::{AnimMode, Animation, SpriteSheet};
 use crate::camera::Camera;
 use crate::collision::{self, Contacts, MoveResult, RayHit};
 use crate::engine::{Engine, InputEvent};
 use crate::gamepad::{GamepadAxis, GamepadButton};
-use crate::input::{key_from_u32, MouseButton};
+use crate::input::{key_from_u32, Key, MouseButton};
 use crate::particles::EmitterConfig;
 use crate::tilemap::{LayerDraw, Orientation, Property, Tilemap};
 use crate::tween::{self, Ease, Repeat};
@@ -905,6 +906,211 @@ pub extern "C" fn ov_inject_mouse_move(e: *mut OvEngine, pos: Vec2) {
 // --- gamepads -------------------------------------------------------------------
 
 /// Slot from C; a negative one maps past the end, which reads as "off"
+/// An input bound to an action, as the C API sees it
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct OvBinding {
+    /// 0 none, 1 key, 2 mouse button, 3 pad button, 4 pad axis
+    pub kind: i32,
+    pub code: i32,
+    /// Pad slot, -1 any
+    pub pad: i32,
+    /// Pad axis direction: 1 or -1
+    pub direction: i32,
+}
+
+impl OvBinding {
+    fn to_binding(self) -> Result<Binding, String> {
+        let pad = if self.pad < 0 {
+            crate::actions::ANY_PAD
+        } else {
+            self.pad
+        };
+        let bad = || format!("unknown binding {self:?}");
+        match self.kind {
+            1 => match key_from_u32(self.code as u32) {
+                Key::Unknown => Err(bad()),
+                k => Ok(Binding::Key(k)),
+            },
+            2 => mouse_button(self.code).map(Binding::Mouse).ok_or_else(bad),
+            3 => GamepadButton::from_i32(self.code)
+                .map(|b| Binding::PadButton(pad, b))
+                .ok_or_else(bad),
+            4 if self.direction != 0 => GamepadAxis::from_i32(self.code)
+                .map(|a| Binding::PadAxis(pad, a, self.direction.signum()))
+                .ok_or_else(bad),
+            _ => Err(bad()),
+        }
+    }
+
+    fn from_binding(b: Binding) -> OvBinding {
+        let (kind, code, pad, direction) = match b {
+            Binding::Key(k) => (1, k as i32, -1, 0),
+            Binding::Mouse(m) => (2, m as i32, -1, 0),
+            Binding::PadButton(p, b) => (3, b as i32, p, 0),
+            Binding::PadAxis(p, a, d) => (4, a as i32, p, d),
+        };
+        OvBinding {
+            kind,
+            code,
+            pad,
+            direction,
+        }
+    }
+}
+
+/// # Safety
+/// `name` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_action(e: *mut OvEngine, name: *const c_char) -> u32 {
+    let engine = engine!(e, 0);
+    match string(name) {
+        "" => {
+            set_error("an action needs a name");
+            0
+        }
+        n => engine.actions.action(n),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn ov_bind(e: *mut OvEngine, action: u32, binding: OvBinding) -> bool {
+    let engine = engine!(e, false);
+    let r = binding.to_binding().map(|b| engine.actions.bind(action, b));
+    result(r, false)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_set_binding(
+    e: *mut OvEngine,
+    action: u32,
+    index: u32,
+    binding: OvBinding,
+) -> bool {
+    let engine = engine!(e, false);
+    let r = binding
+        .to_binding()
+        .map(|b| engine.actions.set_binding(action, index as usize, b));
+    result(r, false)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_remove_binding(e: *mut OvEngine, action: u32, index: u32) -> bool {
+    engine!(e, false)
+        .actions
+        .remove_binding(action, index as usize)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_clear_bindings(e: *mut OvEngine, action: u32) {
+    engine!(e).actions.clear_bindings(action);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_binding_count(e: *mut OvEngine, action: u32) -> u32 {
+    engine!(e, 0).actions.bindings(action).len() as u32
+}
+
+/// # Safety
+/// `out` is NULL or points to an OvBinding
+#[no_mangle]
+pub unsafe extern "C" fn ov_get_binding(
+    e: *mut OvEngine,
+    action: u32,
+    index: u32,
+    out: *mut OvBinding,
+) -> bool {
+    let engine = engine!(e, false);
+    match (
+        engine.actions.bindings(action).get(index as usize),
+        out.as_mut(),
+    ) {
+        (Some(b), Some(out)) => {
+            *out = OvBinding::from_binding(*b);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// # Safety
+/// `buf` is NULL or has room for `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn ov_binding_text(
+    e: *mut OvEngine,
+    binding: OvBinding,
+    buf: *mut c_char,
+    size: usize,
+) -> usize {
+    let _ = engine!(e, 0);
+    let text = binding
+        .to_binding()
+        .map(|b| b.to_text())
+        .unwrap_or_default();
+    copy_out(&text, buf, size)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_action_down(e: *mut OvEngine, action: u32) -> bool {
+    engine!(e, false).actions.down(action)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_action_pressed(e: *mut OvEngine, action: u32) -> bool {
+    engine!(e, false).actions.pressed(action)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_action_released(e: *mut OvEngine, action: u32) -> bool {
+    engine!(e, false).actions.released(action)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_action_value(e: *mut OvEngine, action: u32) -> f32 {
+    engine!(e, 0.0).actions.value(action)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_action_axis(e: *mut OvEngine, negative: u32, positive: u32) -> f32 {
+    let a = &engine!(e, 0.0).actions;
+    a.value(positive) - a.value(negative)
+}
+
+/// # Safety
+/// `out` is NULL or points to an OvBinding
+#[no_mangle]
+pub unsafe extern "C" fn ov_captured_binding(e: *mut OvEngine, out: *mut OvBinding) -> bool {
+    let engine = engine!(e, false);
+    let Some(b) = engine.actions.captured() else {
+        return false;
+    };
+    if let Some(out) = out.as_mut() {
+        *out = OvBinding::from_binding(b);
+    }
+    true
+}
+
+/// # Safety
+/// `buf` is NULL or has room for `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn ov_bindings_save(
+    e: *mut OvEngine,
+    buf: *mut c_char,
+    size: usize,
+) -> usize {
+    let text = engine!(e, 0).actions.save();
+    copy_out(&text, buf, size)
+}
+
+/// # Safety
+/// `text` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn ov_bindings_load(e: *mut OvEngine, text: *const c_char) -> bool {
+    let engine = engine!(e, false);
+    let r = engine.actions.load(string(text)).map(|_| true);
+    result(r, false)
+}
+
 fn pad(v: i32) -> usize {
     usize::try_from(v).unwrap_or(usize::MAX)
 }
@@ -1912,6 +2118,68 @@ mod tests {
             ov_inject_gamepad_connected(e, 2, false);
             ov_poll(e);
             assert!(ov_gamepad_released(e, 2, 0) && ov_gamepad_axis(e, 2, 0) == 0.0);
+            ov_engine_destroy(e);
+        }
+    }
+
+    #[test]
+    fn actions_follow_their_bindings_and_rebind() {
+        let e = headless(8, 8);
+        unsafe {
+            let jump = ov_action(e, c"jump".as_ptr());
+            assert!(jump != 0 && ov_action(e, c"".as_ptr()) == 0);
+            let key = OvBinding {
+                kind: 1,
+                code: Key::Space as i32,
+                pad: -1,
+                direction: 0,
+            };
+            assert!(ov_bind(e, jump, key));
+            assert!(
+                !ov_bind(
+                    e,
+                    jump,
+                    OvBinding {
+                        kind: 4,
+                        code: 0,
+                        pad: -1,
+                        direction: 0
+                    }
+                ),
+                "an axis needs a direction"
+            );
+            ov_inject_key(e, Key::Space as i32, true);
+            ov_poll(e);
+            assert!(ov_action_pressed(e, jump) && ov_action_value(e, jump) == 1.0);
+            // Rebinding: the next input pressed replaces the key
+            assert!(ov_captured_binding(e, std::ptr::null_mut()));
+            ov_inject_key(e, Key::Space as i32, false);
+            ov_poll(e);
+            let mut got = OvBinding::default();
+            assert!(!ov_captured_binding(e, &mut got) && ov_action_released(e, jump));
+            ov_inject_gamepad_connected(e, 0, true);
+            ov_inject_gamepad_button(e, 0, 0, true);
+            ov_poll(e);
+            assert!(ov_captured_binding(e, &mut got));
+            assert_eq!(
+                got,
+                OvBinding {
+                    kind: 3,
+                    code: 0,
+                    pad: 0,
+                    direction: 0
+                }
+            );
+            assert!(ov_set_binding(e, jump, 0, got) && ov_binding_count(e, jump) == 1);
+            let mut buf = [0 as c_char; 64];
+            ov_binding_text(e, got, buf.as_mut_ptr(), buf.len());
+            assert_eq!(CStr::from_ptr(buf.as_ptr()).to_str().unwrap(), "pad0:South");
+            let n = ov_bindings_save(e, std::ptr::null_mut(), 0);
+            assert_eq!(n, "jump = pad0:South\n".len());
+            assert!(!ov_bindings_load(e, c"jump = key:Nope".as_ptr()));
+            assert!(ov_bindings_load(e, c"jump = key:Enter".as_ptr()));
+            ov_get_binding(e, jump, 0, &mut got);
+            assert_eq!(got.kind, 1);
             ov_engine_destroy(e);
         }
     }

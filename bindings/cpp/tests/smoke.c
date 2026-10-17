@@ -132,6 +132,16 @@ int main(void) {
     }
     CHECK(entered && ov_scene(e) == 5 && !ov_scene_transitioning(e));
 
+    /* Actions */
+    uint32_t fire = ov_action(e, "fire");
+    OvBinding left_click = {OV_BIND_MOUSE, OV_MOUSE_LEFT, -1, 0};
+    CHECK(ov_bind(e, fire, left_click) && ov_binding_count(e, fire) == 1);
+    ov_inject_mouse_button(e, OV_MOUSE_LEFT, true);
+    ov_poll(e);
+    CHECK(ov_action_pressed(e, fire) && ov_action_value(e, fire) == 1.0f);
+    char text[64];
+    CHECK(ov_bindings_save(e, text, sizeof text) == strlen("fire = mouse:Left\n"));
+
     ov_engine_destroy(e);
     printf("smoke_c: ok\n");
     return 0;

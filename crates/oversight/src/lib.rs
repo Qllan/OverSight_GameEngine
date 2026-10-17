@@ -6,6 +6,7 @@
 //! and plays sounds. C++ and C# use it through the C API in `ffi`
 //! (include/oversight.h).
 
+pub mod actions;
 pub mod anim;
 #[cfg(feature = "audio")]
 pub mod audio;
@@ -35,6 +36,7 @@ pub mod types;
 #[cfg(feature = "window")]
 pub mod window;
 
+pub use actions::{Actions, Binding};
 pub use anim::{AnimMode, AnimPlayer, Animation, SpriteSheet};
 pub use camera::Camera;
 pub use collision::{Contacts, MoveResult, RayHit};

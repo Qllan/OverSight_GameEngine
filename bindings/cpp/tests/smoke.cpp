@@ -155,6 +155,16 @@ int main() {
     engine.poll();
     CHECK(engine.scene() == 1 && engine.scene_entered() == 1 && engine.scene_left() == 2);
 
+    // Actions: bound keys, rebinding by capture, saved as text
+    uint32_t jump = engine.action("jump");
+    CHECK(engine.bind(jump, ov::Binding::key(ov::Key::J)) && engine.bind(jump, ov::Binding::pad(ov::Pad::South)));
+    engine.inject_key(ov::Key::J, true);
+    engine.poll();
+    CHECK(engine.action_pressed(jump) && engine.captured_binding() == ov::Binding::key(ov::Key::J));
+    CHECK(engine.save_bindings() == "jump = key:J pad:South\n");
+    engine.load_bindings("jump = pad:LeftX+");
+    CHECK(engine.bindings(jump).size() == 1 && engine.binding_text(engine.bindings(jump)[0]) == "pad:LeftX+");
+
     std::printf("smoke_cpp: ok\n");
     return 0;
 }

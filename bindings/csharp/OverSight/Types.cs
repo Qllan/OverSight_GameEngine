@@ -351,3 +351,30 @@ public struct Body
 
     public Body(Rect bounds, Tilemap? map = null) { Bounds = bounds; Tilemap = map?.Id ?? 0; }
 }
+
+public enum BindingKind { None = 0, Key = 1, Mouse = 2, PadButton = 3, PadAxis = 4 }
+
+/// <summary>An input bound to an action: Binding.Key(Key.Space), Binding.Button(Pad.South)</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Binding : IEquatable<Binding>
+{
+    public BindingKind Kind;
+    /// <summary>Key, mouse button, pad button or pad axis</summary>
+    public int Code;
+    /// <summary>Pad slot 0..3, -1: any pad</summary>
+    public int Slot;
+    /// <summary>Pad axis: 1 or -1 (LeftX -1 is left)</summary>
+    public int Direction;
+
+    public static Binding Key(Key key) => new() { Kind = BindingKind.Key, Code = (int)key, Slot = -1 };
+    public static Binding Mouse(MouseButton button) => new() { Kind = BindingKind.Mouse, Code = (int)button, Slot = -1 };
+    public static Binding Button(Pad button, int slot = -1) => new() { Kind = BindingKind.PadButton, Code = (int)button, Slot = slot };
+    public static Binding Axis(PadAxis axis, int direction, int slot = -1) =>
+        new() { Kind = BindingKind.PadAxis, Code = (int)axis, Slot = slot, Direction = direction };
+
+    public bool Equals(Binding o) => Kind == o.Kind && Code == o.Code && Slot == o.Slot && Direction == o.Direction;
+    public override bool Equals(object? obj) => obj is Binding b && Equals(b);
+    public override int GetHashCode() => HashCode.Combine(Kind, Code, Slot, Direction);
+    public static bool operator ==(Binding a, Binding b) => a.Equals(b);
+    public static bool operator !=(Binding a, Binding b) => !a.Equals(b);
+}

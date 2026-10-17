@@ -466,6 +466,23 @@ public:
     bool rect_solid(Rect r) const { return ov_rect_solid(e_, id_, r); }
 };
 
+/// An input bound to an action: Binding::key(Key::Space), Binding::pad(Pad::South)
+struct Binding : OvBinding {
+    constexpr Binding() : OvBinding{0, 0, -1, 0} {}
+    constexpr Binding(OvBinding b) : OvBinding(b) {}
+    static constexpr Binding key(Key k) { return OvBinding{OV_BIND_KEY, int32_t(k), -1, 0}; }
+    static constexpr Binding mouse(Mouse m) { return OvBinding{OV_BIND_MOUSE, int32_t(m), -1, 0}; }
+    /// pad: slot 0..3, -1 any
+    static constexpr Binding pad(Pad b, int pad = -1) { return OvBinding{OV_BIND_PAD_BUTTON, int32_t(b), pad, 0}; }
+    /// direction: 1 or -1 (LeftX -1 is left)
+    static constexpr Binding axis(PadAxis a, int direction, int pad = -1) {
+        return OvBinding{OV_BIND_PAD_AXIS, int32_t(a), pad, direction};
+    }
+    constexpr bool operator==(const Binding &o) const {
+        return kind == o.kind && code == o.code && pad == o.pad && direction == o.direction;
+    }
+};
+
 class Engine {
 public:
     explicit Engine(const Config &c = {}) {
@@ -694,6 +711,48 @@ public:
         if (!ov_restore(e_, bytes.data(), bytes.size())) throw Error(ov_last_error());
     }
     uint64_t state_hash() const { return ov_state_hash(e_); }
+
+    // input actions: the game asks for "jump", players rebind it
+    uint32_t action(const std::string &name) {
+        uint32_t id = ov_action(e_, name.c_str());
+        if (id == 0) throw Error(ov_last_error());
+        return id;
+    }
+    bool bind(uint32_t action, Binding b) { return ov_bind(e_, action, b); }
+    bool set_binding(uint32_t action, uint32_t index, Binding b) { return ov_set_binding(e_, action, index, b); }
+    bool remove_binding(uint32_t action, uint32_t index) { return ov_remove_binding(e_, action, index); }
+    void clear_bindings(uint32_t action) { ov_clear_bindings(e_, action); }
+    std::vector<Binding> bindings(uint32_t action) const {
+        std::vector<Binding> out(ov_binding_count(e_, action));
+        for (uint32_t i = 0; i < out.size(); i++) ov_get_binding(e_, action, i, &out[i]);
+        return out;
+    }
+    /// "key:Space", "pad:South", "pad1:LeftX-"
+    std::string binding_text(Binding b) const {
+        std::string s(ov_binding_text(e_, b, nullptr, 0), '\0');
+        ov_binding_text(e_, b, s.data(), s.size() + 1);
+        return s;
+    }
+    bool action_down(uint32_t action) const { return ov_action_down(e_, action); }
+    bool action_pressed(uint32_t action) const { return ov_action_pressed(e_, action); }
+    bool action_released(uint32_t action) const { return ov_action_released(e_, action); }
+    float action_value(uint32_t action) const { return ov_action_value(e_, action); }
+    float action_axis(uint32_t negative, uint32_t positive) const { return ov_action_axis(e_, negative, positive); }
+    /// The first input pressed this frame, for "press a key" menus
+    std::optional<Binding> captured_binding() const {
+        Binding b;
+        if (!ov_captured_binding(e_, &b)) return std::nullopt;
+        return b;
+    }
+    std::string save_bindings() const {
+        std::string s(ov_bindings_save(e_, nullptr, 0), '\0');
+        ov_bindings_save(e_, s.data(), s.size() + 1);
+        return s;
+    }
+    /// Throws (and changes nothing) on a bad line
+    void load_bindings(const std::string &text) {
+        if (!ov_bindings_load(e_, text.c_str())) throw Error(ov_last_error());
+    }
 
     // scenes: numbers the game picks (0 = none); the switch happens in the
     // middle of the transition and scene_entered() reports it for one frame

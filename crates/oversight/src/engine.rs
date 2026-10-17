@@ -57,6 +57,8 @@ pub struct Engine {
     pub emitters: Store<Emitter>,
     pub state: DrawState,
     pub input: Input,
+    /// Named actions bound to keys, buttons and sticks
+    pub actions: crate::actions::Actions,
     pub time: Time,
     /// Seeded random numbers for game logic (same seed, same game)
     pub rng: Rng,
@@ -114,6 +116,7 @@ impl Engine {
             emitters: Store::default(),
             state: DrawState::default(),
             input: Input::default(),
+            actions: Default::default(),
             time: Time::new(Some(1.0 / 60.0)),
             rng: Rng::default(),
             world: {
@@ -225,6 +228,7 @@ impl Engine {
                 InputEvent::Wheel(w) => self.input.wheel += w,
             }
         }
+        self.actions.update(&self.input);
         if let Some(key) = self.debug.toggle_key {
             if self.input.key_pressed(key) {
                 self.debug.enabled = !self.debug.enabled;

@@ -460,6 +460,44 @@ void ov_inject_key(OvEngine *e, int32_t key, bool down); /* applied at the next 
 void ov_inject_mouse_button(OvEngine *e, int32_t button, bool down);
 void ov_inject_mouse_move(OvEngine *e, OvVec2 pos);
 
+/* --- input actions ---
+ * The game asks for "jump", not Space, and players rebind it. Pressed and
+ * released are for the action as a whole: two keys on "jump" press once.
+ *     uint32_t jump = ov_action(e, "jump");
+ *     ov_bind(e, jump, (OvBinding){OV_BIND_KEY, OV_KEY_SPACE, -1, 0});
+ *     if (ov_action_pressed(e, jump)) ...
+ * A rebinding menu waits for ov_captured_binding (the first input pressed
+ * this frame) and stores it with ov_set_binding. ov_bindings_save gives a
+ * text players can edit ("jump = key:Space pad:South"). */
+#define OV_BIND_KEY 1
+#define OV_BIND_MOUSE 2
+#define OV_BIND_PAD_BUTTON 3
+#define OV_BIND_PAD_AXIS 4
+typedef struct OvBinding {
+    int32_t kind;      /* OV_BIND_* */
+    int32_t code;      /* key, mouse button, pad button or pad axis */
+    int32_t pad;       /* pad slot, -1: any pad */
+    int32_t direction; /* pad axis: 1 or -1 */
+} OvBinding;
+uint32_t ov_action(OvEngine *e, const char *name); /* id from 1, made on first use */
+bool ov_bind(OvEngine *e, uint32_t action, OvBinding binding); /* added once */
+bool ov_set_binding(OvEngine *e, uint32_t action, uint32_t index, OvBinding binding); /* index = count: add */
+bool ov_remove_binding(OvEngine *e, uint32_t action, uint32_t index);
+void ov_clear_bindings(OvEngine *e, uint32_t action);
+uint32_t ov_binding_count(OvEngine *e, uint32_t action);
+bool ov_get_binding(OvEngine *e, uint32_t action, uint32_t index, OvBinding *out);
+size_t ov_binding_text(OvEngine *e, OvBinding binding, char *buf, size_t size); /* "key:Space" */
+bool ov_action_down(OvEngine *e, uint32_t action);
+bool ov_action_pressed(OvEngine *e, uint32_t action);  /* this frame only */
+bool ov_action_released(OvEngine *e, uint32_t action);
+float ov_action_value(OvEngine *e, uint32_t action);   /* 0..1, sticks give how far */
+float ov_action_axis(OvEngine *e, uint32_t negative, uint32_t positive); /* -1..1 */
+bool ov_captured_binding(OvEngine *e, OvBinding *out); /* the first input pressed this frame */
+size_t ov_bindings_save(OvEngine *e, char *buf, size_t size);
+/* Actions in the text get exactly its bindings, others keep theirs;
+ * false + ov_last_error on a bad line, and nothing changes */
+bool ov_bindings_load(OvEngine *e, const char *text);
+
 /* --- gamepads: up to 4, in slots 0..3 that a controller keeps until unplugged --- */
 bool ov_gamepad_connected(OvEngine *e, int32_t gamepad);
 size_t ov_gamepad_name(OvEngine *e, int32_t gamepad, char *buf, size_t size);
