@@ -9,6 +9,7 @@ use crate::egui;
 use crate::gizmo::{self, Drag, Tool};
 use orst::components::{read, Name, SpriteRenderer, Transform, NAME, SPRITE_RENDERER, TRANSFORM};
 use orst::ecs::Entity;
+use orst::ffi::OrstEngine;
 use orst::{Camera, Color, Engine, Vec2};
 
 const BACKGROUND: Color = Color::rgba(38, 40, 46, 255);
@@ -23,8 +24,9 @@ const MIN_ZOOM: f32 = 1.0 / 64.0;
 const MAX_ZOOM: f32 = 64.0;
 
 pub struct SceneView {
-    /// Holds the edited world; never runs game code
-    pub engine: Engine,
+    /// Holds the edited world. Boxed with a C handle, so C# scripts
+    /// work on it through the C API.
+    pub engine: Box<OrstEngine>,
     pub tool: Tool,
     /// The editor's own camera; the game's camera is the engine's
     pub camera: Camera,
@@ -72,7 +74,7 @@ impl SceneView {
             None => (Engine::headless(64, 64)?, Shown::Software(None)),
         };
         let mut view = SceneView {
-            engine,
+            engine: OrstEngine::new(engine),
             tool: Tool::default(),
             camera: Camera::default(),
             drag: None,

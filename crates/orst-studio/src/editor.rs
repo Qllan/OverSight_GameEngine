@@ -8,8 +8,9 @@ use crate::gizmo::Tool;
 use crate::history::History;
 use crate::inspector::{self, Action};
 use crate::play::{self, Play};
-use crate::project::Project;
+use crate::project::{Language, Project};
 use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
+use crate::scripts::{self, BuildResult, ScriptProject, Scripts, Sources};
 use orst::components::{
     read, write, Name, SpriteRenderer, Transform, NAME, SPRITE_RENDERER, TRANSFORM,
 };
@@ -17,6 +18,8 @@ use orst::ecs::Entity;
 use orst::scene_file::Assets;
 use orst::schema::FieldType;
 use std::collections::BTreeMap;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Center {
@@ -53,6 +56,21 @@ pub struct Editor {
     title: String,
     /// The game is running in the editor; Stop throws its changes away
     pub play: Option<Play>,
+    pub scripts: ScriptState,
+}
+
+/// C# scripts: built when a .cs file under Assets changes, loaded in
+/// place when the build is good (after Stop, while playing)
+#[derive(Default)]
+pub struct ScriptState {
+    pub host: Option<Scripts>,
+    project: Option<ScriptProject>,
+    /// The sources of the build loaded or running now
+    sources: Sources,
+    building: Option<mpsc::Receiver<BuildResult>>,
+    /// A good build waits for Stop
+    pending: bool,
+    next_check: Option<Instant>,
 }
 
 /// What waits for unsaved changes to be saved or dropped
@@ -90,8 +108,161 @@ impl Editor {
             want_close: false,
             title: String::new(),
             play: None,
+            scripts: ScriptState::default(),
         }
+        .with_scripts()
         .with_main_scene()
+    }
+
+    /// Start .NET and load the scripts before the scene, which may hold
+    /// their components; a build out of date is made again first
+    fn with_scripts(mut self) -> Editor {
+        // .NET is one per process: editor tests must not take it from the
+        // scripts test running beside them
+        if self.project.file.language != Language::CSharp || cfg!(test) {
+            return self;
+        }
+        let Ok(view) = &mut self.scene else {
+            return self;
+        };
+        let Some(host) = Scripts::host_dir() else {
+            self.console
+                .warn("C# scripts are off: ORST.Scripting was not found next to ORST.exe");
+            return self;
+        };
+        match Scripts::start(&host, &mut view.engine) {
+            Ok(s) => self.scripts.host = Some(s),
+            Err(e) => {
+                self.console.warn(format!("C# scripts are off: {e}"));
+                return self;
+            }
+        }
+        let project = ScriptProject {
+            root: self.project.root.clone(),
+            host,
+        };
+        if let Err(e) = project.write_csproj() {
+            self.console.error(e);
+        }
+        let sources = project.sources();
+        self.scripts.sources = sources;
+        self.scripts.project = Some(project.clone());
+        if sources.count > 0 {
+            if project.built() != Some(sources) || !project.dll().is_file() {
+                self.console.info("Building scripts");
+                let result = project.build();
+                self.build_done(result);
+            } else {
+                self.load_scripts();
+            }
+        }
+        self
+    }
+
+    /// Report a build; load it when it is good
+    fn build_done(&mut self, result: BuildResult) {
+        // Files changed during the build make the watcher build again
+        self.scripts.sources = result.sources;
+        let errors = result
+            .messages
+            .iter()
+            .filter(|(l, _)| *l == crate::console::Level::Error)
+            .count();
+        for (level, text) in result.messages {
+            self.console.log(level, text);
+        }
+        if !result.ok {
+            let s = if errors == 1 { "" } else { "s" };
+            self.console.error(format!(
+                "Scripts did not build ({errors} error{s}); the last good build stays"
+            ));
+        } else if self.play.is_some() {
+            self.scripts.pending = true;
+            self.console.info("Scripts built; they load after Stop");
+        } else {
+            self.load_scripts();
+        }
+    }
+
+    /// Load the last good build in place of the scripts before. When a
+    /// component's fields changed, undo steps from before cannot be put
+    /// back and are dropped.
+    fn load_scripts(&mut self) {
+        self.scripts.pending = false;
+        let (Some(host), Some(project), Ok(view)) = (
+            &mut self.scripts.host,
+            &self.scripts.project,
+            &mut self.scene,
+        ) else {
+            return;
+        };
+        let before = layouts(&view.engine.world);
+        match host.load(&project.dll()) {
+            Ok(n) => self.console.info(format!(
+                "Scripts loaded: {n} behaviour{}",
+                if n == 1 { "" } else { "s" }
+            )),
+            Err(e) => self.console.error(format!("Scripts did not load: {e}")),
+        }
+        if layouts(&view.engine.world) != before && self.history.can_undo() {
+            self.history = History::default();
+            self.console
+                .info("Script fields changed: the undo history was cleared");
+        }
+    }
+
+    /// Build again when a .cs file changed, at most once a second
+    fn watch_scripts(&mut self, ctx: &egui::Context) {
+        for (level, text) in scripts::take_log() {
+            self.console.log(level, text);
+        }
+        if let Some(rx) = &self.scripts.building {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.scripts.building = None;
+                    self.build_done(result);
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(200))
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.scripts.building = None,
+            }
+        }
+        if self.scripts.pending && self.play.is_none() {
+            self.load_scripts();
+        }
+        let now = Instant::now();
+        if let Some(t) = self.scripts.next_check.filter(|&t| now < t) {
+            ctx.request_repaint_after(t - now);
+            return;
+        }
+        self.scripts.next_check = Some(now + Duration::from_secs(1));
+        ctx.request_repaint_after(Duration::from_secs(1));
+        let Some(project) = &self.scripts.project else {
+            return;
+        };
+        if self.scripts.building.is_some() {
+            return;
+        }
+        let sources = project.sources();
+        if sources == self.scripts.sources {
+            return;
+        }
+        self.scripts.sources = sources;
+        if sources.count == 0 {
+            if let Some(host) = &mut self.scripts.host {
+                host.unload();
+            }
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let project = project.clone();
+        let repaint = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(project.build());
+            repaint.request_repaint();
+        });
+        self.scripts.building = Some(rx);
     }
 
     fn with_main_scene(mut self) -> Editor {
@@ -188,6 +359,9 @@ impl Editor {
             self.dirty,
             self.selected,
         ));
+        if let Some(host) = &mut self.scripts.host {
+            host.begin_play();
+        }
         self.center = Center::Game;
         self.console.info("Play");
     }
@@ -197,6 +371,9 @@ impl Editor {
         let (Some(play), Ok(view)) = (self.play.take(), &mut self.scene) else {
             return;
         };
+        if let Some(host) = &mut self.scripts.host {
+            host.end_play();
+        }
         let (restored, history, dirty, selected) = play.stop(&mut view.engine);
         if let Err(e) = restored {
             self.console
@@ -517,6 +694,7 @@ impl Editor {
                 }
             }
         });
+        self.watch_scripts(ui.ctx());
         self.run_game(ui.ctx());
         let save = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
         if ui.input_mut(|i| i.consume_shortcut(&save)) {
@@ -593,6 +771,10 @@ impl Editor {
                 p.step_once();
             }
         }
+        if self.scripts.building.is_some() {
+            ui.spinner();
+            ui.weak("Building scripts");
+        }
         if let Some(p) = &self.play {
             ui.colored_label(
                 ui.visuals().warn_fg_color,
@@ -613,7 +795,7 @@ impl Editor {
         }
         if let (Some(p), Ok(view)) = (&mut self.play, &mut self.scene) {
             let dt = ctx.input(|i| i.stable_dt);
-            p.advance(&mut view.engine, dt);
+            p.advance(&mut view.engine, self.scripts.host.as_mut(), dt);
             if !p.paused {
                 ctx.request_repaint();
             }
@@ -893,6 +1075,13 @@ impl Tree {
             }
         }
     }
+}
+
+/// Each component's size and fields, to see that a script changed them
+fn layouts(world: &orst::ecs::World) -> Vec<(u32, Vec<orst::schema::Field>)> {
+    (1..=world.component_types())
+        .filter_map(|id| world.storage(id).map(|s| (s.size, s.fields.clone())))
+        .collect()
 }
 
 #[cfg(test)]

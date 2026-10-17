@@ -4,6 +4,7 @@
 //! changes while playing is thrown away, as in Unity.
 
 use crate::history::History;
+use crate::scripts::Scripts;
 use orst::ecs::Entity;
 use orst::{Camera, Engine};
 
@@ -52,8 +53,14 @@ impl Play {
     }
 
     /// Run the ticks that `real_dt` seconds of real time are worth (or the
-    /// steps asked for while paused); returns how many ran
-    pub fn advance(&mut self, engine: &mut Engine, real_dt: f32) -> u32 {
+    /// steps asked for while paused); returns how many ran. Scripts update
+    /// before the engine moves things, each tick.
+    pub fn advance(
+        &mut self,
+        engine: &mut Engine,
+        mut scripts: Option<&mut Scripts>,
+        real_dt: f32,
+    ) -> u32 {
         let mut n = 0;
         if self.paused {
             n = std::mem::take(&mut self.steps).min(MAX_TICKS);
@@ -69,6 +76,9 @@ impl Play {
         }
         for _ in 0..n {
             engine.set_camera(self.camera);
+            if let Some(s) = scripts.as_deref_mut() {
+                s.tick(TICK);
+            }
             engine.step(TICK);
             engine.time.tick_count += 1;
             self.camera = engine.camera();
@@ -131,19 +141,27 @@ mod tests {
         };
 
         let mut play = Play::start(&mut engine, History::default(), true, Some(e));
-        assert_eq!(play.advance(&mut engine, 0.5), 8, "at most 8 ticks a frame");
+        assert_eq!(
+            play.advance(&mut engine, None, 0.5),
+            8,
+            "at most 8 ticks a frame"
+        );
         assert!((x(&engine) - 8.0).abs() < 1e-3);
         assert_eq!(play.camera.center.x, x(&engine), "the camera follows");
         assert_eq!(
-            play.advance(&mut engine, 0.01),
+            play.advance(&mut engine, None, 0.01),
             0,
             "the rest of a slow frame is dropped"
         );
-        assert_eq!(play.advance(&mut engine, 0.01), 1);
+        assert_eq!(play.advance(&mut engine, None, 0.01), 1);
 
         play.step_once();
-        assert_eq!(play.advance(&mut engine, 1.0), 1, "paused: only the step");
-        assert_eq!(play.advance(&mut engine, 1.0), 0);
+        assert_eq!(
+            play.advance(&mut engine, None, 1.0),
+            1,
+            "paused: only the step"
+        );
+        assert_eq!(play.advance(&mut engine, None, 1.0), 0);
         let spawned = engine.world.spawn();
 
         let (restored, _, dirty, selected) = play.stop(&mut engine);

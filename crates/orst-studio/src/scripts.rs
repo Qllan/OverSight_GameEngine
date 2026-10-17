@@ -4,14 +4,13 @@
 //! ORST.exe exports, so they change the very world the editor shows.
 //! A new build of the scripts replaces the old one in place.
 
-// The editor starts using it in the next step
-#![allow(dead_code)]
-
 use crate::console::Level;
 use orst::ffi::OrstEngine;
 use std::ffi::{c_void, CStr, CString};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Mutex;
+use std::time::UNIX_EPOCH;
 
 type LogFn = extern "system" fn(u32, *const u8, usize);
 
@@ -119,6 +118,196 @@ impl Scripts {
     }
 }
 
+/// Where a project's scripts are built, under its Library
+const BUILD_DIR: &str = "Library/Scripts";
+
+/// The C# side of a project: every .cs file under Assets builds into one
+/// assembly, Scripts.dll, with a project file the editor writes (open it
+/// in an IDE for completion)
+#[derive(Debug, Clone)]
+pub struct ScriptProject {
+    pub root: PathBuf,
+    /// Where ORST.Scripting.dll is
+    pub host: PathBuf,
+}
+
+/// What the .cs files under Assets are like: their number and the newest
+/// change, enough to see an edit, a new file or a deleted one
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Sources {
+    pub count: usize,
+    pub newest: u128,
+}
+
+#[derive(Debug, Clone)]
+pub struct BuildResult {
+    pub ok: bool,
+    /// Errors and warnings, with paths from the project folder
+    pub messages: Vec<(Level, String)>,
+    /// The sources as the build saw them
+    pub sources: Sources,
+}
+
+impl ScriptProject {
+    pub fn csproj(&self) -> PathBuf {
+        self.root.join(BUILD_DIR).join("Scripts.csproj")
+    }
+
+    pub fn dll(&self) -> PathBuf {
+        self.root.join(BUILD_DIR).join("out/Scripts.dll")
+    }
+
+    fn stamp_file(&self) -> PathBuf {
+        self.root.join(BUILD_DIR).join("built")
+    }
+
+    /// The sources the last good build was made from
+    pub fn built(&self) -> Option<Sources> {
+        let text = std::fs::read_to_string(self.stamp_file()).ok()?;
+        let (count, newest) = text.trim().split_once(' ')?;
+        Some(Sources {
+            count: count.parse().ok()?,
+            newest: newest.parse().ok()?,
+        })
+    }
+
+    pub fn sources(&self) -> Sources {
+        fn walk(dir: &Path, s: &mut Sources) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, s);
+                } else if path.extension().is_some_and(|x| x == "cs") {
+                    s.count += 1;
+                    let changed = entry.metadata().and_then(|m| m.modified()).ok();
+                    let at = changed
+                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_nanos());
+                    s.newest = s.newest.max(at);
+                }
+            }
+        }
+        let mut s = Sources::default();
+        walk(&self.root.join(crate::project::ASSETS), &mut s);
+        s
+    }
+
+    fn csproj_text(&self) -> String {
+        let reference = |name: &str| {
+            format!(
+                "    <Reference Include=\"{name}\">\n      <HintPath>{}</HintPath>\n      <Private>false</Private>\n    </Reference>\n",
+                self.host.join(format!("{name}.dll")).display()
+            )
+        };
+        format!(
+            r#"<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Written by ORST Studio: every .cs file under Assets. Edits here are lost. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>Scripts</AssemblyName>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../{assets}/**/*.cs" />
+{net}{scripting}  </ItemGroup>
+</Project>
+"#,
+            assets = crate::project::ASSETS,
+            net = reference("ORST.Net"),
+            scripting = reference("ORST.Scripting"),
+        )
+    }
+
+    /// Write the project file when it is missing or out of date
+    pub fn write_csproj(&self) -> Result<(), String> {
+        let path = self.csproj();
+        let text = self.csproj_text();
+        if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
+            return Ok(());
+        }
+        let io = |e: std::io::Error| format!("{}: {e}", path.display());
+        std::fs::create_dir_all(path.parent().unwrap()).map_err(io)?;
+        std::fs::write(&path, text).map_err(io)
+    }
+
+    /// Build with dotnet; blocks for as long as the build takes
+    pub fn build(&self) -> BuildResult {
+        let sources = self.sources();
+        let failed = |text: String| BuildResult {
+            ok: false,
+            messages: vec![(Level::Error, text)],
+            sources,
+        };
+        if let Err(e) = self.write_csproj() {
+            return failed(e);
+        }
+        let out = Command::new("dotnet")
+            .args(["build", "-nologo", "-v", "q", "-clp:NoSummary", "-o"])
+            .arg(self.dll().parent().unwrap())
+            .arg(self.csproj())
+            .output();
+        let out = match out {
+            Ok(out) => out,
+            Err(e) => {
+                return failed(format!(
+                    "dotnet did not run ({e}); install the .NET 8 SDK to build C# scripts"
+                ))
+            }
+        };
+        let text = String::from_utf8_lossy(&out.stdout).to_string()
+            + &String::from_utf8_lossy(&out.stderr);
+        let mut messages = build_messages(&text, &self.root);
+        let ok = out.status.success();
+        if ok {
+            let stamp = format!("{} {}\n", sources.count, sources.newest);
+            let _ = std::fs::write(self.stamp_file(), stamp);
+        } else if !messages.iter().any(|(l, _)| *l == Level::Error) {
+            messages.push((Level::Error, text.trim().to_string()));
+        }
+        BuildResult {
+            ok,
+            messages,
+            sources,
+        }
+    }
+}
+
+/// The errors and warnings in dotnet's output, once each, with paths
+/// from the project folder and without the project file at the end
+pub fn build_messages(text: &str, root: &Path) -> Vec<(Level, String)> {
+    let mut root = root.display().to_string();
+    if !root.ends_with(['/', '\\']) {
+        root.push(std::path::MAIN_SEPARATOR);
+    }
+    let mut out: Vec<(Level, String)> = Vec::new();
+    for line in text.lines() {
+        let level = if line.contains(": error ") {
+            Level::Error
+        } else if line.contains(": warning ") {
+            Level::Warning
+        } else {
+            continue;
+        };
+        let mut line = line.trim();
+        if let Some(i) = line.rfind(" [") {
+            if line.ends_with(".csproj]") {
+                line = &line[..i];
+            }
+        }
+        let line = line.strip_prefix(root.as_str()).unwrap_or(line).to_string();
+        if !out.iter().any(|(_, l)| *l == line) {
+            out.push((level, line));
+        }
+    }
+    out
+}
+
 type Attach = extern "system" fn(*mut c_void, *const c_void) -> i32;
 
 #[cfg(not(all(windows, target_env = "gnu")))]
@@ -180,7 +369,6 @@ pub mod tests {
     use orst::components::{read, write, Transform, TRANSFORM};
     use orst::schema::Value;
     use orst::Engine;
-    use std::process::Command;
 
     /// Builds the script host with the .NET SDK; None (the test skips)
     /// without one, unless ORST_REQUIRE_DOTNET is set (CI)
@@ -203,38 +391,13 @@ pub mod tests {
         }
     }
 
-    /// Builds `source` as a script project against the host in `host`
-    pub fn build(host: &Path, dir: &Path, source: &str) -> PathBuf {
-        std::fs::create_dir_all(dir).unwrap();
-        let reference = |name: &str| {
-            format!(
-                r#"<Reference Include="{name}"><HintPath>{}</HintPath><Private>false</Private></Reference>"#,
-                host.join(format!("{name}.dll")).display()
-            )
-        };
-        let project = format!(
-            r#"<Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><TargetFramework>net8.0</TargetFramework><Nullable>enable</Nullable>
-  <ImplicitUsings>enable</ImplicitUsings><AssemblyName>Game</AssemblyName></PropertyGroup>
-  <ItemGroup>{}{}</ItemGroup>
-</Project>"#,
-            reference("ORST.Net"),
-            reference("ORST.Scripting")
-        );
-        std::fs::write(dir.join("Game.csproj"), project).unwrap();
-        std::fs::write(dir.join("Game.cs"), source).unwrap();
-        let out = Command::new("dotnet")
-            .args(["build", "-c", "Release", "-nologo", "-v", "q", "-o"])
-            .arg(dir.join("out"))
-            .arg(dir)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stdout)
-        );
-        dir.join("out/Game.dll")
+    /// Writes `source` as Assets/Mover.cs of the project in `root` and
+    /// builds it
+    pub fn build(project: &ScriptProject, source: &str) -> BuildResult {
+        let assets = project.root.join(crate::project::ASSETS);
+        std::fs::create_dir_all(&assets).unwrap();
+        std::fs::write(assets.join("Mover.cs"), source).unwrap();
+        project.build()
     }
 
     const FIRST: &str = r#"
@@ -268,8 +431,15 @@ public class Mover : Behaviour
 
         let mut engine = OrstEngine::new(Engine::headless(16, 16).unwrap());
         let mut scripts = Scripts::start(&host, &mut engine).unwrap();
-        let dll = build(&host, &dir.join("first"), FIRST);
-        assert_eq!(scripts.load(&dll), Ok(1));
+        let project = ScriptProject {
+            root: dir.clone(),
+            host: host.clone(),
+        };
+        assert_eq!(project.sources().count, 0);
+        let built = build(&project, FIRST);
+        assert!(built.ok, "{:?}", built.messages);
+        assert_eq!(project.built(), Some(project.sources()));
+        assert_eq!(scripts.load(&project.dll()), Ok(1));
 
         let world = &mut engine.world;
         let id = world.component_id("Mover").expect("the script's component");
@@ -295,8 +465,9 @@ public class Mover : Behaviour
 
         // A new build: Speed keeps the value the entity has, Jump is new
         engine.world.set_field(e, id, "Speed", Value::F32(5.0));
-        let dll = build(&host, &dir.join("second"), SECOND);
-        assert_eq!(scripts.load(&dll), Ok(1));
+        let built = build(&project, SECOND);
+        assert!(built.ok, "{:?}", built.messages);
+        assert_eq!(scripts.load(&project.dll()), Ok(1));
         assert_eq!(engine.world.component_id("Mover"), Some(id));
         assert_eq!(engine.world.field(e, id, "Speed"), Some(Value::F32(5.0)));
         assert_eq!(engine.world.field(e, id, "Jump"), Some(Value::F32(7.0)));
@@ -317,8 +488,18 @@ public class Mover : Behaviour
         );
         assert!(scripts.unload(), "the assembly can be unloaded");
 
-        let broken = dir.join("missing.dll");
-        assert!(scripts.load(&broken).is_err());
+        let broken = build(&project, "public class Mover : ORST.Behaviour { int x = }");
+        assert!(!broken.ok);
+        let (level, first) = &broken.messages[0];
+        assert!(
+            *level == Level::Error && first.starts_with("Assets"),
+            "{first}"
+        );
+        assert!(
+            first.contains("Mover.cs(1,") && first.contains("error CS"),
+            "{first}"
+        );
+        assert!(scripts.load(&dir.join("missing.dll")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

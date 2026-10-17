@@ -27,12 +27,14 @@ public static unsafe class Host
     /// none keeps a type of an unloaded script alive</summary>
     internal static Engine? Engine { get; private set; }
 
-    /// <summary>The studio's engine and its Console</summary>
+    /// <summary>The studio's engine and its Console; again for each
+    /// project opened, dropping the scripts of the one before</summary>
     [UnmanagedCallersOnly]
     public static int Attach(IntPtr engine, IntPtr logFn)
     {
         try
         {
+            UnloadScripts();
             handle = engine;
             log = (delegate* unmanaged<uint, byte*, nuint, void>)logFn;
             if (!resolverSet)

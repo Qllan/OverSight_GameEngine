@@ -24,7 +24,7 @@
 //! a field that is gone, a missing texture) as warnings and goes on, so
 //! one stale line does not lose a level.
 
-use crate::components::{default_bytes, Name, NAME};
+use crate::components::{Name, NAME};
 use crate::ecs::Entity;
 use crate::engine::Engine;
 use crate::schema::{Field, FieldType, Value};
@@ -257,7 +257,9 @@ impl Engine {
                 let storage = self.world.storage(c).unwrap();
                 let size = storage.size as usize;
                 let fields: Vec<Field> = storage.fields.clone();
-                let mut bytes = default_bytes(c).unwrap_or_else(|| vec![0; size]);
+                // A field the file lacks keeps the component's default
+                // (a script's field initialiser, say)
+                let mut bytes = self.world.default_value(c);
                 let Some(data) = data.as_object() else {
                     out.warnings.push(format!("{what}: not an object"));
                     continue;
@@ -495,8 +497,14 @@ mod tests {
     #[test]
     fn stale_scenes_load_what_they_can() {
         let (mut e, _, _) = engine();
+        let power = Field::new("power", crate::schema::FieldType::F32, 0);
+        let glow = e
+            .world
+            .define("Glow", 4, 4, vec![power], &2.5f32.to_le_bytes())
+            .unwrap();
         let text = r#"{"orst_scene": 1, "entities": [
             {"id": 5, "name": "a", "components": {
+                "Glow": {},
                 "Transform": {"pos": [1, 2], "wings": 2},
                 "Gone": {"x": 1},
                 "Follow": {"target": 9, "speed": "fast", "mood": "Calm"},
@@ -519,6 +527,11 @@ mod tests {
             (t.pos, t.scale),
             (Vec2::new(1.0, 2.0), Vec2::new(1.0, 1.0)),
             "the rest keeps defaults"
+        );
+        assert_eq!(
+            e.world.field(loaded.entities[0], glow, "power"),
+            Some(Value::F32(2.5)),
+            "game components too"
         );
     }
 

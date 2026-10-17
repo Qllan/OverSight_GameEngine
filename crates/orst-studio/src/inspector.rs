@@ -5,10 +5,7 @@
 
 use crate::egui;
 use crate::scene_view::{label, AssetPath};
-use orst::components::{
-    write, Body, Collider, Light, Name, RigidBody, SpriteRenderer, Transform, Velocity, BODY,
-    COLLIDER, LIGHT, NAME, RIGIDBODY, SPRITE_RENDERER, TRANSFORM, VELOCITY,
-};
+use orst::components::NAME;
 use orst::ecs::{Entity, World};
 use orst::schema::{text_bytes, text_str, Field, FieldType, Value, FLAG_ANGLE, FLAG_LAYERS};
 use orst::{Color, Engine, Rect, Vec2};
@@ -313,26 +310,17 @@ fn layers(ui: &mut egui::Ui, v: u32) -> Option<u32> {
 }
 
 /// Attach a component with its default values: the engine's own
-/// defaults for built-ins (a Transform at scale 1, a white sprite),
-/// zeros for game components
+/// defaults for built-ins (a Transform at scale 1, a white sprite), the
+/// field initialisers for scripts, zeros for other game components
 pub fn add_component(world: &mut World, e: Entity, id: u32) -> bool {
-    match id {
-        TRANSFORM => write(world, e, id, &Transform::default()),
-        VELOCITY => write(world, e, id, &Velocity::default()),
-        SPRITE_RENDERER => write(world, e, id, &SpriteRenderer::default()),
-        BODY => write(world, e, id, &Body::default()),
-        COLLIDER => write(world, e, id, &Collider::default()),
-        RIGIDBODY => write(world, e, id, &RigidBody::default()),
-        LIGHT => write(world, e, id, &Light::default()),
-        NAME => write(world, e, id, &Name::default()),
-        _ => world.set(e, id, &[]),
-    }
+    let defaults = world.default_value(id);
+    world.set(e, id, &defaults)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use orst::components::read;
+    use orst::components::{read, SpriteRenderer, Transform, SPRITE_RENDERER, TRANSFORM};
 
     #[test]
     fn added_components_start_from_their_defaults() {
