@@ -634,7 +634,7 @@ public class Mover : Behaviour
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    fn copy_dir(from: &Path, to: &Path) {
+    pub fn copy_dir(from: &Path, to: &Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap().flatten() {
             let path = entry.path();

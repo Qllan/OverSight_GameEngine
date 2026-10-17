@@ -5,12 +5,14 @@
 mod app;
 mod console;
 mod editor;
+mod export;
 mod game_input;
 mod gizmo;
 mod history;
 mod inspector;
 mod native;
 mod play;
+mod player;
 mod project;
 mod scene_view;
 mod scripts;
@@ -21,6 +23,13 @@ use app::{App, Studio};
 use std::path::PathBuf;
 
 fn main() -> eframe::Result {
+    // A built game: the exe is a copy of ORST.exe beside the game's Data
+    if let Some(data) = player::data_dir() {
+        if player::run(&data).is_err() {
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     let options = eframe::NativeOptions {
         renderer: eframe::Renderer::Wgpu,
         viewport: egui::ViewportBuilder::default()

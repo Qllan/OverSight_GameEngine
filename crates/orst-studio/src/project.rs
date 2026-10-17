@@ -137,7 +137,7 @@ impl Project {
         }
         let io = |e: std::io::Error| format!("{}: {e}", root.display());
         std::fs::create_dir_all(root.join(ASSETS)).map_err(io)?;
-        std::fs::write(root.join(".gitignore"), format!("/{LIBRARY}/\n")).map_err(io)?;
+        std::fs::write(root.join(".gitignore"), format!("/{LIBRARY}/\n/Build/\n")).map_err(io)?;
         let file = ProjectFile {
             name: name.trim().to_string(),
             engine: env!("CARGO_PKG_VERSION").to_string(),
@@ -187,7 +187,7 @@ impl Project {
     }
 }
 
-fn write_project_file(root: &Path, file: &ProjectFile) -> Result<(), String> {
+pub(crate) fn write_project_file(root: &Path, file: &ProjectFile) -> Result<(), String> {
     let text = serde_json::to_string_pretty(file).unwrap() + "\n";
     let path = root.join(PROJECT_FILE);
     std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))
@@ -254,7 +254,7 @@ mod tests {
         assert!(root.join("Assets/Scripts/PlayerMove.cs").is_file());
         assert_eq!(
             std::fs::read_to_string(root.join(".gitignore")).unwrap(),
-            "/Library/\n"
+            "/Library/\n/Build/\n"
         );
         std::fs::write(root.join("Assets/hero.png"), b"x").unwrap();
         let (again, scan) = Project::open(&root).unwrap();

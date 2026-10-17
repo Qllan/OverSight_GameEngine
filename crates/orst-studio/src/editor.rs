@@ -2,7 +2,7 @@
 //! the left, Inspector on the right, Project and Console below, Scene and
 //! Game in the middle
 
-use crate::console::Console;
+use crate::console::{Console, Level};
 use crate::egui;
 use crate::gizmo::Tool;
 use crate::history::History;
@@ -18,6 +18,7 @@ use orst::ecs::Entity;
 use orst::scene_file::Assets;
 use orst::schema::FieldType;
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -54,6 +55,10 @@ pub struct Editor {
     save_as: Option<(String, Option<After>)>,
     /// The New script window: the name typed
     new_script: Option<String>,
+    /// The Build game dialog: the folder, and whether to run the game
+    build_game: Option<(String, bool)>,
+    /// A game being built, and whether to run it then
+    exporting: Option<(mpsc::Receiver<Exported>, bool)>,
     want_close: bool,
     title: String,
     /// The game is running in the editor; Stop throws its changes away
@@ -74,6 +79,9 @@ pub struct ScriptState {
     pending: bool,
     next_check: Option<Instant>,
 }
+
+/// A built game's exe, or what stopped the build
+type Exported = Result<PathBuf, Vec<(Level, String)>>;
 
 /// What waits for unsaved changes to be saved or dropped
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +116,8 @@ impl Editor {
             ask_save: None,
             save_as: None,
             new_script: None,
+            build_game: None,
+            exporting: None,
             want_close: false,
             title: String::new(),
             play: None,
@@ -263,7 +273,8 @@ impl Editor {
         let Some(project) = &self.scripts.project else {
             return;
         };
-        if self.scripts.building.is_some() {
+        // A game build makes the scripts itself
+        if self.scripts.building.is_some() || self.exporting.is_some() {
             return;
         }
         let sources = project.sources();
@@ -579,6 +590,13 @@ impl Editor {
                         self.save_as = Some((name, None));
                     }
                     ui.separator();
+                    let building = self.exporting.is_some() || self.scripts.building.is_some();
+                    let button = ui.add_enabled(!building, egui::Button::new("Build game..."));
+                    if button.clicked() {
+                        let dir = self.project.root.join(crate::export::DEFAULT_DIR);
+                        self.build_game = Some((dir.display().to_string(), true));
+                    }
+                    ui.separator();
                     if ui.button("Refresh assets").clicked() {
                         self.rescan();
                     }
@@ -717,6 +735,7 @@ impl Editor {
             }
         });
         self.watch_scripts(ui.ctx());
+        self.watch_export(ui.ctx());
         self.run_game(ui.ctx());
         let save = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
         if ui.input_mut(|i| i.consume_shortcut(&save)) {
@@ -871,7 +890,11 @@ impl Editor {
         if let Some(mut name) = self.new_script.take() {
             let mut keep = true;
             let mut chosen = None;
-            egui::Window::new("New C# script")
+            let title = match self.project.file.language {
+                Language::CSharp => "New C# script",
+                Language::Cpp => "New C++ script",
+            };
+            egui::Window::new(title)
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -897,6 +920,30 @@ impl Editor {
                 }
                 None if keep => self.new_script = Some(name),
                 None => {}
+            }
+        }
+        if let Some((mut dir, mut run)) = self.build_game.take() {
+            let mut keep = true;
+            let mut chosen = false;
+            egui::Window::new("Build game")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label("Folder");
+                    ui.add(egui::TextEdit::singleline(&mut dir).desired_width(420.0));
+                    ui.checkbox(&mut run, "Run the game when it is built");
+                    ui.horizontal(|ui| {
+                        chosen = ui.button("Build").clicked();
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            if chosen {
+                self.start_export(PathBuf::from(dir.trim()), run);
+            } else if keep {
+                self.build_game = Some((dir, run));
             }
         }
         if let Some((mut name, then)) = self.save_as.take() {
@@ -935,6 +982,64 @@ impl Editor {
                 }
                 None if keep => self.save_as = Some((name, then)),
                 None => {}
+            }
+        }
+    }
+
+    /// Build the game into `out` in the background (File → Build game)
+    pub fn start_export(&mut self, out: PathBuf, run: bool) {
+        if self.dirty {
+            self.console.warn(format!(
+                "{} has unsaved changes, which the game will not have",
+                self.scene_title()
+            ));
+        }
+        self.console
+            .info(format!("Building the game into {}", out.display()));
+        let root = self.project.root.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::export::export(&root, &out));
+        });
+        self.exporting = Some((rx, run));
+    }
+
+    /// Report a finished game build, and run the game when asked
+    fn watch_export(&mut self, ctx: &egui::Context) {
+        let Some((rx, run)) = &self.exporting else {
+            return;
+        };
+        let run = *run;
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(200));
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => Err(vec![(
+                Level::Error,
+                "The game build stopped with an error".to_string(),
+            )]),
+        };
+        self.exporting = None;
+        match result {
+            Ok(exe) => {
+                self.console.info(format!("Game built: {}", exe.display()));
+                if run {
+                    let mut game = std::process::Command::new(&exe);
+                    if let Some(dir) = exe.parent() {
+                        game.current_dir(dir);
+                    }
+                    if let Err(e) = game.spawn() {
+                        self.console.error(format!("The game did not start: {e}"));
+                    }
+                }
+            }
+            Err(messages) => {
+                for (level, text) in messages {
+                    self.console.log(level, text);
+                }
+                self.console.error("The game was not built");
             }
         }
     }

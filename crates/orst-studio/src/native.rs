@@ -66,6 +66,12 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS
     "${{CMAKE_CURRENT_SOURCE_DIR}}/../../{assets}/*.cpp"
     "${{CMAKE_CURRENT_SOURCE_DIR}}/../../{assets}/*.cc"
     "${{CMAKE_CURRENT_SOURCE_DIR}}/../../{assets}/*.cxx")
+# A built game links the same scripts against its own exe and puts them
+# elsewhere
+set(ORST_OUT "${{CMAKE_CURRENT_SOURCE_DIR}}/out" CACHE PATH "Where the library goes")
+set(ORST_HOST_DEF "${{CMAKE_CURRENT_SOURCE_DIR}}/host.def" CACHE FILEPATH "The exports of the exe")
+# The C++ runtime inside the library, so a built game needs nothing more
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 add_library(Scripts SHARED main.cpp ${{SOURCES}})
 target_include_directories(Scripts PRIVATE "{include}")
 # Only the orst_script_ functions leave the library, and on Linux each
@@ -74,14 +80,14 @@ set_target_properties(Scripts PROPERTIES
     PREFIX ""
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
-    LIBRARY_OUTPUT_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}/out$<0:>"
-    RUNTIME_OUTPUT_DIRECTORY "${{CMAKE_CURRENT_SOURCE_DIR}}/out$<0:>")
+    LIBRARY_OUTPUT_DIRECTORY "${{ORST_OUT}}$<0:>"
+    RUNTIME_OUTPUT_DIRECTORY "${{ORST_OUT}}$<0:>")
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(Scripts PRIVATE -fno-gnu-unique)
 endif()
 
 # The engine's functions are in ORST.exe
-set(HOST_DEF "${{CMAKE_CURRENT_SOURCE_DIR}}/host.def")
+set(HOST_DEF "${{ORST_HOST_DEF}}")
 if(MSVC)
     target_compile_options(Scripts PRIVATE /utf-8 /EHsc)
     set(HOST_LIB "${{CMAKE_CURRENT_BINARY_DIR}}/host.lib")
@@ -107,12 +113,16 @@ endif()
     )
 }
 
-/// The exports of the running editor, for the import library
-fn def_text() -> String {
-    let exe = std::env::current_exe()
+/// The running editor's file name
+fn exe_name() -> String {
+    std::env::current_exe()
         .ok()
         .and_then(|p| Some(p.file_name()?.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "ORST.exe".into());
+        .unwrap_or_else(|| "ORST.exe".into())
+}
+
+/// The exports of `exe` (a copy of ORST.exe), for the import library
+fn def_text(exe: &str) -> String {
     let mut text = format!("NAME \"{exe}\"\nEXPORTS\n");
     for name in EXPORTS {
         text += &format!("    {name}\n");
@@ -128,23 +138,52 @@ pub fn write_project(project: &ScriptProject) -> Result<(), String> {
     let dir = build_dir(project);
     write_if_changed(&dir.join("CMakeLists.txt"), &cmake_text(project))?;
     write_if_changed(&dir.join("main.cpp"), MAIN)?;
-    write_if_changed(&dir.join("host.def"), &def_text())
+    write_if_changed(&dir.join("host.def"), &def_text(&exe_name()))
 }
 
 /// Configure once, then build; whether it worked, and the output
 pub fn build(project: &ScriptProject, log: &Path) -> Result<(bool, String), String> {
     let dir = build_dir(project);
-    let cmake = dir.join("cmake");
+    run_cmake(&dir, &dir.join("cmake"), &[], log)
+}
+
+/// The scripts again for a built game, whose exe is `exe`, into `out`
+/// (on Windows the library names the exe it takes the engine from)
+pub fn build_for_game(
+    project: &ScriptProject,
+    exe: &str,
+    out: &Path,
+    log: &Path,
+) -> Result<(bool, String), String> {
+    write_project(project)?;
+    let dir = build_dir(project);
+    let def = dir.join("game.def");
+    write_if_changed(&def, &def_text(exe))?;
+    let options = [
+        format!("-DORST_OUT={}", cmake_path(out)),
+        format!("-DORST_HOST_DEF={}", cmake_path(&def)),
+    ];
+    run_cmake(&dir, &dir.join("cmake-game"), &options, log)
+}
+
+fn run_cmake(
+    dir: &Path,
+    cmake: &Path,
+    options: &[String],
+    log: &Path,
+) -> Result<(bool, String), String> {
     let missing =
         |e: std::io::Error| format!("CMake did not run ({e}); install CMake and a C++ compiler");
-    if !cmake.join("CMakeCache.txt").is_file() {
+    // Options change with the game's folder, so they are passed again
+    if !cmake.join("CMakeCache.txt").is_file() || !options.is_empty() {
         let (ok, text) = run_logged(
             Command::new("cmake")
                 .arg("-S")
-                .arg(&dir)
+                .arg(dir)
                 .arg("-B")
-                .arg(&cmake)
-                .arg(format!("-DCMAKE_BUILD_TYPE={CONFIG}")),
+                .arg(cmake)
+                .arg(format!("-DCMAKE_BUILD_TYPE={CONFIG}"))
+                .args(options),
             log,
         )
         .map_err(missing)?;
@@ -157,7 +196,7 @@ pub fn build(project: &ScriptProject, log: &Path) -> Result<(bool, String), Stri
     run_logged(
         Command::new("cmake")
             .arg("--build")
-            .arg(&cmake)
+            .arg(cmake)
             .args(["--config", CONFIG]),
         log,
     )
