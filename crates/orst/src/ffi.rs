@@ -34,6 +34,37 @@ pub struct OrstEngine {
     field_text: (CString, CString),
 }
 
+impl OrstEngine {
+    /// A C handle around an engine a Rust host made, so code it hosts
+    /// (C# scripts in ORST Studio) works on the same engine through the C
+    /// API. Keep it boxed: the handle is its address.
+    pub fn new(engine: Engine) -> Box<OrstEngine> {
+        Box::new(OrstEngine {
+            engine,
+            text: CString::default(),
+            field_text: Default::default(),
+        })
+    }
+
+    /// The handle to pass to C functions; valid while the box lives
+    pub fn handle(&mut self) -> *mut OrstEngine {
+        self
+    }
+}
+
+impl std::ops::Deref for OrstEngine {
+    type Target = Engine;
+    fn deref(&self) -> &Engine {
+        &self.engine
+    }
+}
+
+impl std::ops::DerefMut for OrstEngine {
+    fn deref_mut(&mut self) -> &mut Engine {
+        &mut self.engine
+    }
+}
+
 #[repr(C)]
 pub struct OrstConfig {
     pub title: *const c_char,
@@ -199,11 +230,7 @@ pub unsafe extern "C" fn orst_engine_create(config: *const OrstConfig) -> *mut O
         unreachable!()
     };
     match engine {
-        Ok(engine) => Box::into_raw(Box::new(OrstEngine {
-            engine,
-            text: CString::default(),
-            field_text: Default::default(),
-        })),
+        Ok(engine) => Box::into_raw(OrstEngine::new(engine)),
         Err(e) => {
             set_error(e);
             std::ptr::null_mut()
@@ -356,10 +383,10 @@ pub unsafe extern "C" fn orst_set(
         None => return false,
     };
     if data.is_null() {
-        // Built-ins get their defaults (scale 1, white tint), others zeroes
-        if let Some(d) = crate::components::default_bytes(component) {
-            return world.set(entity, component, &d);
-        }
+        // The registered default: built-ins have scale 1 and a white tint,
+        // scripts their field initialisers, others zeros
+        let d = world.default_value(component);
+        return world.set(entity, component, &d);
     }
     let bytes = if data.is_null() || size == 0 {
         &[][..]
@@ -830,6 +857,15 @@ pub unsafe extern "C" fn orst_set_fields(
     count: u32,
 ) -> bool {
     let engine = engine!(e, false);
+    let Some(out) = read_fields(fields, count) else {
+        return false;
+    };
+    result(engine.world.set_fields(component, out).map(|_| true), false)
+}
+
+/// # Safety
+/// As orst_set_fields
+unsafe fn read_fields(fields: *const OrstField, count: u32) -> Option<Vec<Field>> {
     let fields = if fields.is_null() || count == 0 {
         &[][..]
     } else {
@@ -839,7 +875,7 @@ pub unsafe extern "C" fn orst_set_fields(
     for f in fields {
         let Some(ty) = FieldType::from_u32(f.ty) else {
             set_error(format!("field {:?}: unknown type {}", string(f.name), f.ty));
-            return false;
+            return None;
         };
         let mut field = Field::new(string(f.name), ty, f.offset)
             .flags(f.flags)
@@ -850,7 +886,37 @@ pub unsafe extern "C" fn orst_set_fields(
         }
         out.push(field);
     }
-    result(engine.world.set_fields(component, out).map(|_| true), false)
+    Some(out)
+}
+
+/// # Safety
+/// `name` is a NUL-terminated string, `fields` as orst_set_fields, and
+/// `defaults` NULL or `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn orst_define_component(
+    e: *mut OrstEngine,
+    name: *const c_char,
+    size: u32,
+    align: u32,
+    fields: *const OrstField,
+    count: u32,
+    defaults: *const c_void,
+) -> u32 {
+    let engine = engine!(e, 0);
+    let Some(fields) = read_fields(fields, count) else {
+        return 0;
+    };
+    let defaults = if defaults.is_null() || size == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(defaults as *const u8, size as usize)
+    };
+    result(
+        engine
+            .world
+            .define(string(name), size, align, fields, defaults),
+        0,
+    )
 }
 
 #[no_mangle]
@@ -2788,6 +2854,55 @@ mod tests {
             renderer: 0,
         };
         unsafe { orst_engine_create(&config) }
+    }
+
+    #[test]
+    fn scripts_define_components_with_defaults_through_c() {
+        let e = headless(8, 8);
+        let field = |name: &CStr, ty: u32, offset: u32| OrstField {
+            name: name.as_ptr(),
+            ty,
+            offset,
+            flags: 0,
+            min: 0.0,
+            max: 0.0,
+            options: std::ptr::null(),
+        };
+        unsafe {
+            let speed = [field(c"speed", 1, 0)];
+            let d = 5.0f32;
+            let id = orst_define_component(
+                e,
+                c"Mover".as_ptr(),
+                4,
+                4,
+                speed.as_ptr(),
+                1,
+                &d as *const f32 as _,
+            );
+            assert!(id > 0);
+            let ent = orst_spawn(e);
+            assert!(orst_set(e, ent, id, std::ptr::null()));
+            let two = [field(c"hp", 2, 0), field(c"speed", 1, 4)];
+            let again = orst_define_component(
+                e,
+                c"Mover".as_ptr(),
+                8,
+                4,
+                two.as_ptr(),
+                2,
+                std::ptr::null(),
+            );
+            assert_eq!(again, id);
+            let p = orst_get(e, ent, id) as *const f32;
+            assert_eq!(*p.add(1), 5.0, "speed kept its value at its new place");
+            let bad = [field(c"x", 99, 0)];
+            assert_eq!(
+                orst_define_component(e, c"Bad".as_ptr(), 4, 4, bad.as_ptr(), 1, std::ptr::null()),
+                0
+            );
+            orst_engine_destroy(e);
+        }
     }
 
     #[test]

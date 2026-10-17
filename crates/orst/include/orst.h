@@ -378,6 +378,14 @@ typedef struct OrstField {
 } OrstField;
 
 bool orst_set_fields(OrstEngine *e, uint32_t component, const OrstField *fields, uint32_t count);
+/* Register a component with its fields and the value a new one starts
+ * with (NULL: zeros), or change one registered before: a script that was
+ * edited and reloaded. Entities keep the values of fields with the same
+ * name and type wherever they moved; new fields take the default. Returns
+ * the id, 0 on error. Snapshots from before a change of size no longer
+ * restore. */
+uint32_t orst_define_component(OrstEngine *e, const char *name, uint32_t size, uint32_t align,
+                               const OrstField *fields, uint32_t count, const void *defaults);
 uint32_t orst_field_count(OrstEngine *e, uint32_t component);
 /* The strings stay valid until the next orst_get_field */
 bool orst_get_field(OrstEngine *e, uint32_t component, uint32_t index, OrstField *out);

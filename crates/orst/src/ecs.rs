@@ -52,6 +52,9 @@ pub struct Storage {
     pub align: u32,
     /// What is inside, for tools; empty: unknown
     pub fields: Vec<Field>,
+    /// The value a new one starts with (a script's field initialisers);
+    /// empty: zeros, or the built-in default
+    pub defaults: Vec<u8>,
     /// Bytes from one row to the next: size rounded up to the alignment
     stride: usize,
     data: Vec<Block>,
@@ -69,6 +72,7 @@ impl Storage {
             size,
             align,
             fields: Vec::new(),
+            defaults: Vec::new(),
             stride,
             data: Vec::new(),
             dense: Vec::new(),
@@ -231,8 +235,74 @@ impl World {
         self.storages.get((component as usize).wrapping_sub(1))
     }
 
-    fn storage_mut(&mut self, component: u32) -> Option<&mut Storage> {
+    pub(crate) fn storage_mut(&mut self, component: u32) -> Option<&mut Storage> {
         self.storages.get_mut((component as usize).wrapping_sub(1))
+    }
+
+    /// Register a component with its fields and default value, or change
+    /// one registered before (a script edited and reloaded). Every entity
+    /// keeps the values of fields that still have the same name and type,
+    /// wherever they moved; new fields start from `defaults` (empty:
+    /// zeros). Snapshots taken before a change of size no longer load.
+    pub fn define(
+        &mut self,
+        name: &str,
+        size: u32,
+        align: u32,
+        fields: Vec<Field>,
+        defaults: &[u8],
+    ) -> Result<u32, String> {
+        crate::schema::check(name, size, &fields)?;
+        if !defaults.is_empty() && defaults.len() != size as usize {
+            return Err(format!(
+                "component {name}: {} default bytes for a size of {size}",
+                defaults.len()
+            ));
+        }
+        let id = match self.by_name.get(name) {
+            Some(&id) => id,
+            None => self.component(name, size, align)?,
+        };
+        let old = &self.storages[id as usize - 1];
+        let same_layout = old.size == size && old.align == align.max(1) && old.fields == fields;
+        if !same_layout {
+            let mut next = Storage::new(name, size, align.max(1));
+            let base: Vec<u8> = match defaults.is_empty() {
+                true => vec![0; size as usize],
+                false => defaults.to_vec(),
+            };
+            for (row, &index) in old.dense.iter().enumerate() {
+                let was = old.row(row);
+                let mut bytes = base.clone();
+                if old.fields.is_empty() && old.size == size {
+                    bytes.copy_from_slice(was);
+                }
+                for f in &fields {
+                    let kept = old.fields.iter().find(|o| o.name == f.name && o.ty == f.ty);
+                    if let Some(o) = kept {
+                        let n = f.ty.size() as usize;
+                        let (from, to) = (o.offset as usize, f.offset as usize);
+                        bytes[to..to + n].copy_from_slice(&was[from..from + n]);
+                    }
+                }
+                next.insert(index, &bytes);
+            }
+            self.storages[id as usize - 1] = next;
+        }
+        let s = &mut self.storages[id as usize - 1];
+        s.fields = fields;
+        s.defaults = defaults.to_vec();
+        Ok(id)
+    }
+
+    /// The bytes a new component starts with: its registered default (the
+    /// built-ins have theirs), or zeros
+    pub fn default_value(&self, component: u32) -> Vec<u8> {
+        match self.storage(component) {
+            Some(s) if !s.defaults.is_empty() => s.defaults.clone(),
+            Some(s) => vec![0; s.size as usize],
+            None => Vec::new(),
+        }
     }
 
     /// Describe what is inside a component (see schema.rs), replacing
@@ -449,6 +519,7 @@ impl World {
                 .iter()
                 .map(|s| Storage {
                     fields: s.fields.clone(),
+                    defaults: s.defaults.clone(),
                     ..Storage::new(&s.name, s.size, s.align)
                 })
                 .collect(),
@@ -716,5 +787,50 @@ mod tests {
         assert!(other.load(&bytes).is_err());
         assert_eq!(read_pos(&w, e, p), (1.0, 2.0));
         assert_eq!(w.count(), 1);
+    }
+
+    #[test]
+    fn redefined_components_keep_values_by_field_name() {
+        use crate::schema::{Field, FieldType as T, Value};
+        let mut w = World::new();
+        let v1 = vec![Field::new("speed", T::F32, 0), Field::new("hp", T::I32, 4)];
+        let mut defaults = 3.0f32.to_le_bytes().to_vec();
+        defaults.extend_from_slice(&10i32.to_le_bytes());
+        let id = w.define("Enemy", 8, 4, v1.clone(), &defaults).unwrap();
+        assert_eq!(w.default_value(id), defaults);
+        let (a, b) = (w.spawn(), w.spawn());
+        w.set(a, id, &w.default_value(id));
+        w.set(b, id, &w.default_value(id));
+        assert!(w.set_field(b, id, "hp", Value::I32(7)));
+        assert_eq!(
+            w.define("Enemy", 8, 4, v1, &defaults),
+            Ok(id),
+            "same again: nothing moves"
+        );
+
+        // hp moves to the front, speed becomes a different type, armor is new
+        let v2 = vec![
+            Field::new("hp", T::I32, 0),
+            Field::new("speed", T::U32, 4),
+            Field::new("armor", T::F32, 8),
+        ];
+        let mut d2 = 1i32.to_le_bytes().to_vec();
+        d2.extend_from_slice(&2u32.to_le_bytes());
+        d2.extend_from_slice(&0.5f32.to_le_bytes());
+        assert_eq!(w.define("Enemy", 12, 4, v2, &d2), Ok(id));
+        assert_eq!(w.field(b, id, "hp"), Some(Value::I32(7)));
+        assert_eq!(w.field(a, id, "hp"), Some(Value::I32(10)));
+        assert_eq!(
+            w.field(a, id, "speed"),
+            Some(Value::U32(2)),
+            "a changed type starts over"
+        );
+        assert_eq!(w.field(b, id, "armor"), Some(Value::F32(0.5)));
+        assert_eq!(w.query(&[id]), [a, b], "the order stays");
+
+        assert!(w.define("Enemy", 12, 4, vec![], &[1, 2]).is_err());
+        assert!(w
+            .define("Bad", 4, 4, vec![Field::new("x", T::F32, 2)], &[])
+            .is_err());
     }
 }

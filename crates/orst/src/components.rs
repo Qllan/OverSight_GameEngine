@@ -453,6 +453,9 @@ pub fn register(world: &mut World) {
     );
     for (id, fields) in builtin_fields() {
         world.set_fields(id, fields).expect("built-in fields");
+        if let Some(s) = world.storage_mut(id) {
+            s.defaults = default_bytes(id).unwrap_or_default();
+        }
     }
 }
 
