@@ -24,6 +24,7 @@ pub mod input;
 pub mod particles;
 pub mod render;
 pub mod rng;
+pub mod scenes;
 pub mod text;
 pub mod texture;
 pub mod tiled;
@@ -41,6 +42,7 @@ pub use engine::{Engine, InputEvent, DEFAULT_FONT_ID};
 pub use gamepad::{GamepadAxis, GamepadButton, Gamepads};
 pub use input::{Input, Key, MouseButton};
 pub use particles::{Emitter, EmitterConfig};
+pub use scenes::{Scenes, Transition};
 pub use tilemap::{
     LayerDraw, MapObject, ObjectLayer, Orientation, Properties, Property, TileLayer, Tilemap,
     Tileset,

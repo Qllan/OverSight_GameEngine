@@ -393,6 +393,26 @@ bool ov_restore(OvEngine *e, const uint8_t *data, size_t size); /* false + ov_la
 /* Fingerprint of the snapshot: games running in step have equal hashes */
 uint64_t ov_state_hash(OvEngine *e);
 
+/* --- scenes ---
+ * A scene is a number the game picks (0 = none): menu, level, pause. The
+ * engine keeps a stack of them and covers each switch with a transition;
+ * the switch happens in its middle, when the screen is covered, and
+ * ov_scene_entered returns the new scene for that one frame:
+ *     if (ov_scene_entered(e) == LEVEL) load_level();
+ * A change while another runs is refused (false). */
+#define OV_TRANSITION_CUT 0  /* at the next frame */
+#define OV_TRANSITION_FADE 1 /* to the colour and back */
+#define OV_TRANSITION_WIPE 2 /* the colour sweeps across */
+bool ov_scene_go(OvEngine *e, uint32_t scene, int32_t transition, float seconds, OvColor color);
+bool ov_scene_push(OvEngine *e, uint32_t scene, int32_t transition, float seconds, OvColor color); /* over the current one */
+bool ov_scene_pop(OvEngine *e, int32_t transition, float seconds, OvColor color); /* false: nothing below */
+uint32_t ov_scene(OvEngine *e);         /* the scene on top */
+uint32_t ov_scene_entered(OvEngine *e); /* became current this frame (after a pop: resumed) */
+uint32_t ov_scene_left(OvEngine *e);    /* stopped being current this frame */
+uint32_t ov_scene_depth(OvEngine *e);
+bool ov_scene_transitioning(OvEngine *e);
+float ov_scene_cover(OvEngine *e); /* how covered the screen is, 0..1 */
+
 /* --- textures and fonts --- */
 uint32_t ov_load_texture(OvEngine *e, const char *path); /* PNG, JPEG */
 uint32_t ov_texture_from_rgba(OvEngine *e, uint32_t width, uint32_t height, const uint8_t *rgba);

@@ -119,6 +119,7 @@ struct ComponentName<SpriteRenderer> { static constexpr const char *value = "Spr
 template <>
 struct ComponentName<Body> { static constexpr const char *value = "Body"; };
 
+enum class Transition : int32_t { Cut = OV_TRANSITION_CUT, Fade = OV_TRANSITION_FADE, Wipe = OV_TRANSITION_WIPE };
 enum class Space : int32_t { World = OV_SPACE_WORLD, Screen = OV_SPACE_SCREEN };
 enum class Orientation : int32_t { Orthogonal = OV_ORTHOGONAL, Isometric = OV_ISOMETRIC };
 enum class Mouse : int32_t { Left = OV_MOUSE_LEFT, Right = OV_MOUSE_RIGHT, Middle = OV_MOUSE_MIDDLE };
@@ -693,6 +694,23 @@ public:
         if (!ov_restore(e_, bytes.data(), bytes.size())) throw Error(ov_last_error());
     }
     uint64_t state_hash() const { return ov_state_hash(e_); }
+
+    // scenes: numbers the game picks (0 = none); the switch happens in the
+    // middle of the transition and scene_entered() reports it for one frame
+    bool go_scene(uint32_t scene, Transition t = Transition::Fade, float seconds = 0.5f, Color c = Color::Black) {
+        return ov_scene_go(e_, scene, int32_t(t), seconds, c);
+    }
+    bool push_scene(uint32_t scene, Transition t = Transition::Fade, float seconds = 0.5f, Color c = Color::Black) {
+        return ov_scene_push(e_, scene, int32_t(t), seconds, c);
+    }
+    bool pop_scene(Transition t = Transition::Fade, float seconds = 0.5f, Color c = Color::Black) {
+        return ov_scene_pop(e_, int32_t(t), seconds, c);
+    }
+    uint32_t scene() const { return ov_scene(e_); }
+    uint32_t scene_entered() const { return ov_scene_entered(e_); }
+    uint32_t scene_left() const { return ov_scene_left(e_); }
+    uint32_t scene_depth() const { return ov_scene_depth(e_); }
+    bool scene_transitioning() const { return ov_scene_transitioning(e_); }
 
     // sound
     void stop_voice(uint32_t voice) { ov_stop_voice(e_, voice); }

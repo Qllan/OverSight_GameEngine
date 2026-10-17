@@ -146,6 +146,15 @@ int main() {
     CHECK(engine.get<ov::Transform>(mover)->pos.x == 12 && engine.get<ov::Transform>(mover)->scale.x == 1);
     CHECK(engine.get<ov::Transform>(mover)->rotation == 0.5f);
 
+    // Scenes: a push keeps the scene below, a pop resumes it
+    CHECK(engine.go_scene(1, ov::Transition::Cut));
+    engine.poll();
+    CHECK(engine.push_scene(2, ov::Transition::Cut) && !engine.pop_scene());
+    engine.poll();
+    CHECK(engine.scene() == 2 && engine.pop_scene(ov::Transition::Cut));
+    engine.poll();
+    CHECK(engine.scene() == 1 && engine.scene_entered() == 1 && engine.scene_left() == 2);
+
     std::printf("smoke_cpp: ok\n");
     return 0;
 }

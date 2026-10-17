@@ -445,6 +445,78 @@ pub extern "C" fn ov_draw_entities(e: *mut OvEngine) {
     engine!(e).draw_entities();
 }
 
+fn transition(t: i32) -> Result<crate::scenes::Transition, String> {
+    crate::scenes::Transition::from_i32(t).ok_or_else(|| format!("unknown transition {t}"))
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene_go(
+    e: *mut OvEngine,
+    scene: u32,
+    transition_kind: i32,
+    duration: f32,
+    color: Color,
+) -> bool {
+    let engine = engine!(e, false);
+    let r = transition(transition_kind).map(|t| engine.scenes.go(scene, t, duration, color));
+    result(r, false)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene_push(
+    e: *mut OvEngine,
+    scene: u32,
+    transition_kind: i32,
+    duration: f32,
+    color: Color,
+) -> bool {
+    let engine = engine!(e, false);
+    let r = transition(transition_kind).map(|t| engine.scenes.push(scene, t, duration, color));
+    result(r, false)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene_pop(
+    e: *mut OvEngine,
+    transition_kind: i32,
+    duration: f32,
+    color: Color,
+) -> bool {
+    let engine = engine!(e, false);
+    let r = transition(transition_kind).map(|t| engine.scenes.pop(t, duration, color));
+    result(r, false)
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).scenes.current()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene_entered(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).scenes.entered()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene_left(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).scenes.left()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene_depth(e: *mut OvEngine) -> u32 {
+    engine!(e, 0).scenes.depth() as u32
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene_transitioning(e: *mut OvEngine) -> bool {
+    engine!(e, false).scenes.transitioning()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_scene_cover(e: *mut OvEngine) -> f32 {
+    engine!(e, 0.0).scenes.cover()
+}
+
 #[no_mangle]
 pub extern "C" fn ov_world_clear(e: *mut OvEngine) {
     engine!(e).world.clear();
@@ -1842,6 +1914,47 @@ mod tests {
             assert!(ov_gamepad_released(e, 2, 0) && ov_gamepad_axis(e, 2, 0) == 0.0);
             ov_engine_destroy(e);
         }
+    }
+
+    #[test]
+    fn scenes_fade_over_the_frame() {
+        let e = headless(8, 8);
+        let white = Color::rgba(255, 255, 255, 255);
+        let frame = |e: *mut OvEngine| {
+            assert!(ov_poll(e));
+            ov_begin_frame(e, white);
+            ov_end_frame(e);
+        };
+        assert!(ov_scene_go(e, 1, 0, 0.0, Color::BLACK));
+        frame(e);
+        assert_eq!((ov_scene(e), ov_scene_entered(e)), (1, 1));
+        assert!(
+            !ov_scene_go(e, 2, 9, 1.0, Color::BLACK),
+            "unknown transition"
+        );
+        // A 1 s fade at 60 fps: covered and switched at frame 30
+        assert!(ov_scene_go(e, 2, 1, 1.0, Color::BLACK));
+        let mut entered_at = 0;
+        for i in 1..=70 {
+            frame(e);
+            if ov_scene_entered(e) == 2 {
+                entered_at = i;
+                assert_eq!(ov_pixel(e, 4, 4), Color::BLACK, "covered at the switch");
+            }
+        }
+        assert!(
+            (29..=31).contains(&entered_at),
+            "switched at frame {entered_at}"
+        );
+        assert!(!ov_scene_transitioning(e) && ov_pixel(e, 4, 4) == white);
+        assert!(
+            ov_scene_push(e, 3, 2, 0.5, Color::BLACK) && !ov_scene_pop(e, 0, 0.0, Color::BLACK)
+        );
+        for _ in 0..40 {
+            frame(e);
+        }
+        assert_eq!((ov_scene(e), ov_scene_depth(e)), (3, 2));
+        unsafe { ov_engine_destroy(e) };
     }
 
     #[test]

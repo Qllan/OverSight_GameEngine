@@ -132,6 +132,15 @@ engine.DrawEntities();
 engine.EndFrame();
 Check(engine.Pixel(13, 21) == new Color(255, 0, 0), $"DrawEntities {engine.Pixel(13, 21)}");
 
+// Scenes: a cut switches at the next frame, a push keeps the scene below
+Check(engine.GoScene(1, Transition.Cut) && engine.Scene == 0, "scene changes at the next frame");
+engine.Poll();
+Check(engine.Scene == 1 && engine.SceneEntered == 1, "GoScene");
+engine.PushScene(2, Transition.Wipe, 0.1f);
+Check(!engine.GoScene(3), "one change at a time");
+for (int i = 0; i < 10; i++) engine.Poll();
+Check(engine.Scene == 2 && engine.SceneDepth == 2 && !engine.SceneTransitioning, "PushScene");
+
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }

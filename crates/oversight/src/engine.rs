@@ -62,6 +62,8 @@ pub struct Engine {
     pub rng: Rng,
     /// Entities and their components
     pub world: World,
+    /// Which scene is on, and the transition between scenes
+    pub scenes: crate::scenes::Scenes,
     pub debug: DebugOverlay,
     pub hot_reload: HotReload,
     #[cfg(feature = "audio")]
@@ -119,6 +121,7 @@ impl Engine {
                 crate::components::register(&mut w);
                 w
             },
+            scenes: Default::default(),
             debug: DebugOverlay::default(),
             hot_reload: HotReload::default(),
             #[cfg(feature = "audio")]
@@ -230,6 +233,7 @@ impl Engine {
         #[cfg(feature = "audio")]
         self.audio.update();
         self.time.tick();
+        self.scenes.update(self.time.dt);
         self.hot_reload.reloaded = 0;
         if self.hot_reload.enabled {
             self.hot_reload.timer += self.time.dt;
@@ -656,6 +660,7 @@ impl Engine {
             mouse_world: self.mouse_world(),
             renderer: self.renderer_name(),
         };
+        self.scenes.draw(&mut self.renderer);
         self.debug.flush(&mut self.renderer, &stats);
         #[cfg(feature = "gpu")]
         if let Some(gpu) = self.gpu.as_mut() {

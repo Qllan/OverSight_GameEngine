@@ -148,6 +148,8 @@ public enum Ease
 }
 public enum Repeat { Once = 0, Loop = 1, PingPong = 2 }
 public enum Space { World = 0, Screen = 1 }
+
+public enum Transition { Cut = 0, Fade = 1, Wipe = 2 }
 public enum Orientation { Orthogonal = 0, Isometric = 1 }
 public enum MouseButton { Left = 0, Right = 1, Middle = 2 }
 /// <summary>Gamepad buttons by position: South is A on Xbox, Cross on PlayStation</summary>

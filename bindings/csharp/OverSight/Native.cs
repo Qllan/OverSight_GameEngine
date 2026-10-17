@@ -75,6 +75,15 @@ internal static class Native
     [DllImport(Lib)] internal static extern nuint ov_snapshot(IntPtr e, byte[]? buf, nuint capacity);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_restore(IntPtr e, byte[] data, nuint size);
     [DllImport(Lib)] internal static extern ulong ov_state_hash(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_scene_go(IntPtr e, uint scene, int transition, float seconds, Color color);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_scene_push(IntPtr e, uint scene, int transition, float seconds, Color color);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_scene_pop(IntPtr e, int transition, float seconds, Color color);
+    [DllImport(Lib)] internal static extern uint ov_scene(IntPtr e);
+    [DllImport(Lib)] internal static extern uint ov_scene_entered(IntPtr e);
+    [DllImport(Lib)] internal static extern uint ov_scene_left(IntPtr e);
+    [DllImport(Lib)] internal static extern uint ov_scene_depth(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_scene_transitioning(IntPtr e);
+    [DllImport(Lib)] internal static extern float ov_scene_cover(IntPtr e);
     [DllImport(Lib)] internal static extern uint ov_load_texture(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
     [DllImport(Lib)] internal static extern uint ov_texture_from_rgba(IntPtr e, uint width, uint height, byte[] rgba);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool ov_texture_size(IntPtr e, uint texture, out uint w, out uint h);
