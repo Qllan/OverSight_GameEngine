@@ -137,6 +137,15 @@ int main() {
     engine.clear_world();
     CHECK(engine.entity_count() == 0 && !engine.alive(a));
 
+    // Built-in components: the engine moves them
+    CHECK(engine.component<ov::Transform>() == OV_TRANSFORM && engine.component<ov::Body>() == OV_BODY);
+    ov::Entity mover = engine.spawn();
+    engine.set(mover, ov::Transform{{10, 20}});
+    engine.set(mover, ov::Velocity{{4, 0}, 1});
+    engine.update_motion(0.5f);
+    CHECK(engine.get<ov::Transform>(mover)->pos.x == 12 && engine.get<ov::Transform>(mover)->scale.x == 1);
+    CHECK(engine.get<ov::Transform>(mover)->rotation == 0.5f);
+
     std::printf("smoke_cpp: ok\n");
     return 0;
 }

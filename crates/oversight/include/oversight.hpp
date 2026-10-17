@@ -93,6 +93,32 @@ using Contacts = OvContacts;
 using MoveResult = OvMoveResult;
 using RayHit = OvRayHit;
 
+// Built-in components: the engine moves (update_motion) and draws
+// (draw_entities) entities that have them
+struct Transform : OvTransform {
+    constexpr Transform() : OvTransform{{0, 0}, 0, {1, 1}} {}
+    constexpr Transform(Vec2 pos, float rotation = 0, Vec2 scale = {1, 1}) : OvTransform{pos, rotation, scale} {}
+};
+struct Velocity : OvVelocity {
+    constexpr Velocity() : OvVelocity{{0, 0}, 0} {}
+    constexpr Velocity(Vec2 linear, float angular = 0) : OvVelocity{linear, angular} {}
+};
+struct SpriteRenderer : OvSpriteRenderer {
+    constexpr SpriteRenderer() : OvSpriteRenderer{0, {0, 0, 0, 0}, {0, 0}, {255, 255, 255, 255}, 0, 0, 0, 0, 0} {}
+};
+struct Body : OvBody {
+    constexpr Body() : OvBody{{0, 0, 0, 0}, 0, {false, false, false, false}} {}
+    constexpr Body(Rect bounds, uint32_t tilemap = 0) : OvBody{bounds, tilemap, {false, false, false, false}} {}
+};
+template <>
+struct ComponentName<Transform> { static constexpr const char *value = "Transform"; };
+template <>
+struct ComponentName<Velocity> { static constexpr const char *value = "Velocity"; };
+template <>
+struct ComponentName<SpriteRenderer> { static constexpr const char *value = "SpriteRenderer"; };
+template <>
+struct ComponentName<Body> { static constexpr const char *value = "Body"; };
+
 enum class Space : int32_t { World = OV_SPACE_WORLD, Screen = OV_SPACE_SCREEN };
 enum class Orientation : int32_t { Orthogonal = OV_ORTHOGONAL, Isometric = OV_ISOMETRIC };
 enum class Mouse : int32_t { Left = OV_MOUSE_LEFT, Right = OV_MOUSE_RIGHT, Middle = OV_MOUSE_MIDDLE };
@@ -651,6 +677,11 @@ public:
         for (Entity en : query<Ts...>()) each_one<Ts...>(f, en, ids, std::index_sequence_for<Ts...>{});
     }
     void clear_world() { ov_world_clear(e_); }
+    /// Move entities with Transform + Velocity by dt; with a Body on a tile
+    /// map they slide along walls
+    void update_motion(float dt) { ov_update_motion(e_, dt); }
+    /// Draw every entity with Transform + SpriteRenderer
+    void draw_entities() { ov_draw_entities(e_); }
     /// Entities, components, random generator and tick counter as bytes
     std::vector<uint8_t> snapshot() const {
         std::vector<uint8_t> bytes(ov_snapshot(e_, nullptr, 0));

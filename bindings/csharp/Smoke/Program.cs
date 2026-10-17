@@ -115,6 +115,23 @@ var n = engine.Spawn();
 engine.Set(n, new Named { D = 1.5, B = 2 }); // 16 bytes aligned to 8
 Check(engine.Get<Named>(n).D == 1.5 && engine.Get<Named>(n).B == 2, "named component");
 
+// Built-in components: the engine moves and draws them
+engine.Debug = false;
+Check(engine.Component<Transform>() == 1 && Marshal.SizeOf<SpriteRenderer>() == 40 && Marshal.SizeOf<Body>() == 24, "built-in ids and layouts");
+using var red = engine.TextureFromRgba(1, 1, new byte[] { 255, 0, 0, 255 });
+var mover = engine.Spawn();
+engine.Set(mover, new Transform(new Vec2(10, 20)) { Scale = new Vec2(3, 3) });
+engine.Set(mover, new Velocity(new Vec2(4, 0), 1));
+engine.Set(mover, new SpriteRenderer(red) { Layer = 20 });
+engine.UpdateMotion(0.5f);
+Check(engine.Get<Transform>(mover).Pos.X == 12 && engine.Get<Transform>(mover).Rotation == 0.5f, "UpdateMotion");
+engine.Get<Transform>(mover).Rotation = 0;
+engine.BeginFrame(Color.Black);
+engine.Space = Space.Screen;
+engine.DrawEntities();
+engine.EndFrame();
+Check(engine.Pixel(13, 21) == new Color(255, 0, 0), $"DrawEntities {engine.Pixel(13, 21)}");
+
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }

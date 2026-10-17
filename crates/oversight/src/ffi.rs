@@ -349,6 +349,12 @@ pub unsafe extern "C" fn ov_set(
         Some(s) => s.size as usize,
         None => return false,
     };
+    if data.is_null() {
+        // Built-ins get their defaults (scale 1, white tint), others zeroes
+        if let Some(d) = crate::components::default_bytes(component) {
+            return world.set(entity, component, &d);
+        }
+    }
     let bytes = if data.is_null() || size == 0 {
         &[][..]
     } else {
@@ -427,6 +433,16 @@ pub unsafe extern "C" fn ov_restore(e: *mut OvEngine, data: *const u8, size: usi
 #[no_mangle]
 pub extern "C" fn ov_state_hash(e: *mut OvEngine) -> u64 {
     engine!(e, 0).state_hash()
+}
+
+#[no_mangle]
+pub extern "C" fn ov_update_motion(e: *mut OvEngine, dt: f32) {
+    engine!(e).update_motion(dt);
+}
+
+#[no_mangle]
+pub extern "C" fn ov_draw_entities(e: *mut OvEngine) {
+    engine!(e).draw_entities();
 }
 
 #[no_mangle]
@@ -1824,6 +1840,79 @@ mod tests {
             ov_inject_gamepad_connected(e, 2, false);
             ov_poll(e);
             assert!(ov_gamepad_released(e, 2, 0) && ov_gamepad_axis(e, 2, 0) == 0.0);
+            ov_engine_destroy(e);
+        }
+    }
+
+    #[test]
+    fn built_in_components_move_and_draw() {
+        use crate::components::*;
+        let e = headless(32, 32);
+        unsafe {
+            let white = ov_texture_from_rgba(e, 8, 8, [255u8; 256].as_ptr());
+            let map = ov_create_tilemap(e, 0, 4, 4, 8, 8, 1);
+            ov_tilemap_add_tileset(e, map, 1, white, ov_sheet_grid(8, 8, 8, 8, 0, 0));
+            ov_tilemap_set_tile_flag(e, map, 1, c"solid".as_ptr(), true);
+            for x in 0..4 {
+                ov_tilemap_set_tile(e, map, 0, x, 3, 1);
+            }
+            // A falling box with a body on the map, and a free spinner
+            let faller = ov_spawn(e);
+            let t = Transform {
+                pos: Vec2::new(8.0, 4.0),
+                ..Transform::default()
+            };
+            ov_set(e, faller, TRANSFORM, &t as *const _ as *const c_void);
+            let v = Velocity {
+                linear: Vec2::new(0.0, 100.0),
+                angular: 0.0,
+            };
+            ov_set(e, faller, VELOCITY, &v as *const _ as *const c_void);
+            let b = Body {
+                bounds: Rect::new(-2.0, -4.0, 4.0, 4.0),
+                tilemap: map,
+                ..Body::default()
+            };
+            ov_set(e, faller, BODY, &b as *const _ as *const c_void);
+            let spinner = ov_spawn(e);
+            ov_set(e, spinner, TRANSFORM, std::ptr::null());
+            let spin = Velocity {
+                linear: Vec2::new(10.0, 0.0),
+                angular: 1.0,
+            };
+            ov_set(e, spinner, VELOCITY, &spin as *const _ as *const c_void);
+            for _ in 0..30 {
+                ov_update_motion(e, 1.0 / 60.0);
+            }
+            let t = *(ov_get(e, faller, TRANSFORM) as *const Transform);
+            let v = *(ov_get(e, faller, VELOCITY) as *const Velocity);
+            let b = *(ov_get(e, faller, BODY) as *const Body);
+            assert_eq!(t.pos.y, 24.0, "stands on the floor row");
+            assert!(b.contacts.ground && v.linear.y == 0.0);
+            let s = *(ov_get(e, spinner, TRANSFORM) as *const Transform);
+            assert_eq!(s.scale, Vec2::new(1.0, 1.0), "NULL data gives the defaults");
+            assert!((s.pos.x - 5.0).abs() < 1e-4 && (s.rotation - 0.5).abs() < 1e-4);
+
+            // Sprites of entities draw at their transform
+            let red = ov_texture_from_rgba(e, 1, 1, [255, 0, 0, 255].as_ptr());
+            let dot = ov_spawn(e);
+            let t = Transform {
+                pos: Vec2::new(20.0, 2.0),
+                scale: Vec2::new(4.0, 4.0),
+                ..Transform::default()
+            };
+            ov_set(e, dot, TRANSFORM, &t as *const _ as *const c_void);
+            let r = SpriteRenderer {
+                texture: red,
+                ..SpriteRenderer::default()
+            };
+            ov_set(e, dot, SPRITE_RENDERER, &r as *const _ as *const c_void);
+            ov_begin_frame(e, Color::BLACK);
+            ov_set_space(e, 1);
+            ov_draw_entities(e);
+            ov_end_frame(e);
+            assert_eq!(ov_pixel(e, 21, 3), Color::rgba(255, 0, 0, 255));
+            assert_eq!(ov_pixel(e, 19, 3), Color::BLACK);
             ov_engine_destroy(e);
         }
     }

@@ -106,6 +106,12 @@ public sealed partial class Engine
     /// <summary>Despawn everything; component types stay</summary>
     public void ClearWorld() => Native.ov_world_clear(Handle);
 
+    /// <summary>Move entities with Transform and Velocity by dt (TickDt in
+    /// fixed ticks); with a Body on a tile map they slide along walls</summary>
+    public void UpdateMotion(float dt) => Native.ov_update_motion(Handle, dt);
+    /// <summary>Draw every entity with Transform and SpriteRenderer</summary>
+    public void DrawEntities() => Native.ov_draw_entities(Handle);
+
     /// <summary>Entities, components, random generator and tick counter as
     /// bytes: save them, or Restore them to continue exactly from here</summary>
     public byte[] Snapshot()

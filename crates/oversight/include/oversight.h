@@ -334,7 +334,7 @@ OvEntity ov_spawn(OvEngine *e);
 bool ov_despawn(OvEngine *e, OvEntity entity); /* removes its components too */
 bool ov_alive(OvEngine *e, OvEntity entity);
 uint32_t ov_entity_count(OvEngine *e);
-bool ov_set(OvEngine *e, OvEntity entity, uint32_t component, const void *data); /* NULL data: zeroed */
+bool ov_set(OvEngine *e, OvEntity entity, uint32_t component, const void *data); /* NULL data: zeroed (built-ins: defaults) */
 void *ov_get(OvEngine *e, OvEntity entity, uint32_t component); /* NULL when it has none */
 bool ov_has(OvEngine *e, OvEntity entity, uint32_t component);
 bool ov_remove(OvEngine *e, OvEntity entity, uint32_t component);
@@ -342,6 +342,46 @@ bool ov_remove(OvEngine *e, OvEntity entity, uint32_t component);
  * to `capacity` of them into `out` and returns how many there are. */
 uint32_t ov_query(OvEngine *e, const uint32_t *components, uint32_t count, OvEntity *out, uint32_t capacity);
 void ov_world_clear(OvEngine *e); /* despawn everything; component types stay */
+
+/* Built-in components: every engine registers them first, so these ids
+ * are fixed. ov_update_motion moves entities with a Transform and a
+ * Velocity; with a Body on a tile map they slide along walls instead.
+ * ov_draw_entities draws every Transform + SpriteRenderer. ov_set with
+ * NULL data gives them their defaults (scale 1, white tint). */
+#define OV_TRANSFORM 1
+#define OV_VELOCITY 2
+#define OV_SPRITE_RENDERER 3
+#define OV_BODY 4
+
+typedef struct OvTransform {
+    OvVec2 pos;
+    float rotation; /* radians, clockwise */
+    OvVec2 scale;   /* default {1, 1} */
+} OvTransform;
+
+typedef struct OvVelocity {
+    OvVec2 linear; /* units per second */
+    float angular; /* radians per second */
+} OvVelocity;
+
+typedef struct OvSpriteRenderer {
+    uint32_t texture;
+    OvRect src;    /* texture region; zero size: the whole texture */
+    OvVec2 origin; /* point placed at the position, rotated around */
+    OvColor tint;  /* default white */
+    int32_t layer;
+    uint8_t flip_x, flip_y, hidden;
+    uint8_t y_sort; /* order within the layer by y */
+} OvSpriteRenderer;
+
+typedef struct OvBody {
+    OvRect bounds;    /* relative to the position */
+    uint32_t tilemap; /* 0: moves freely */
+    OvContacts contacts; /* what it stopped at or rests against */
+} OvBody;
+
+void ov_update_motion(OvEngine *e, float dt); /* dt: ov_tick_dt in fixed ticks */
+void ov_draw_entities(OvEngine *e);
 
 /* Snapshots: the entities and components, the random generator and the
  * tick counter as bytes. Restoring one continues the game exactly from

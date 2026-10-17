@@ -114,7 +114,11 @@ impl Engine {
             input: Input::default(),
             time: Time::new(Some(1.0 / 60.0)),
             rng: Rng::default(),
-            world: World::new(),
+            world: {
+                let mut w = World::new();
+                crate::components::register(&mut w);
+                w
+            },
             debug: DebugOverlay::default(),
             hot_reload: HotReload::default(),
             #[cfg(feature = "audio")]
@@ -272,6 +276,88 @@ impl Engine {
         self.snapshot().iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
             (h ^ b as u64).wrapping_mul(0x0100_0000_01b3)
         })
+    }
+
+    /// Move every entity with a Transform and a Velocity by dt (a tick's
+    /// dt for fixed ticks). With a Body on a tile map it slides along the
+    /// walls, its contacts are updated, and the velocity stops on the
+    /// blocked axis (no speed builds up while standing on the floor).
+    pub fn update_motion(&mut self, dt: f32) {
+        use crate::components::{
+            read, write, Body, Transform, Velocity, BODY, TRANSFORM, VELOCITY,
+        };
+        for ent in self.world.query(&[TRANSFORM, VELOCITY]) {
+            let (Some(mut t), Some(mut v)) = (
+                read::<Transform>(&self.world, ent, TRANSFORM),
+                read::<Velocity>(&self.world, ent, VELOCITY),
+            ) else {
+                continue;
+            };
+            let delta = Vec2::new(v.linear.x * dt, v.linear.y * dt);
+            match read::<Body>(&self.world, ent, BODY) {
+                Some(mut body) if body.tilemap != 0 => {
+                    let b = body.bounds;
+                    let start = Rect::new(t.pos.x + b.x, t.pos.y + b.y, b.w, b.h);
+                    let moved = self.move_box(body.tilemap, start, delta);
+                    t.pos = Vec2::new(moved.rect.x - b.x, moved.rect.y - b.y);
+                    // Only a real stop zeroes the velocity, but a resting body
+                    // does not move, so its contacts also count what the
+                    // final box touches
+                    let stop = moved.contacts;
+                    let mut c = stop;
+                    if let Some(m) = self.tilemaps.get(body.tilemap) {
+                        let near = collision::touching(m, moved.rect);
+                        c.ground |= near.ground;
+                        c.ceiling |= near.ceiling;
+                        c.wall_left |= near.wall_left;
+                        c.wall_right |= near.wall_right;
+                    }
+                    if (stop.ground && v.linear.y > 0.0) || (stop.ceiling && v.linear.y < 0.0) {
+                        v.linear.y = 0.0;
+                    }
+                    if (stop.wall_left && v.linear.x < 0.0) || (stop.wall_right && v.linear.x > 0.0)
+                    {
+                        v.linear.x = 0.0;
+                    }
+                    body.contacts = c;
+                    write(&mut self.world, ent, BODY, &body);
+                    write(&mut self.world, ent, VELOCITY, &v);
+                }
+                _ => t.pos = Vec2::new(t.pos.x + delta.x, t.pos.y + delta.y),
+            }
+            t.rotation += v.angular * dt;
+            write(&mut self.world, ent, TRANSFORM, &t);
+        }
+    }
+
+    /// Draw every entity with a Transform and a SpriteRenderer, in the
+    /// current space
+    pub fn draw_entities(&mut self) {
+        use crate::components::{read, SpriteRenderer, Transform, SPRITE_RENDERER, TRANSFORM};
+        for ent in self.world.query(&[SPRITE_RENDERER, TRANSFORM]) {
+            let (Some(t), Some(s)) = (
+                read::<Transform>(&self.world, ent, TRANSFORM),
+                read::<SpriteRenderer>(&self.world, ent, SPRITE_RENDERER),
+            ) else {
+                continue;
+            };
+            if s.hidden != 0 {
+                continue;
+            }
+            let sprite = Sprite {
+                src: s.src,
+                pos: t.pos,
+                origin: s.origin,
+                scale: t.scale,
+                rotation: t.rotation,
+                flip_x: s.flip_x != 0,
+                flip_y: s.flip_y != 0,
+                tint: s.tint,
+                layer: s.layer,
+                depth: if s.y_sort != 0 { t.pos.y } else { 0.0 },
+            };
+            self.draw_sprite(s.texture, &sprite);
+        }
     }
 
     /// Make the next `poll` return false

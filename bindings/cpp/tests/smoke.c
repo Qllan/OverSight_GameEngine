@@ -112,6 +112,17 @@ int main(void) {
     CHECK(ov_restore(e, snap, size) && ov_state_hash(e) == hash && ov_alive(e, ents[0]));
     CHECK(!ov_restore(e, snap, 3) && ov_alive(e, ents[0]));
 
+    /* Built-in components: fixed ids, moved by the engine */
+    CHECK(ov_component(e, "Velocity", sizeof(OvVelocity), _Alignof(OvVelocity)) == OV_VELOCITY);
+    CHECK(sizeof(OvSpriteRenderer) == 40 && sizeof(OvBody) == 24);
+    OvEntity mover = ov_spawn(e);
+    CHECK(ov_set(e, mover, OV_TRANSFORM, NULL)); /* defaults: scale 1 */
+    OvVelocity vel = {{4, 0}, 1};
+    ov_set(e, mover, OV_VELOCITY, &vel);
+    ov_update_motion(e, 0.5f);
+    OvTransform *tr = (OvTransform *)ov_get(e, mover, OV_TRANSFORM);
+    CHECK(tr->pos.x == 2 && tr->rotation == 0.5f && tr->scale.x == 1);
+
     ov_engine_destroy(e);
     printf("smoke_c: ok\n");
     return 0;

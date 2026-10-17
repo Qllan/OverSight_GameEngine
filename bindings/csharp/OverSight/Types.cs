@@ -285,3 +285,67 @@ public sealed class OverSightException : Exception
 {
     public OverSightException(string message) : base(message) { }
 }
+
+// Built-in components: Engine.UpdateMotion moves and Engine.DrawEntities
+// draws entities that have them. Create them with new (): default() has a
+// zero scale and a transparent tint.
+
+/// <summary>Where an entity is</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Transform
+{
+    public Vec2 Pos;
+    /// <summary>Radians, clockwise</summary>
+    public float Rotation;
+    public Vec2 Scale;
+
+    public Transform() { Scale = new Vec2(1, 1); }
+    public Transform(Vec2 pos, float rotation = 0) : this() { Pos = pos; Rotation = rotation; }
+}
+
+/// <summary>Units and radians per second</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Velocity
+{
+    public Vec2 Linear;
+    public float Angular;
+
+    public Velocity(Vec2 linear, float angular = 0) { Linear = linear; Angular = angular; }
+}
+
+/// <summary>A sprite drawn at the entity's transform</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct SpriteRenderer
+{
+    public uint Texture;
+    /// <summary>Texture region; zero size: the whole texture</summary>
+    public Rect Src;
+    /// <summary>Point placed at the position, rotated around</summary>
+    public Vec2 Origin;
+    public Color Tint;
+    public int Layer;
+    private byte flipX, flipY, hidden, ySort;
+
+    public SpriteRenderer() { Tint = Color.White; }
+    public SpriteRenderer(Texture texture) : this() { Texture = texture.Id; }
+
+    public bool FlipX { readonly get => flipX != 0; set => flipX = (byte)(value ? 1 : 0); }
+    public bool FlipY { readonly get => flipY != 0; set => flipY = (byte)(value ? 1 : 0); }
+    public bool Hidden { readonly get => hidden != 0; set => hidden = (byte)(value ? 1 : 0); }
+    /// <summary>Order within the layer by y (top-down games)</summary>
+    public bool YSort { readonly get => ySort != 0; set => ySort = (byte)(value ? 1 : 0); }
+}
+
+/// <summary>A box that collides with a tile map while the entity moves</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct Body
+{
+    /// <summary>Relative to the position</summary>
+    public Rect Bounds;
+    /// <summary>The map it collides with; 0: it moves freely</summary>
+    public uint Tilemap;
+    /// <summary>What it stopped at or rests against after the last move</summary>
+    public Contacts Contacts;
+
+    public Body(Rect bounds, Tilemap? map = null) { Bounds = bounds; Tilemap = map?.Id ?? 0; }
+}
