@@ -687,7 +687,7 @@ impl Editor {
                         Some(p) => p.camera,
                         None => play::game_camera(&mut view.engine),
                     };
-                    view.game_ui(ui, camera);
+                    view.game_ui(ui, camera, self.play.is_some());
                 }
                 (Center::Game, Err(e)) => {
                     ui.colored_label(ui.visuals().error_fg_color, e.as_str());

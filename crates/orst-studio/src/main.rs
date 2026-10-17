@@ -5,6 +5,7 @@
 mod app;
 mod console;
 mod editor;
+mod game_input;
 mod gizmo;
 mod history;
 mod inspector;

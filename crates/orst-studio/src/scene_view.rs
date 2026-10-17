@@ -120,8 +120,16 @@ impl SceneView {
     }
 
     /// The Game window: the world as the game sees it, through `camera`
-    pub fn game_ui(&mut self, ui: &mut egui::Ui, camera: Camera) {
-        let (rect, _, _) = self.canvas(ui, egui::Sense::hover());
+    /// The game through `camera`; `playing`: keys and the mouse go to it
+    pub fn game_ui(&mut self, ui: &mut egui::Ui, camera: Camera, playing: bool) {
+        let (rect, response, _) = self.canvas(ui, egui::Sense::click());
+        if response.clicked() {
+            // Away from a button, which Space would press
+            response.request_focus();
+        }
+        if playing {
+            crate::game_input::feed(ui, rect, &mut self.engine.input);
+        }
         self.engine.set_camera(camera);
         self.engine.begin_frame(Color::BLACK);
         self.engine.draw_entities();

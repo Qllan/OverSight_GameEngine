@@ -39,6 +39,8 @@ impl Play {
     ) -> Play {
         let before = engine.snapshot();
         engine.entity_emitters.clear();
+        engine.input.release_all();
+        engine.input.next_frame();
         Play {
             before,
             history,
@@ -75,12 +77,15 @@ impl Play {
             }
         }
         for _ in 0..n {
+            engine.actions.update(&engine.input);
             engine.set_camera(self.camera);
             if let Some(s) = scripts.as_deref_mut() {
                 s.tick(TICK);
             }
             engine.step(TICK);
             engine.time.tick_count += 1;
+            // Presses and releases count for one tick
+            engine.input.next_frame();
             self.camera = engine.camera();
             self.ticks += 1;
         }
@@ -98,6 +103,8 @@ impl Play {
     pub fn stop(self, engine: &mut Engine) -> (Result<(), String>, History, bool, Option<Entity>) {
         let restored = engine.restore(&self.before);
         engine.entity_emitters.clear();
+        engine.input.release_all();
+        engine.input.next_frame();
         let selected = self.selected.filter(|&e| engine.world.alive(e));
         (restored, self.history, self.dirty, selected)
     }
