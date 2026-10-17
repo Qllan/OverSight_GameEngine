@@ -20,6 +20,7 @@ use crate::input::{Input, Key, MouseButton};
 use crate::render::{DrawKind, Renderer, Shape};
 use crate::text::{Font, DEFAULT_FONT};
 use crate::texture::{Store, Texture};
+use crate::tilemap::{LayerDraw, Tilemap};
 use crate::time::Time;
 use crate::types::{Color, Rect, Space, Sprite, Vec2};
 #[cfg(feature = "window")]
@@ -40,6 +41,7 @@ pub struct Engine {
     pub renderer: Renderer,
     pub textures: Store<Texture>,
     pub fonts: Store<Font>,
+    pub tilemaps: Store<Tilemap>,
     pub state: DrawState,
     pub input: Input,
     pub time: Time,
@@ -70,6 +72,7 @@ impl Engine {
             renderer: Renderer::new(width, height)?,
             textures: Store::default(),
             fonts,
+            tilemaps: Store::default(),
             state: DrawState::default(),
             input: Input::default(),
             time: Time::new(Some(1.0 / 60.0)),
@@ -226,6 +229,24 @@ impl Engine {
             .map_or(Vec2::default(), |f| f.measure(text, size))
     }
 
+    /// Keep a map in the engine (the C API refers to maps by id)
+    pub fn add_tilemap(&mut self, map: Tilemap) -> u32 {
+        self.tilemaps.insert(map)
+    }
+
+    pub fn tilemap(&self, map: u32) -> Option<&Tilemap> {
+        self.tilemaps.get(map)
+    }
+
+    pub fn tilemap_mut(&mut self, map: u32) -> Option<&mut Tilemap> {
+        self.tilemaps.get_mut(map)
+    }
+
+    /// Frees the map only; its tileset textures stay loaded
+    pub fn free_tilemap(&mut self, map: u32) {
+        self.tilemaps.remove(map);
+    }
+
     // --- camera and draw state ------------------------------------------
 
     pub fn camera(&self) -> Camera {
@@ -313,6 +334,26 @@ impl Engine {
             ..*sprite
         };
         self.draw_sprite(texture, &sprite);
+    }
+
+    /// Visible tiles of one layer of a stored map
+    pub fn draw_tilemap_layer(&mut self, map: u32, layer: usize, opts: &LayerDraw) {
+        if let Some(map) = self.tilemaps.get(map) {
+            map.draw_layer(&mut self.renderer, layer, opts);
+        }
+    }
+
+    /// Every tile layer of a stored map, layer i on draw layer `base + i`
+    pub fn draw_tilemap(&mut self, map: u32, base: i32) {
+        if let Some(map) = self.tilemaps.get(map) {
+            for i in 0..map.layers.len() {
+                let opts = LayerDraw {
+                    layer: base + i as i32,
+                    ..LayerDraw::default()
+                };
+                map.draw_layer(&mut self.renderer, i, &opts);
+            }
+        }
     }
 
     fn shape(&mut self, shape: Shape, color: Color) {

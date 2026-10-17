@@ -1,6 +1,6 @@
 //! Camera: which part of the world is on screen.
 
-use crate::types::Vec2;
+use crate::types::{Rect, Vec2};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -47,6 +47,25 @@ impl Camera {
         inverse.map_point(&mut pt);
         Vec2::new(pt.x, pt.y)
     }
+
+    /// World rectangle that covers the whole screen (larger than the
+    /// screen itself when the camera is rotated)
+    pub fn visible_world(&self, size: (u32, u32)) -> Rect {
+        let (w, h) = (size.0 as f32, size.1 as f32);
+        let corners = [(0.0, 0.0), (w, 0.0), (0.0, h), (w, h)]
+            .map(|(x, y)| self.screen_to_world(Vec2::new(x, y), size));
+        let min_x = corners.iter().map(|p| p.x).fold(f32::INFINITY, f32::min);
+        let max_x = corners
+            .iter()
+            .map(|p| p.x)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let min_y = corners.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        let max_y = corners
+            .iter()
+            .map(|p| p.y)
+            .fold(f32::NEG_INFINITY, f32::max);
+        Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+    }
 }
 
 #[cfg(test)]
@@ -74,6 +93,10 @@ mod tests {
         assert_eq!(
             unrotated.world_to_screen(Vec2::new(110.0, 50.0), size),
             Vec2::new(180.0, 90.0)
+        );
+        assert_eq!(
+            unrotated.visible_world(size),
+            Rect::new(20.0, 5.0, 160.0, 90.0)
         );
     }
 }

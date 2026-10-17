@@ -13,6 +13,7 @@ pub mod input;
 pub mod render;
 pub mod text;
 pub mod texture;
+pub mod tilemap;
 pub mod time;
 pub mod types;
 #[cfg(feature = "window")]
@@ -22,6 +23,10 @@ pub use anim::{AnimMode, AnimPlayer, Animation, SpriteSheet};
 pub use camera::Camera;
 pub use engine::{Engine, InputEvent, DEFAULT_FONT_ID};
 pub use input::{Input, Key, MouseButton};
+pub use tilemap::{
+    LayerDraw, MapObject, ObjectLayer, Orientation, Properties, Property, TileLayer, Tilemap,
+    Tileset,
+};
 pub use time::Time;
 pub use types::{Color, Rect, Space, Sprite, Vec2};
 #[cfg(feature = "window")]
