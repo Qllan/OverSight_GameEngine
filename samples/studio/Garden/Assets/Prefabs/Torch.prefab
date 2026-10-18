@@ -1,0 +1,53 @@
+{
+  "orst_scene": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Torch",
+      "components": {
+        "Transform": {},
+        "SpriteRenderer": {
+          "texture": "art/torch.png",
+          "origin": [
+            4,
+            15
+          ],
+          "layer": 2
+        },
+        "ParticleEmitter": {
+          "emitting": true,
+          "rate": 30,
+          "max": 120,
+          "life_min": 0.3,
+          "life_max": 0.7,
+          "speed_min": 12,
+          "speed_max": 30,
+          "angle": -1.5708,
+          "spread": 0.5,
+          "gravity": [
+            0,
+            -20
+          ],
+          "size_start": 3,
+          "size_end": 0.5,
+          "color_start": "#ffc040ff",
+          "color_end": "#ff300000",
+          "area": [
+            2,
+            1
+          ],
+          "layer": 3
+        },
+        "Light": {
+          "offset": [
+            0,
+            -12
+          ],
+          "color": "#ff9a40ff",
+          "intensity": 1.2,
+          "radius": 110
+        }
+      }
+    }
+  ]
+}

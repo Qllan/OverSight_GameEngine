@@ -1,0 +1,34 @@
+{
+  "orst_scene": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Coin",
+      "components": {
+        "Transform": {},
+        "SpriteRenderer": {
+          "texture": "art/coin.png",
+          "origin": [
+            6,
+            6
+          ],
+          "layer": 1
+        },
+        "Collider": {
+          "kind": "Circle",
+          "radius": 6,
+          "trigger": true
+        },
+        "Coin": {
+          "Value": 1
+        },
+        "Light": {
+          "color": "#ffd760ff",
+          "intensity": 0.8,
+          "radius": 36,
+          "shadows": false
+        }
+      }
+    }
+  ]
+}

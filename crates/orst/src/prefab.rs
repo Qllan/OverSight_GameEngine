@@ -220,7 +220,7 @@ impl Engine {
 
 /// Whether two values from scene files mean the same: numbers equal as
 /// the f32 the fields hold (0.1 in a file is 0.10000000149 once saved),
-/// assets by uid when both have one
+/// assets by uid when both have one and by path when one has only that
 fn same(a: &Json, b: &Json) -> bool {
     match (a, b) {
         (Json::Number(x), Json::Number(y)) => match (x.as_i64(), y.as_i64()) {
@@ -229,6 +229,10 @@ fn same(a: &Json, b: &Json) -> bool {
         },
         (Json::Array(x), Json::Array(y)) => {
             x.len() == y.len() && x.iter().zip(y).all(|(x, y)| same(x, y))
+        }
+        // An asset by path alone and by uid and path
+        (Json::String(p), Json::Object(o)) | (Json::Object(o), Json::String(p)) => {
+            o.get("path").and_then(Json::as_str) == Some(p.as_str())
         }
         (Json::Object(x), Json::Object(y)) => match (x.get("uid"), y.get("uid")) {
             (Some(u), Some(v)) => u == v,

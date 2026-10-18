@@ -712,4 +712,79 @@ public class Mover : Behaviour
         assert!(engine.world.alive(coin), "Stop brings it back");
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// The level made of prefabs and tiles: walk right along the path to
+    /// the far coin; tiles stop the player
+    #[test]
+    fn the_garden_sample_plays() {
+        let _turn = DOTNET.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(host) = host() else { return };
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/studio/Garden");
+        let root = std::env::temp_dir().join(format!("orst-garden-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        copy_dir(&sample, &root);
+        let (mut project, _) = crate::project::Project::open(&root).unwrap();
+
+        let mut engine = OrstEngine::new(Engine::headless(320, 200).unwrap());
+        let mut scripts = Scripts::start(&host, &mut engine).unwrap();
+        let code = ScriptProject {
+            root: root.clone(),
+            language: Language::CSharp,
+            host,
+        };
+        let built = code.build();
+        assert!(
+            built.ok && built.messages.is_empty(),
+            "{:?}",
+            built.messages
+        );
+        assert_eq!(scripts.load(&code.library()), Ok(4));
+        let main = project.file.main_scene.clone().unwrap();
+        let text = std::fs::read_to_string(project.assets.file(&main)).unwrap();
+        let loaded = engine.load_scene(&text, &mut project.assets).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+
+        let world = &engine.world;
+        let instances = world.query(&[orst::components::PREFAB]);
+        assert_eq!(instances.len(), 12, "7 coins, 4 torches and a lamp");
+        let lamp = world.find_named("Lamp").unwrap();
+        assert!(!world.has(lamp, orst::components::PARTICLE_EMITTER));
+        assert!(world.has(lamp, orst::components::LIGHT));
+        let coin = world.component_id("Coin").unwrap();
+        let big = world.find_named("Big coin").unwrap();
+        assert_eq!(world.field(big, coin, "Value"), Some(Value::I32(5)));
+
+        // Saved again, the scene keeps instances as the prefab and their changes
+        let (again, warnings) = engine.save_scene(&loaded.entities, &project.assets);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let json: serde_json::Value = serde_json::from_str(&again).unwrap();
+        let first_coin = &json["entities"][3];
+        assert_eq!(
+            first_coin["components"].as_object().unwrap().len(),
+            1,
+            "{first_coin}"
+        );
+
+        let player = engine.world.find_named("Player").unwrap();
+        let history = crate::history::History::default();
+        let mut play = crate::play::Play::start(&mut engine, history, false, None);
+        scripts.begin_play();
+        engine.input.set_key(orst::input::Key::Right, true);
+        for _ in 0..300 {
+            play.advance(&mut engine, Some(&mut scripts), crate::play::TICK);
+        }
+        assert_eq!(engine.renderer.effects.len(), 1, "Lighting lit the game");
+        let log: Vec<String> = take_log().into_iter().map(|(_, t)| t).collect();
+        assert!(log.iter().any(|l| l == "Coins: 1/11"), "{log:?}");
+        let t: Transform = read(&engine.world, player, TRANSFORM).unwrap();
+        assert!(
+            (455.0..465.0).contains(&t.pos.x),
+            "stopped by the wall tiles: {:?}",
+            t.pos
+        );
+        scripts.end_play();
+        let (restored, ..) = play.stop(&mut engine);
+        restored.unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }
