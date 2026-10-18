@@ -122,6 +122,9 @@ int main(void) {
     OrstName name = {"Hero"};
     CHECK(sizeof(OrstName) == 64 && orst_set(e, ents[0], ORST_NAME, &name) && orst_find_named(e, "Hero") == ents[0]);
     CHECK(orst_find_named(e, "Nobody") == 0);
+    uint32_t hi = orst_intern(e, "hi");
+    char hbuf[8];
+    CHECK(hi != 0 && orst_intern(e, "hi") == hi && orst_string(e, hi, hbuf, sizeof hbuf) == 2 && strcmp(hbuf, "hi") == 0);
     {
         /* A step moves, animates and points the camera */
         OrstEntity cam = orst_spawn(e);

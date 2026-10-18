@@ -37,6 +37,9 @@ pub enum FieldType {
     /// A prefab (prefab.rs). Scene files name prefabs through `Assets`
     /// like textures; components cannot have fields of it.
     Prefab = 14,
+    /// Text of any length: a u32 id in `Engine::strings`, 0 for "". Scene
+    /// files write the text itself.
+    String = 15,
 }
 
 impl FieldType {
@@ -56,6 +59,7 @@ impl FieldType {
             11 => Polygon,
             12 => U8,
             13 => Text,
+            15 => String,
             _ => return None,
         })
     }
@@ -64,7 +68,7 @@ impl FieldType {
         use FieldType::*;
         match self {
             Bool | U8 => 1,
-            F32 | I32 | U32 | Color | Texture | Tilemap | Polygon | Prefab => 4,
+            F32 | I32 | U32 | Color | Texture | Tilemap | Polygon | Prefab | String => 4,
             Vec2 | Entity => 8,
             Rect => 16,
             Text => TEXT_BYTES as u32,
@@ -88,6 +92,7 @@ impl FieldType {
             U8 => "u8",
             Text => "text",
             Prefab => "prefab",
+            String => "string",
         }
     }
 }
@@ -180,7 +185,8 @@ impl Field {
             | FieldType::Texture
             | FieldType::Tilemap
             | FieldType::Polygon
-            | FieldType::Prefab => Value::U32(u()),
+            | FieldType::Prefab
+            | FieldType::String => Value::U32(u()),
             FieldType::Bool => Value::Bool(b[0] != 0),
             FieldType::U8 => Value::U32(b[0] as u32),
             FieldType::Vec2 => Value::Vec2(Vec2::new(f(0), f(4))),
@@ -200,11 +206,14 @@ impl Field {
         match (self.ty, value) {
             (FieldType::F32, _) if number.is_some() => put(&(number.unwrap() as f32).to_le_bytes()),
             (FieldType::I32, _) if number.is_some() => put(&(number.unwrap() as i32).to_le_bytes()),
-            (FieldType::U32 | FieldType::Texture | FieldType::Tilemap | FieldType::Polygon, _)
-                if number.is_some() =>
-            {
-                put(&(number.unwrap() as u32).to_le_bytes())
-            }
+            (
+                FieldType::U32
+                | FieldType::Texture
+                | FieldType::Tilemap
+                | FieldType::Polygon
+                | FieldType::String,
+                _,
+            ) if number.is_some() => put(&(number.unwrap() as u32).to_le_bytes()),
             (FieldType::U8, _) if number.is_some() => put(&[number.unwrap() as u8]),
             (FieldType::Bool, Value::Bool(v)) => put(&[v as u8]),
             (FieldType::Vec2, Value::Vec2(v)) => {
@@ -257,7 +266,8 @@ impl Field {
             | FieldType::Texture
             | FieldType::Tilemap
             | FieldType::Polygon
-            | FieldType::Prefab => match v.as_str() {
+            | FieldType::Prefab
+            | FieldType::String => match v.as_str() {
                 Some(name) => Value::U32(self.options.iter().position(|o| o == name)? as u32),
                 None => {
                     let n = u32::try_from(v.as_u64()?).ok()?;

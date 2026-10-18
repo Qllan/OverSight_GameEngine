@@ -36,6 +36,13 @@ inline std::string last_error() { return orst_last_error(); }
 
 using Entity = OrstEntity;
 
+/// A String field: the id of a text of any length (Engine::intern, Engine::text)
+struct Str {
+    uint32_t id = 0;
+    bool operator==(const Str &o) const { return id == o.id; }
+    bool operator!=(const Str &o) const { return id != o.id; }
+};
+
 /// The name a component type is registered under. Give each component a
 /// name with ORST_COMPONENT(Type) after its definition, at global scope; the
 /// C# binding uses the struct's name, so the same name works in both.
@@ -964,6 +971,14 @@ public:
     void clear_world() { orst_world_clear(e_); }
     /// The oldest entity with this Name; 0: none
     Entity find_named(const std::string &name) { return orst_find_named(e_, name.c_str()); }
+
+    /// Texts of String fields: the same text always gets the same Str
+    Str intern(const std::string &text) { return Str{orst_intern(e_, text.c_str())}; }
+    std::string text(Str s) const {
+        std::string out(orst_string(e_, s.id, nullptr, 0), '\0');
+        orst_string(e_, s.id, out.data(), out.size() + 1);
+        return out;
+    }
 
     /// What is inside T, for tools (see orst_set_fields):
     ///     engine.set_fields<Enemy>({{"speed", ORST_FIELD_F32, offsetof(Enemy, speed), 0, 0, 10}});

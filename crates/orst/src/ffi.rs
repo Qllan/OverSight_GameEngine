@@ -835,6 +835,30 @@ pub unsafe extern "C" fn orst_find_named(e: *mut OrstEngine, name: *const c_char
     engine!(e, 0).world.find_named(string(name)).unwrap_or(0)
 }
 
+/// The id of a text for String fields: the same text always gets the
+/// same id, "" is 0
+///
+/// # Safety
+/// `text` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_intern(e: *mut OrstEngine, text: *const c_char) -> u32 {
+    engine!(e, 0).strings.intern(string(text))
+}
+
+/// The text of a String field's id; returns its full length in bytes
+///
+/// # Safety
+/// `buf` is NULL or has room for `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn orst_string(
+    e: *mut OrstEngine,
+    id: u32,
+    buf: *mut c_char,
+    size: usize,
+) -> usize {
+    copy_out(engine!(e, 0).strings.get(id), buf, size)
+}
+
 #[repr(C)]
 pub struct OrstField {
     pub name: *const c_char,

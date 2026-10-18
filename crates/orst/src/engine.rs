@@ -69,6 +69,8 @@ pub struct Engine {
     pub shaders: Store<String>,
     /// Loaded prefabs, shared by their instances
     pub prefabs: Store<crate::prefab::Prefab>,
+    /// The texts of String fields
+    pub strings: crate::strings::Strings,
     /// Collider layers that cast shadows
     shadow_layers: u32,
     /// Maps whose solid cells cast shadows
@@ -143,6 +145,7 @@ impl Engine {
             polygons: Store::default(),
             shaders: Store::default(),
             prefabs: Store::default(),
+            strings: Default::default(),
             shadow_layers: 0,
             shadow_maps: Default::default(),
             state: DrawState::default(),

@@ -36,6 +36,8 @@ var path = map.FindPath(new Vec2(4, 52), new Vec2(60, 52), diagonal: false);
 Check(path.Length == 8 && path[^1].X == 60 && path[^1].Y == 52 && map.FindPath(new Vec2(4, 52), new Vec2(4, 60)).Length == 0, "FindPath");
 
 Check(Easing.Ease(Ease.QuadIn, 0.5f) == 0.25f, "ease");
+var hello = engine.Intern("Привет");
+Check(engine.Intern("Привет") == hello && engine.Text(hello) == "Привет" && engine.Text(Str.Empty) == "", "strings");
 var slide = new Vec2Tween(new Vec2(0, 0), new Vec2(10, 20), 1f, delay: 0.5f);
 Check(slide.Update(0.5f).X == 0f, "tween delay");
 var mid = slide.Update(0.5f);

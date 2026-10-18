@@ -1359,6 +1359,15 @@ impl Editor {
                 } => {
                     world.set_field(e, component, &field, value);
                 }
+                Action::SetText {
+                    component,
+                    field,
+                    text,
+                } => {
+                    let id = engine.strings.intern(&text);
+                    let value = orst::schema::Value::U32(id);
+                    engine.world.set_field(e, component, &field, value);
+                }
                 Action::SetAsset {
                     component,
                     field,

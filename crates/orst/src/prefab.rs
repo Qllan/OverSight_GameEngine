@@ -143,6 +143,7 @@ impl Engine {
                             Value::U32(0),
                         ) => Json::Null,
                         (_, Value::Entity(_)) => json!(0),
+                        (FieldType::String, _) => json!(""),
                         (_, v) => f.to_json(v),
                     },
                 };

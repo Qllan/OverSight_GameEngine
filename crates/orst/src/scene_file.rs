@@ -236,6 +236,7 @@ impl Engine {
                             }
                         }
                     }
+                    (FieldType::String, Value::U32(id)) => json!(self.strings.get(id)),
                     (_, Value::Entity(0)) => json!(0),
                     (_, Value::Entity(target)) => match ids.get(&target) {
                         Some(&id) => json!(id),
@@ -408,6 +409,10 @@ impl Engine {
                 Ok(Value::U32(0))
             }
             FieldType::Texture | FieldType::Tilemap => assets.load(self, f.ty, v).map(Value::U32),
+            FieldType::String => match v.as_str() {
+                Some(text) => Ok(Value::U32(self.strings.intern(text))),
+                None => Err("not a string".into()),
+            },
             FieldType::Polygon => {
                 let points: Option<Vec<Vec2>> = v.as_array().and_then(|a| {
                     a.iter()
@@ -647,6 +652,42 @@ mod tests {
             Some(Value::F32(2.5)),
             "game components too"
         );
+    }
+
+    #[test]
+    fn text_fields_keep_their_text() {
+        let (mut e, _, _) = engine();
+        let label = Field::new("label", FieldType::String, 0);
+        let sign = e.world.define("Sign", 4, 4, vec![label], &[0; 4]).unwrap();
+        let text = r#"{"orst_scene": 1, "entities": [
+            {"id": 1, "components": {"Sign": {"label": "Привет, мир"}}},
+            {"id": 2, "components": {"Sign": {}}}]}"#;
+        let mut files = Files::new(std::env::temp_dir());
+        let loaded = e.load_scene(text, &mut files).unwrap();
+        assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
+        let id = |e: &Engine, n: usize| match e.world.field(loaded.entities[n], sign, "label") {
+            Some(Value::U32(id)) => id,
+            v => panic!("{v:?}"),
+        };
+        assert_eq!(e.strings.get(id(&e, 0)), "Привет, мир");
+        assert_eq!(id(&e, 1), 0, "no text is the empty one");
+        let (saved, _) = e.save_scene(&loaded.entities, &files);
+        let mut again = engine().0;
+        again
+            .world
+            .define(
+                "Sign",
+                4,
+                4,
+                vec![Field::new("label", FieldType::String, 0)],
+                &[0; 4],
+            )
+            .unwrap();
+        let back = again.load_scene(&saved, &mut files).unwrap();
+        let Some(Value::U32(id)) = again.world.field(back.entities[0], sign, "label") else {
+            panic!()
+        };
+        assert_eq!(again.strings.get(id), "Привет, мир", "{saved}");
     }
 
     #[test]

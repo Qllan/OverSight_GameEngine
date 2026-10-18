@@ -72,8 +72,10 @@ constexpr uint32_t field_type() {
         return ORST_FIELD_RECT;
     } else if constexpr (std::is_same_v<V, Entity>) {
         return ORST_FIELD_ENTITY;
+    } else if constexpr (std::is_same_v<V, Str>) {
+        return ORST_FIELD_STRING;
     } else {
-        static_assert(sizeof(V) == 0, "fields are numbers, bool, Vec2, Color, Rect, Entity or enums");
+        static_assert(sizeof(V) == 0, "fields are numbers, bool, Vec2, Color, Rect, Entity, Str or enums");
         return 0;
     }
 }

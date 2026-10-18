@@ -25,6 +25,12 @@ pub enum Action {
         ty: FieldType,
         path: String,
     },
+    /// A string field typed in, interned by the editor
+    SetText {
+        component: u32,
+        field: String,
+        text: String,
+    },
     Add(u32),
     Remove(u32),
     /// Save the entity as a new prefab and make it an instance
@@ -43,6 +49,7 @@ pub type Overrides = HashSet<(String, String)>;
 enum Change {
     Value(Value),
     Asset(String),
+    Text(String),
 }
 
 /// The entity's name and components; `more` adds to the end of the list.
@@ -165,6 +172,11 @@ pub fn ui(
                                                 path,
                                             })
                                         }
+                                        Some(Change::Text(text)) => actions.push(Action::SetText {
+                                            component: id,
+                                            field: f.name.clone(),
+                                            text,
+                                        }),
                                         None => {}
                                     }
                                     ui.end_row();
@@ -210,6 +222,11 @@ fn field_ui(
             field_value_ui(ui, engine, f, value, entities)
         });
         return dropped.map(|path| Change::Asset(path.0.clone()));
+    }
+    if let (FieldType::String, Value::U32(id)) = (f.ty, value) {
+        let mut text = engine.strings.get(id).to_string();
+        let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY));
+        return r.changed().then_some(Change::Text(text));
     }
     field_value_ui(ui, engine, f, value, entities).map(Change::Value)
 }

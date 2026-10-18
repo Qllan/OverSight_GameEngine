@@ -44,6 +44,7 @@ pub mod scenes;
 pub mod schema;
 pub mod shapes;
 pub mod skeleton;
+pub mod strings;
 pub mod text;
 pub mod texture;
 pub mod tiled;

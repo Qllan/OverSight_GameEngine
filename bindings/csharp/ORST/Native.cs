@@ -80,6 +80,8 @@ internal static class Native
     [DllImport(Lib)] internal static extern uint orst_query(IntPtr e, uint[] components, uint count, [In, Out] ulong[]? @out, uint capacity);
     [DllImport(Lib)] internal static extern void orst_world_clear(IntPtr e);
     [DllImport(Lib)] internal static extern ulong orst_find_named(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+    [DllImport(Lib)] internal static extern uint orst_intern(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
+    [DllImport(Lib)] internal static extern nuint orst_string(IntPtr e, uint id, [In, Out] byte[]? buf, nuint size);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_set_fields(IntPtr e, uint component, NativeField[] fields, uint count);
     [DllImport(Lib)] internal static extern uint orst_define_component(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, uint size, uint align, NativeField[] fields, uint count, IntPtr defaults);
     [DllImport(Lib)] internal static extern uint orst_field_count(IntPtr e, uint component);

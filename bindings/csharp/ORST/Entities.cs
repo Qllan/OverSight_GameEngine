@@ -1,3 +1,4 @@
+using System.Text;
 using System.Runtime.CompilerServices;
 
 namespace ORST;
@@ -15,6 +16,21 @@ public readonly struct Entity : IEquatable<Entity>
     public static bool operator ==(Entity a, Entity b) => a.Id == b.Id;
     public static bool operator !=(Entity a, Entity b) => a.Id != b.Id;
     public override string ToString() => $"Entity({(uint)Id}v{Id >> 32})";
+}
+
+/// <summary>A string field: the id of a text the engine keeps.
+/// Engine.Intern gives one, Engine.Text reads it back; 0 is "".</summary>
+public readonly struct Str : IEquatable<Str>
+{
+    public readonly uint Id;
+    public Str(uint id) { Id = id; }
+    public static readonly Str Empty = default;
+    public bool Equals(Str o) => Id == o.Id;
+    public override bool Equals(object? o) => o is Str s && Equals(s);
+    public override int GetHashCode() => Id.GetHashCode();
+    public static bool operator ==(Str a, Str b) => a.Id == b.Id;
+    public static bool operator !=(Str a, Str b) => a.Id != b.Id;
+    public override string ToString() => $"Str({Id})";
 }
 
 /// <summary>Registers a component under another name than the struct's
@@ -75,6 +91,18 @@ public sealed partial class Engine
     public Entity Spawn() => new(Native.orst_spawn(Handle));
     /// <summary>The oldest entity with this Name; Entity.None when there is none</summary>
     public Entity FindNamed(string name) => new(Native.orst_find_named(Handle, name));
+
+    /// <summary>The id of `text` for string fields; the same text keeps its id</summary>
+    public Str Intern(string text) => new(Native.orst_intern(Handle, text));
+
+    /// <summary>The text of a string field</summary>
+    public string Text(Str s)
+    {
+        var n = Native.orst_string(Handle, s.Id, null, 0);
+        var buf = new byte[(int)n + 1];
+        Native.orst_string(Handle, s.Id, buf, (nuint)buf.Length);
+        return Encoding.UTF8.GetString(buf, 0, (int)n);
+    }
     public bool Despawn(Entity e) => Native.orst_despawn(Handle, e.Id);
     public bool Alive(Entity e) => Native.orst_alive(Handle, e.Id);
     public uint EntityCount => Native.orst_entity_count(Handle);

@@ -7,7 +7,7 @@ namespace ORST;
 public enum FieldType : uint
 {
     F32 = 1, I32 = 2, U32 = 3, Bool = 4, Vec2 = 5, Color = 6, Rect = 7, Entity = 8,
-    Texture = 9, Tilemap = 10, Polygon = 11, U8 = 12, Text = 13,
+    Texture = 9, Tilemap = 10, Polygon = 11, U8 = 12, Text = 13, String = 15,
 }
 
 [Flags]
@@ -112,6 +112,7 @@ public sealed partial class Engine
             : t == typeof(Color) ? FieldType.Color
             : t == typeof(Rect) ? FieldType.Rect
             : t == typeof(Entity) ? FieldType.Entity
+            : t == typeof(Str) ? FieldType.String
             : null;
         if (type is not { } ty) return null;
         var flags = (fi.GetCustomAttribute<AngleAttribute>() != null ? FieldFlags.Angle : 0)
@@ -135,6 +136,7 @@ public sealed partial class Engine
             : t == typeof(Vec2) ? new Vec2(F, F)
             : t == typeof(Color) ? new Color(1, 1, 1, 1)
             : t == typeof(Rect) ? new Rect(F, F, F, F)
+            : t == typeof(Str) ? new Str(0x01010101u)
             : new Entity(0x0101010101010101);
         if (fi.FieldType.IsEnum) probe = Enum.ToObject(fi.FieldType, probe);
         object boxed = default(T);

@@ -344,6 +344,11 @@ uint32_t orst_query(OrstEngine *e, const uint32_t *components, uint32_t count, O
 void orst_world_clear(OrstEngine *e); /* despawn everything; component types stay */
 OrstEntity orst_find_named(OrstEngine *e, const char *name); /* oldest with that OrstName; 0: none */
 
+/* Texts of ORST_FIELD_STRING fields: the same text always gets the same id,
+   "" is 0. orst_string returns the full length in bytes (without the NUL). */
+uint32_t orst_intern(OrstEngine *e, const char *text);
+size_t orst_string(OrstEngine *e, uint32_t id, char *buf, size_t size);
+
 /* What is inside a component, for tools: the editor's inspector shows a
  * widget per field, scene files store fields by name, undo changes one
  * field. Built-ins come described; a game's component works without it,
@@ -365,6 +370,7 @@ OrstEntity orst_find_named(OrstEngine *e, const char *name); /* oldest with that
 #define ORST_FIELD_POLYGON 11
 #define ORST_FIELD_U8 12
 #define ORST_FIELD_TEXT 13 /* char[64] of UTF-8, the rest zeros (OrstName) */
+#define ORST_FIELD_STRING 15 /* uint32_t id of a text of any length (orst_intern) */
 #define ORST_FIELD_ANGLE 1  /* flags: an f32 in radians, shown in degrees */
 #define ORST_FIELD_LAYERS 2 /* a u32 of layer bits */
 
