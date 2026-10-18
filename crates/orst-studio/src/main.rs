@@ -16,6 +16,7 @@ mod player;
 mod project;
 mod scene_view;
 mod scripts;
+mod tiles;
 
 pub(crate) use eframe::egui;
 

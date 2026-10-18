@@ -11,6 +11,7 @@ use crate::play::{self, Play};
 use crate::project::{Language, Project};
 use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
 use crate::scripts::{self, BuildResult, ScriptHost, ScriptProject, Scripts, Sources};
+use crate::tiles::{self, TilePaint};
 use orst::components::{
     read, write, Name, SpriteRenderer, TilemapRenderer, Transform, NAME, SPRITE_RENDERER,
     TILEMAP_RENDERER, TRANSFORM,
@@ -60,6 +61,10 @@ pub struct Editor {
     build_game: Option<(String, bool)>,
     /// A game being built, and whether to run it then
     exporting: Option<(mpsc::Receiver<Exported>, bool)>,
+    /// Tile painting on the selected map
+    pub tiles: TilePaint,
+    /// The New tilemap dialog
+    new_map: Option<NewMap>,
     want_close: bool,
     title: String,
     /// The game is running in the editor; Stop throws its changes away
@@ -79,6 +84,28 @@ pub struct ScriptState {
     /// A good build waits for Stop
     pending: bool,
     next_check: Option<Instant>,
+}
+
+/// What the New tilemap dialog asks for
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewMap {
+    /// Under Assets, without .tmj
+    pub name: String,
+    /// The tileset image, under Assets
+    pub image: String,
+    pub tile: [u32; 2],
+    pub size: [u32; 2],
+}
+
+impl Default for NewMap {
+    fn default() -> Self {
+        NewMap {
+            name: String::new(),
+            image: String::new(),
+            tile: [16, 16],
+            size: [40, 25],
+        }
+    }
 }
 
 /// A built game's exe, or what stopped the build
@@ -119,6 +146,8 @@ impl Editor {
             new_script: None,
             build_game: None,
             exporting: None,
+            tiles: TilePaint::default(),
+            new_map: None,
             want_close: false,
             title: String::new(),
             play: None,
@@ -365,6 +394,10 @@ impl Editor {
             std::fs::create_dir_all(dir).map_err(|e| format!("{path}: {e}"))?;
         }
         std::fs::write(&file, text).map_err(|e| format!("{path}: {e}"))?;
+        // Painted tiles go into their map files
+        if let Err(e) = self.tiles.save(engine) {
+            self.console.error(e);
+        }
         for w in warnings {
             self.console.warn(format!("{path}: {w}"));
         }
@@ -465,7 +498,7 @@ impl Editor {
     pub fn create_entity(&mut self) {
         let Ok(view) = &mut self.scene else { return };
         let engine = &mut view.engine;
-        self.history.record(&engine.world);
+        self.history.record(engine);
         self.history.close();
         let e = engine.world.spawn();
         let t = Transform {
@@ -480,7 +513,7 @@ impl Editor {
 
     pub fn delete_selected(&mut self) {
         if let (Ok(view), Some(e)) = (&mut self.scene, self.selected) {
-            self.history.record(&view.engine.world);
+            self.history.record(&view.engine);
             self.history.close();
             view.engine.world.despawn(e);
             self.dirty = true;
@@ -497,10 +530,10 @@ impl Editor {
             SceneEvent::Pick(e) => self.select(e),
             SceneEvent::Transform(e, t) => {
                 let Ok(view) = &mut self.scene else { return };
-                let world = &mut view.engine.world;
-                if read::<Transform>(world, e, TRANSFORM) != Some(t) {
-                    self.history.record(world);
-                    write(world, e, TRANSFORM, &t);
+                let engine = &mut view.engine;
+                if read::<Transform>(&engine.world, e, TRANSFORM) != Some(t) {
+                    self.history.record(engine);
+                    write(&mut engine.world, e, TRANSFORM, &t);
                     self.dirty = true;
                 }
             }
@@ -508,6 +541,21 @@ impl Editor {
                 if let Err(e) = self.drop_asset(&path, at) {
                     self.console.error(e);
                 }
+            }
+            SceneEvent::Paint(at) => {
+                let Ok(view) = &mut self.scene else { return };
+                let Some(map) = self.selected.and_then(|e| tiles::map_of(&view.engine, e)) else {
+                    return;
+                };
+                // The whole stroke is one undo step
+                self.history.record(&view.engine);
+                if self.tiles.stroke(&mut view.engine, map, at) {
+                    self.dirty = true;
+                }
+            }
+            SceneEvent::PaintEnd => {
+                self.tiles.end_stroke();
+                self.history.close();
             }
         }
     }
@@ -532,7 +580,7 @@ impl Editor {
                 .project
                 .assets
                 .load(engine, FieldType::Tilemap, &path.into())?;
-            self.history.record(&engine.world);
+            self.history.record(engine);
             self.history.close();
             let e = engine.world.spawn();
             write(&mut engine.world, e, NAME, &Name::new(name));
@@ -551,7 +599,7 @@ impl Editor {
             .assets
             .load(engine, FieldType::Texture, &path.into())?;
         let (w, h) = engine.texture_size(texture).unwrap_or((0, 0));
-        self.history.record(&engine.world);
+        self.history.record(engine);
         self.history.close();
         let e = engine.world.spawn();
         write(&mut engine.world, e, NAME, &Name::new(name));
@@ -574,12 +622,13 @@ impl Editor {
     /// Undo (or redo) the last change to the scene
     pub fn undo(&mut self, redo: bool) {
         let Ok(view) = &mut self.scene else { return };
-        let world = &mut view.engine.world;
+        let engine = &mut view.engine;
         let done = if redo {
-            self.history.redo(world)
+            self.history.redo(engine)
         } else {
-            self.history.undo(world)
+            self.history.undo(engine)
         };
+        let world = &engine.world;
         match done {
             Ok(changed) => self.dirty |= changed,
             Err(e) => self.console.error(format!("Undo failed: {e}")),
@@ -738,6 +787,20 @@ impl Editor {
             ui.separator();
             match (self.center, &mut self.scene) {
                 (Center::Scene, Ok(view)) => {
+                    let map = self
+                        .selected
+                        .filter(|_| self.play.is_none())
+                        .and_then(|e| tiles::map_of(&view.engine, e));
+                    if map.is_some() {
+                        let b = ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.is_none());
+                        if b && !ui.ctx().egui_wants_keyboard_input() {
+                            self.tiles.on = !self.tiles.on;
+                        }
+                    }
+                    view.painting = self.tiles.on && map.is_some();
+                    view.brush = map
+                        .zip(view.hover)
+                        .and_then(|(map, at)| tiles::cell_rect(&view.engine, map, at));
                     let events = view.ui(ui, self.selected);
                     for event in events {
                         self.scene_event(event);
@@ -946,6 +1009,64 @@ impl Editor {
                 None => {}
             }
         }
+        if let Some(mut m) = self.new_map.take() {
+            let mut keep = true;
+            let mut chosen = false;
+            let images: Vec<String> = self
+                .project
+                .assets
+                .paths()
+                .filter(|p| is_image(p))
+                .map(String::from)
+                .collect();
+            egui::Window::new("New tilemap")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    egui::Grid::new("new_map").num_columns(2).show(ui, |ui| {
+                        ui.label("Name");
+                        ui.text_edit_singleline(&mut m.name);
+                        ui.end_row();
+                        ui.label("Tileset image");
+                        egui::ComboBox::from_id_salt("tileset")
+                            .selected_text(&m.image)
+                            .show_ui(ui, |ui| {
+                                for p in &images {
+                                    ui.selectable_value(&mut m.image, p.clone(), p);
+                                }
+                            });
+                        ui.end_row();
+                        ui.label("Tile size");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut m.tile[0]).range(1..=1024));
+                            ui.add(egui::DragValue::new(&mut m.tile[1]).range(1..=1024));
+                        });
+                        ui.end_row();
+                        ui.label("Map size in tiles");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut m.size[0]).range(1..=1000));
+                            ui.add(egui::DragValue::new(&mut m.size[1]).range(1..=1000));
+                        });
+                        ui.end_row();
+                    });
+                    ui.horizontal(|ui| {
+                        chosen = ui.button("Create").clicked();
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            match chosen.then(|| self.create_map(&m)) {
+                Some(Ok(())) => {}
+                Some(Err(e)) => {
+                    self.console.error(e);
+                    self.new_map = Some(m);
+                }
+                None if keep => self.new_map = Some(m),
+                None => {}
+            }
+        }
         if let Some((mut dir, mut run)) = self.build_game.take() {
             let mut keep = true;
             let mut chosen = false;
@@ -1008,6 +1129,53 @@ impl Editor {
                 None => {}
             }
         }
+    }
+
+    /// A new map file from the dialog's answers, put into the scene and
+    /// selected with Paint on
+    pub fn create_map(&mut self, m: &NewMap) -> Result<(), String> {
+        let name = m.name.trim().trim_end_matches(".tmj").trim_matches('/');
+        if name.is_empty() {
+            return Err("the map needs a name".into());
+        }
+        let path = format!("{name}.tmj");
+        let file = self.project.assets.file(&path);
+        if file.exists() {
+            return Err(format!("{path} already exists"));
+        }
+        let Ok(view) = &mut self.scene else {
+            return Err("no scene view".into());
+        };
+        let texture = self
+            .project
+            .assets
+            .load(
+                &mut view.engine,
+                FieldType::Texture,
+                &m.image.as_str().into(),
+            )
+            .map_err(|e| format!("tileset image: {e}"))?;
+        let size = view.engine.texture_size(texture).unwrap_or((0, 0));
+        if size.0 < m.tile[0] || size.1 < m.tile[1] {
+            return Err(format!("{} is smaller than one tile", m.image));
+        }
+        // The image's path as the map file sees it
+        let depth = path.matches('/').count();
+        let image = format!("{}{}", "../".repeat(depth), m.image);
+        let text = orst::tiled::new_map(
+            m.size[0], m.size[1], m.tile[0], m.tile[1], &image, size, "Ground",
+        );
+        let io = |e: std::io::Error| format!("{path}: {e}");
+        std::fs::create_dir_all(file.parent().unwrap()).map_err(io)?;
+        std::fs::write(&file, text).map_err(io)?;
+        self.rescan();
+        self.drop_asset(&path, orst::Vec2::default())?;
+        self.tiles.on = true;
+        self.tiles.erase = false;
+        self.tiles.layer = 0;
+        self.tiles.tile = 1;
+        self.console.info(format!("Created {path}"));
+        Ok(())
     }
 
     /// Build the game into `out` in the background (File → Build game)
@@ -1129,12 +1297,20 @@ impl Editor {
             self.selected = None;
             return;
         }
-        let actions = inspector::ui(ui, &view.engine, e);
+        let (engine, tiles) = (&view.engine, &mut self.tiles);
+        let mut more = |ui: &mut egui::Ui| {
+            if let Some(map) = tiles::map_of(engine, e) {
+                ui.separator();
+                ui.strong("Tiles");
+                tiles.ui(ui, engine, map);
+            }
+        };
+        let actions = inspector::ui(ui, &view.engine, e, &mut more);
         if actions.is_empty() {
             return;
         }
         let engine = &mut view.engine;
-        self.history.record(&engine.world);
+        self.history.record(engine);
         self.dirty = true;
         for action in actions {
             let world = &mut engine.world;
@@ -1191,13 +1367,27 @@ impl Editor {
             Language::CSharp => "New C# script",
             Language::Cpp => "New C++ script",
         };
-        if ui
-            .small_button(new)
-            .on_hover_text("A Behaviour in Assets/Scripts")
-            .clicked()
-        {
-            self.new_script = Some("NewBehaviour".into());
-        }
+        ui.horizontal(|ui| {
+            if ui
+                .small_button(new)
+                .on_hover_text("A Behaviour in Assets/Scripts")
+                .clicked()
+            {
+                self.new_script = Some("NewBehaviour".into());
+            }
+            if ui
+                .small_button("New tilemap")
+                .on_hover_text("A Tiled map (.tmj) cut from an image, put into the scene")
+                .clicked()
+            {
+                let image = self.project.assets.paths().find(|p| is_image(p));
+                self.new_map = Some(NewMap {
+                    name: "Level".into(),
+                    image: image.unwrap_or_default().to_string(),
+                    ..NewMap::default()
+                });
+            }
+        });
         let tree = Tree::of(self.project.assets.paths());
         let mut opened = None;
         egui::ScrollArea::vertical()
@@ -1477,6 +1667,64 @@ mod tests {
         ed.save_scene("s.scene").unwrap();
         let text = std::fs::read_to_string(ed.project.assets.file("s.scene")).unwrap();
         assert!(text.contains("hero.png") && text.contains("uid"), "{text}");
+    }
+
+    #[test]
+    fn maps_made_and_painted_in_the_editor_save_to_their_files() {
+        let mut ed = editor("tilemap");
+        let png = ed.project.assets.file("art/tiles.png");
+        std::fs::create_dir_all(png.parent().unwrap()).unwrap();
+        image_png(&png, 32, 16, &[200u8; 32 * 16 * 4]);
+        ed.rescan();
+        let m = NewMap {
+            name: "levels/One".into(),
+            image: "art/tiles.png".into(),
+            tile: [16, 16],
+            size: [4, 3],
+        };
+        ed.create_map(&m).unwrap();
+        assert!(ed.create_map(&m).is_err(), "the file is there");
+        let e = ed.selected.unwrap();
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let map = tiles::map_of(engine, e).expect("the new entity draws the map");
+        assert_eq!(engine.tilemap(map).unwrap().tilesets[0].sheet.count, 2);
+        assert!(ed.tiles.on);
+
+        // A stroke over two cells, one undo step
+        ed.tiles.tile = 2;
+        for x in [5.0, 9.0, 21.0] {
+            ed.scene_event(SceneEvent::Paint(orst::Vec2::new(x, 20.0)));
+        }
+        ed.scene_event(SceneEvent::PaintEnd);
+        let tile = |ed: &Editor, x| {
+            let engine = &ed.scene.as_ref().unwrap().engine;
+            engine.tilemap(map).unwrap().layers[0].get(x, 1)
+        };
+        assert_eq!((tile(&ed, 0), tile(&ed, 1)), (2, 2));
+        assert!(ed.dirty);
+        ed.undo(false);
+        assert_eq!((tile(&ed, 0), tile(&ed, 1)), (0, 0));
+        ed.undo(true);
+
+        ed.save_scene("levels/One.scene").unwrap();
+        let file = ed.project.assets.file("levels/One.tmj");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("\"../art/tiles.png\""), "{text}");
+        let mut none = |_: &std::path::Path| Ok(1);
+        let saved = orst::tiled::parse(&text, file.parent().unwrap(), &mut none).unwrap();
+        assert_eq!(saved.layers[0].get(1, 1), 2);
+        assert!(ed
+            .tiles
+            .unsaved(&ed.scene.as_ref().unwrap().engine)
+            .is_empty());
+
+        // The scene opens again with its map
+        let (project, _) = Project::open(&ed.project.root).unwrap();
+        let ed = Editor::new(project, Console::default(), None);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let e = engine.world.find_named("One").unwrap();
+        let map = tiles::map_of(engine, e).unwrap();
+        assert_eq!(engine.tilemap(map).unwrap().layers[0].get(0, 1), 2);
     }
 
     fn image_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {

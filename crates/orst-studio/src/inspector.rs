@@ -33,7 +33,13 @@ enum Change {
     Asset(String),
 }
 
-pub fn ui(ui: &mut egui::Ui, engine: &Engine, e: Entity) -> Vec<Action> {
+/// The entity's name and components; `more` adds to the end of the list
+pub fn ui(
+    ui: &mut egui::Ui,
+    engine: &Engine,
+    e: Entity,
+    more: &mut dyn FnMut(&mut egui::Ui),
+) -> Vec<Action> {
     let world = &engine.world;
     let mut actions = Vec::new();
     let entities: Vec<(Entity, String)> = world
@@ -122,6 +128,7 @@ pub fn ui(ui: &mut egui::Ui, engine: &Engine, e: Entity) -> Vec<Action> {
                         }
                     });
             }
+            more(ui);
         });
     actions
 }

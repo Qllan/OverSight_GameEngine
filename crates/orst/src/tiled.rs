@@ -80,6 +80,123 @@ pub fn parse(
     Ok(out)
 }
 
+/// A new map file: one tileset cut from `image` (a path relative to the
+/// map) and one empty tile layer named `layer`
+#[allow(clippy::too_many_arguments)]
+pub fn new_map(
+    width: u32,
+    height: u32,
+    tile_w: u32,
+    tile_h: u32,
+    image: &str,
+    image_size: (u32, u32),
+    layer: &str,
+) -> String {
+    let columns = image_size.0 / tile_w.max(1);
+    let count = columns * (image_size.1 / tile_h.max(1));
+    let map = serde_json::json!({
+        "type": "map",
+        "version": "1.10",
+        "orientation": "orthogonal",
+        "renderorder": "right-down",
+        "infinite": false,
+        "width": width,
+        "height": height,
+        "tilewidth": tile_w,
+        "tileheight": tile_h,
+        "nextlayerid": 2,
+        "nextobjectid": 1,
+        "tilesets": [{
+            "firstgid": 1,
+            "name": Path::new(image).file_stem().map_or("tiles".into(), |s| s.to_string_lossy()),
+            "image": image,
+            "imagewidth": image_size.0,
+            "imageheight": image_size.1,
+            "tilewidth": tile_w,
+            "tileheight": tile_h,
+            "columns": columns,
+            "tilecount": count,
+            "margin": 0,
+            "spacing": 0,
+        }],
+        "layers": [{
+            "id": 1,
+            "type": "tilelayer",
+            "name": layer,
+            "x": 0,
+            "y": 0,
+            "width": width,
+            "height": height,
+            "opacity": 1,
+            "visible": true,
+            "data": vec![0u32; (width * height) as usize],
+        }],
+    });
+    with_tiles(&map.to_string(), &Tilemap::default()).expect("a map just made")
+}
+
+/// The map file `json` with the tiles of `map`'s tile layers put back in
+/// the order they were read (groups included); everything else in the
+/// file stays. Tile data is written as CSV-style rows, one per map row.
+pub fn with_tiles(json: &str, map: &Tilemap) -> Result<String, String> {
+    let mut value: Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+    let mut rows = Vec::new();
+    fn walk(layers: &mut Value, map: &Tilemap, rows: &mut Vec<String>) {
+        for layer in layers.as_array_mut().into_iter().flatten() {
+            match layer["type"].as_str() {
+                Some("tilelayer") => {
+                    let width = layer["width"].as_u64().unwrap_or(1).max(1) as usize;
+                    let tiles: Vec<u32> = match map.layers.get(rows.len()) {
+                        Some(l) => l.tiles.clone(),
+                        None => tile_data(layer).unwrap_or_default(),
+                    };
+                    let text = tiles
+                        .chunks(width)
+                        .map(|row| {
+                            let cells: Vec<String> = row.iter().map(|t| t.to_string()).collect();
+                            cells.join(", ")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",\n");
+                    if let Some(o) = layer.as_object_mut() {
+                        o.remove("encoding");
+                        o.remove("compression");
+                        o.insert(
+                            "data".into(),
+                            Value::String(format!("@tiles{}@", rows.len())),
+                        );
+                    }
+                    rows.push(text);
+                }
+                Some("group") => walk(&mut layer["layers"], map, rows),
+                _ => {}
+            }
+        }
+    }
+    walk(&mut value["layers"], map, &mut rows);
+    let mut text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    for (i, data) in rows.iter().enumerate() {
+        // The placeholder sits at some indent; the rows go one deeper
+        let key = format!("\"@tiles{i}@\"");
+        let Some(at) = text.find(&key) else { continue };
+        let line_start = text[..at].rfind('\n').map_or(0, |n| n + 1);
+        let indent: String = text[line_start..]
+            .chars()
+            .take_while(|c| *c == ' ')
+            .collect();
+        let inner = format!("{indent}  ");
+        let body = data.replace('\n', &format!("\n{inner}"));
+        let array = if data.is_empty() {
+            "[]".to_string()
+        } else {
+            format!("[\n{inner}{body}\n{indent}]")
+        };
+        text.replace_range(at..at + key.len(), &array);
+    }
+    text.push('\n');
+    Ok(text)
+}
+
 fn read(path: &Path) -> Result<String, String> {
     std::fs::read_to_string(path).map_err(|e| format!("{}: {}", path.display(), e))
 }
@@ -405,5 +522,44 @@ mod tests {
         assert!(parse(zlib, Path::new(""), &mut none)
             .unwrap_err()
             .contains("CSV"));
+    }
+
+    #[test]
+    fn maps_are_written_back_with_their_tiles() {
+        let mut textures = |_: &Path| Ok(7);
+        let text = new_map(3, 2, 16, 16, "art/tiles.png", (64, 32), "Ground");
+        let mut map = parse(&text, Path::new(""), &mut textures).unwrap();
+        assert_eq!((map.width, map.height, map.layers.len()), (3, 2, 1));
+        assert_eq!(map.tilesets[0].sheet.count, 8);
+        assert_eq!(map.layers[0].tiles, [0; 6]);
+        map.layers[0].set(2, 1, 5 | FLIP_H);
+        let again = with_tiles(&text, &map).unwrap();
+        assert!(
+            again.contains("\n        0, 0, 0,\n        0, 0, "),
+            "{again}"
+        );
+        let back = parse(&again, Path::new(""), &mut textures).unwrap();
+        assert_eq!(back.layers[0].get(2, 1), 5 | FLIP_H);
+
+        // A file from Tiled keeps what the editor does not touch, and its
+        // base64 layers become rows
+        let dir = std::env::temp_dir().join(format!("orst_tiled_save_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("props.tsj"), PROPS).unwrap();
+        let mut map = parse(MAP, &dir, &mut textures).unwrap();
+        let layers = map.layers.len();
+        map.layers[layers - 1].set(0, 0, 2);
+        let saved = with_tiles(MAP, &map).unwrap();
+        let back = parse(&saved, &dir, &mut textures).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(
+            saved.contains("props.tsj"),
+            "external tilesets stay external"
+        );
+        assert_eq!(back.layers.len(), layers);
+        assert_eq!(back.layers[layers - 1].get(0, 0), 2);
+        assert_eq!(back.object_layers.len(), map.object_layers.len());
+        assert_eq!(back.properties, map.properties);
+        assert!(!saved.contains("\"encoding\""));
     }
 }

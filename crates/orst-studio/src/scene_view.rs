@@ -33,6 +33,12 @@ pub struct SceneView {
     /// The entity being dragged, and how
     drag: Option<(Entity, Drag)>,
     shown: Shown,
+    /// Left drags paint tiles instead of selecting and moving
+    pub painting: bool,
+    /// The world point under the pointer, if it is over the view
+    pub hover: Option<Vec2>,
+    /// A rectangle to outline: the cell the brush would paint
+    pub brush: Option<orst::Rect>,
 }
 
 /// An asset path under Assets, dragged out of the Project window
@@ -47,6 +53,10 @@ pub enum SceneEvent {
     Transform(Entity, Transform),
     /// An asset was dropped at this world point
     Drop(String, Vec2),
+    /// Paint at this world point (every frame the button is held)
+    Paint(Vec2),
+    /// The paint stroke ended
+    PaintEnd,
 }
 
 /// How the canvas reaches egui
@@ -79,6 +89,9 @@ impl SceneView {
             camera: Camera::default(),
             drag: None,
             shown,
+            painting: false,
+            hover: None,
+            brush: None,
         };
         view.engine.set_camera(Camera::default());
         Ok(view)
@@ -175,13 +188,25 @@ impl SceneView {
             });
         }
 
-        if response.clicked() {
+        self.hover = response
+            .hover_pos()
+            .map(|p| self.engine.screen_to_world(to_canvas(p)));
+        let held = ui.input(|i| i.pointer.primary_down());
+        if self.painting {
+            if response.is_pointer_button_down_on() && held {
+                if let Some(p) = response.interact_pointer_pos() {
+                    events.push(SceneEvent::Paint(self.engine.screen_to_world(to_canvas(p))));
+                }
+            } else if ui.input(|i| i.pointer.primary_released()) {
+                events.push(SceneEvent::PaintEnd);
+            }
+        } else if response.clicked() {
             if let Some(p) = response.interact_pointer_pos() {
                 let world = self.engine.screen_to_world(to_canvas(p));
                 events.push(SceneEvent::Pick(pick(&self.engine, world)));
             }
         }
-        if response.drag_started_by(egui::PointerButton::Primary) {
+        if response.drag_started_by(egui::PointerButton::Primary) && !self.painting {
             let origin = ui.input(|i| i.pointer.press_origin());
             if let Some(origin) = origin {
                 self.drag = self.start_drag(to_canvas(origin), selected, &mut events);
@@ -207,7 +232,9 @@ impl SceneView {
         }
 
         let gizmo = selected.map(|_| (self.tool, self.drag.map(|(_, d)| d.handle)));
-        draw(&mut self.engine, selected, gizmo);
+        let gizmo = gizmo.filter(|_| !self.painting);
+        let brush = self.brush.filter(|_| self.painting);
+        draw(&mut self.engine, selected, gizmo, brush);
         self.present(ui, rect);
         events
     }
@@ -398,6 +425,7 @@ pub fn draw(
     engine: &mut Engine,
     selected: Option<Entity>,
     gizmo: Option<(Tool, Option<gizmo::Handle>)>,
+    brush: Option<orst::Rect>,
 ) {
     engine.begin_frame(BACKGROUND);
     let camera = engine.camera();
@@ -483,6 +511,17 @@ pub fn draw(
             gizmo::draw(engine, tool, &t, active);
         }
     }
+    if let Some(r) = brush {
+        let corners = [
+            Vec2::new(r.x, r.y),
+            Vec2::new(r.x + r.w, r.y),
+            Vec2::new(r.x + r.w, r.y + r.h),
+            Vec2::new(r.x, r.y + r.h),
+        ];
+        for i in 0..4 {
+            engine.draw_line(corners[i], corners[(i + 1) % 4], 2.0 * px, SELECTED);
+        }
+    }
     engine.set_layer(0);
     engine.end_frame();
 }
@@ -548,7 +587,7 @@ mod tests {
         write(&mut engine.world, back, TRANSFORM, &t);
         assert_eq!(pick(&engine, Vec2::new(-3.0, -9.0)), Some(back));
         assert_eq!(pick(&engine, Vec2::new(-8.0, 0.0)), None);
-        draw(&mut engine, Some(back), Some((Tool::Rotate, None)));
+        draw(&mut engine, Some(back), Some((Tool::Rotate, None)), None);
     }
 
     #[test]
