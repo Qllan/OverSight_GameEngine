@@ -135,6 +135,11 @@ pub struct Actions {
 }
 
 impl Actions {
+    /// How many actions there are; their ids are 1 to this
+    pub fn count(&self) -> u32 {
+        self.actions.len() as u32
+    }
+
     /// The id of an action (from 1), made on first use
     pub fn action(&mut self, name: &str) -> u32 {
         if let Some(id) = self.find(name) {

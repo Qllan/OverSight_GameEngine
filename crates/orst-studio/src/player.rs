@@ -92,6 +92,11 @@ impl Game {
         if let Some(dir) = orst::saves::user_dir(&file.name) {
             engine.set_save_dir(dir);
         }
+        let defaults = crate::input_edit::read(&assets);
+        if let Err(e) = engine.load_input(&defaults) {
+            let e = format!("{}: {e}", crate::input_edit::FILE);
+            crate::scripts::log(1, e.as_ptr(), e.len());
+        }
         for error in engine.locale.load_dir(&assets.file(LOCALE)) {
             crate::scripts::log(1, error.as_ptr(), error.len());
         }

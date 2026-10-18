@@ -9,6 +9,7 @@ mod export;
 mod game_input;
 mod gizmo;
 mod history;
+mod input_edit;
 mod inspector;
 mod native;
 mod play;

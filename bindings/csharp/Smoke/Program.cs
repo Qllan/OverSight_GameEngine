@@ -344,6 +344,13 @@ Check(engine.EntityCount == before && engine.Text(engine.Get<UiText>(engine.UiAt
 var noSave = false;
 try { engine.LoadGame("two"); } catch (OrstException) { noSave = true; }
 Check(noSave && engine.DeleteSave("one"), "save errors");
+engine.LoadInput("jump = key:Space\n");
+uint jumpAction = engine.Action("jump");
+engine.SetBinding(jumpAction, 0, Binding.Key(Key.W));
+engine.KeepInput();
+Check(engine.GetPref("input").Contains("key:W"), "KeepInput");
+engine.ResetInput();
+Check(engine.SaveBindings().Contains("jump = key:Space") && engine.GetPref("input", "none") == "none", "ResetInput");
 Directory.Delete(saves, true);
 
 Console.WriteLine("smoke_cs: ok");

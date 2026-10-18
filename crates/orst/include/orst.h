@@ -850,6 +850,12 @@ size_t orst_bindings_save(OrstEngine *e, char *buf, size_t size);
 /* Actions in the text get exactly its bindings, others keep theirs;
  * false + orst_last_error on a bad line, and nothing changes */
 bool orst_bindings_load(OrstEngine *e, const char *text);
+/* Controls players change: orst_load_input binds the game's defaults and
+ * then what the player kept (orst_keep_input, a preference); reset goes
+ * back to the defaults for good */
+bool orst_load_input(OrstEngine *e, const char *defaults);
+bool orst_keep_input(OrstEngine *e);
+bool orst_reset_input(OrstEngine *e);
 
 /* --- gamepads: up to 4, in slots 0..3 that a controller keeps until unplugged --- */
 bool orst_gamepad_connected(OrstEngine *e, int32_t gamepad);

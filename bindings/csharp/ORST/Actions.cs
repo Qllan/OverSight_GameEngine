@@ -70,4 +70,24 @@ public sealed partial class Engine
     {
         if (!Native.orst_bindings_load(Handle, text)) throw new OrstException(LastError);
     }
+
+    /// <summary>Bind the actions as the game's defaults say, then as the
+    /// player changed them (KeepInput). Studio games load Assets/Input.actions
+    /// this way before the scripts start.</summary>
+    public void LoadInput(string defaults)
+    {
+        if (!Native.orst_load_input(Handle, defaults)) throw new OrstException(LastError);
+    }
+
+    /// <summary>Keep the bindings as they are now for the next runs</summary>
+    public void KeepInput()
+    {
+        if (!Native.orst_keep_input(Handle)) throw new OrstException(LastError);
+    }
+
+    /// <summary>Back to the game's own bindings, now and in the next runs</summary>
+    public void ResetInput()
+    {
+        if (!Native.orst_reset_input(Handle)) throw new OrstException(LastError);
+    }
 }

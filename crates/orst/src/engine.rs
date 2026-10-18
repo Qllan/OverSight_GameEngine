@@ -81,6 +81,8 @@ pub struct Engine {
     /// The game's Assets folder: saves name resources under it and
     /// load_scene_file reads from it
     pub assets_dir: Option<std::path::PathBuf>,
+    /// The game's own bindings (load_input), for reset_input
+    pub input_defaults: String,
     /// A scene or a save to put in place of the world at the next step
     pub pending_world: Option<crate::saves::Pending>,
     /// Collider layers that cast shadows
@@ -164,6 +166,7 @@ impl Engine {
             prefs: Default::default(),
             assets_dir: None,
             pending_world: None,
+            input_defaults: String::new(),
             shadow_layers: 0,
             shadow_maps: Default::default(),
             state: DrawState::default(),

@@ -212,6 +212,9 @@ internal static class Native
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_captured_binding(IntPtr e, out Binding @out);
     [DllImport(Lib)] internal static extern nuint orst_bindings_save(IntPtr e, [In, Out] byte[]? buf, nuint size);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_bindings_load(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_load_input(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string defaults);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_keep_input(IntPtr e);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_reset_input(IntPtr e);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_gamepad_connected(IntPtr e, int gamepad);
     [DllImport(Lib)] internal static extern nuint orst_gamepad_name(IntPtr e, int gamepad, [In, Out] byte[]? buf, nuint size);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_gamepad_down(IntPtr e, int gamepad, int button);

@@ -1198,6 +1198,12 @@ public:
     void load_bindings(const std::string &text) {
         if (!orst_bindings_load(e_, text.c_str())) throw Error(orst_last_error());
     }
+    /// The game's bindings, then the player's kept ones (see orst_load_input)
+    void load_input(const std::string &defaults) {
+        if (!orst_load_input(e_, defaults.c_str())) throw Error(orst_last_error());
+    }
+    bool keep_input() { return orst_keep_input(e_); }
+    bool reset_input() { return orst_reset_input(e_); }
 
     // scenes: numbers the game picks (0 = none); the switch happens in the
     // middle of the transition and scene_entered() reports it for one frame

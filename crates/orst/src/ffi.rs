@@ -1902,6 +1902,34 @@ pub unsafe extern "C" fn orst_bindings_load(e: *mut OrstEngine, text: *const c_c
     result(r, false)
 }
 
+/// Bind the actions as the game's `defaults` say (bindings text), then as
+/// the player changed them (orst_keep_input); false on a bad line
+///
+/// # Safety
+/// `defaults` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_load_input(e: *mut OrstEngine, defaults: *const c_char) -> bool {
+    let engine = engine!(e, false);
+    let r = engine.load_input(string(defaults));
+    report(engine, r)
+}
+
+/// Keep the bindings as they are now for the next runs (a preference)
+#[no_mangle]
+pub extern "C" fn orst_keep_input(e: *mut OrstEngine) -> bool {
+    let engine = engine!(e, false);
+    let r = engine.keep_input();
+    report(engine, r)
+}
+
+/// Back to the game's own bindings, now and in the next runs
+#[no_mangle]
+pub extern "C" fn orst_reset_input(e: *mut OrstEngine) -> bool {
+    let engine = engine!(e, false);
+    let r = engine.reset_input();
+    report(engine, r)
+}
+
 fn pad(v: i32) -> usize {
     usize::try_from(v).unwrap_or(usize::MAX)
 }

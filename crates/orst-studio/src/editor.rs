@@ -6,6 +6,7 @@ use crate::console::{Console, Level};
 use crate::egui;
 use crate::gizmo::Tool;
 use crate::history::History;
+use crate::input_edit::{self, InputEdit};
 use crate::inspector::{self, Action};
 use crate::play::{self, Play};
 use crate::prefabs;
@@ -46,6 +47,7 @@ pub enum Center {
 pub enum Bottom {
     Project,
     Console,
+    Input,
 }
 
 pub struct Editor {
@@ -86,6 +88,7 @@ pub struct Editor {
     pub scripts: ScriptState,
     /// The files of Assets/Locale as last loaded, with their times
     locale_files: Vec<(PathBuf, Option<std::time::SystemTime>)>,
+    input: InputEdit,
 }
 
 /// Scripts in C# or C++: built when a script under Assets changes,
@@ -170,6 +173,7 @@ impl Editor {
             play: None,
             scripts: ScriptState::default(),
             locale_files: Vec::new(),
+            input: InputEdit::default(),
         }
         .with_scripts()
         .with_main_scene()
@@ -462,6 +466,10 @@ impl Editor {
         view.engine.assets_dir = Some(self.project.assets.root.clone());
         if let Some(dir) = orst::saves::user_dir(&self.project.file.name) {
             view.engine.set_save_dir(dir);
+        }
+        let defaults = input_edit::read(&self.project.assets);
+        if let Err(e) = view.engine.load_input(&defaults) {
+            self.console.error(format!("{}: {e}", input_edit::FILE));
         }
         let history = std::mem::take(&mut self.history);
         self.play = Some(Play::start(
@@ -889,11 +897,18 @@ impl Editor {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut self.bottom, Bottom::Project, "Project");
                     ui.selectable_value(&mut self.bottom, Bottom::Console, "Console");
+                    ui.selectable_value(&mut self.bottom, Bottom::Input, "Input")
+                        .on_hover_text("The game's actions and their default keys");
                 });
                 ui.separator();
                 match self.bottom {
                     Bottom::Project => self.project_ui(ui),
                     Bottom::Console => self.console.ui(ui),
+                    Bottom::Input => {
+                        if let Err(e) = self.input.ui(ui, &self.project.assets) {
+                            self.console.error(e);
+                        }
+                    }
                 }
             });
         egui::CentralPanel::default_margins().show(ui, |ui| {

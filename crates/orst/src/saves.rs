@@ -9,7 +9,8 @@
 //! entities are new ones; scripts start again on them.
 //!
 //! Preferences (prefs.json) are text by key: the language, the volume,
-//! the controls. Setting one writes the file.
+//! the controls. Setting one writes the file. The controls the player
+//! changed are the preference `input`, over the game's own bindings.
 
 use crate::scene_file::Files;
 use crate::Engine;
@@ -19,6 +20,8 @@ use std::path::{Path, PathBuf};
 
 pub const SAVE_VERSION: u64 = 1;
 const PREFS: &str = "prefs.json";
+/// The preference with the player's bindings
+pub const INPUT_PREF: &str = "input";
 const SAVES: &str = "saves";
 
 /// The folder for a game's own files on this system; None without a home
@@ -193,6 +196,35 @@ impl Engine {
         Ok(())
     }
 
+    /// Bind the actions as `defaults` say (the game's bindings, in the
+    /// actions text format), then as the player changed them
+    pub fn load_input(&mut self, defaults: &str) -> Result<(), String> {
+        self.actions.load(defaults)?;
+        self.input_defaults = defaults.to_string();
+        if let Some(mine) = self.prefs.get(INPUT_PREF).map(str::to_string) {
+            if let Err(e) = self.actions.load(&mine) {
+                self.set_error(format!("the player's controls: {e}"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep the bindings as they are now for the next runs
+    pub fn keep_input(&mut self) -> Result<(), String> {
+        let text = self.actions.save();
+        self.prefs.set(INPUT_PREF, Some(&text))
+    }
+
+    /// Back to the game's own bindings, for this run and the next ones
+    pub fn reset_input(&mut self) -> Result<(), String> {
+        for id in 1..=self.actions.count() {
+            self.actions.clear_bindings(id);
+        }
+        let defaults = self.input_defaults.clone();
+        self.actions.load(&defaults)?;
+        self.prefs.set(INPUT_PREF, None)
+    }
+
     /// A world asked for since the last step goes in (start of step).
     /// What it could not use goes to the last error.
     pub fn swap_world(&mut self) {
@@ -294,6 +326,31 @@ mod tests {
         assert_eq!(again.keys().count(), 1);
         std::fs::write(dir.join(PREFS), "{broken").unwrap();
         assert_eq!(Prefs::open(dir.join(PREFS)).keys().count(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rebound_controls_last_until_reset() {
+        let dir = temp("input");
+        let mut e = Engine::headless(8, 8).unwrap();
+        e.set_save_dir(dir.clone());
+        let defaults = "jump = key:Space\nfire = key:X\n";
+        e.load_input(defaults).unwrap();
+        let jump = e.actions.find("jump").unwrap();
+        e.actions.clear_bindings(jump);
+        e.actions
+            .bind(jump, crate::actions::Binding::parse("key:W").unwrap());
+        e.keep_input().unwrap();
+
+        // The next run: the player's jump, the game's fire
+        let mut f = Engine::headless(8, 8).unwrap();
+        f.set_save_dir(dir.clone());
+        f.load_input(defaults).unwrap();
+        assert_eq!(f.actions.save(), "jump = key:W\nfire = key:X\n");
+        f.reset_input().unwrap();
+        assert_eq!(f.actions.save(), defaults);
+        assert_eq!(f.prefs.get(INPUT_PREF), None);
+        assert!(f.load_input("jump = key:Nope").is_err());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
