@@ -1,0 +1,668 @@
+{
+  "orst_scene": 1,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Background",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0,
+            0
+          ],
+          "anchor_max": [
+            1,
+            1
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            0
+          ],
+          "size": [
+            0,
+            0
+          ]
+        },
+        "UiImage": {
+          "color": "#16241bff"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Menu",
+      "components": {
+        "MainMenu": {}
+      }
+    },
+    {
+      "id": 3,
+      "name": "Title",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            90
+          ],
+          "size": [
+            600,
+            80
+          ]
+        },
+        "UiText": {
+          "text": "@menu.title",
+          "size": 64,
+          "color": "#f4e3a1ff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "Buttons",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            60
+          ],
+          "size": [
+            280,
+            250
+          ]
+        }
+      }
+    },
+    {
+      "id": 5,
+      "name": "Play",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            0
+          ],
+          "size": [
+            280,
+            48
+          ],
+          "parent": 4
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@menu.play",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "name": "Continue",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            64
+          ],
+          "size": [
+            280,
+            48
+          ],
+          "parent": 4
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@menu.continue",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "name": "Settings button",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            128
+          ],
+          "size": [
+            280,
+            48
+          ],
+          "parent": 4
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@menu.settings",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "name": "Quit",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            192
+          ],
+          "size": [
+            280,
+            48
+          ],
+          "parent": 4
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@menu.quit",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "name": "Settings",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            50
+          ],
+          "size": [
+            480,
+            430
+          ],
+          "hidden": true
+        },
+        "UiImage": {
+          "color": "#101a14ee"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "name": "Settings title",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            16
+          ],
+          "size": [
+            440,
+            40
+          ],
+          "parent": 9
+        },
+        "UiText": {
+          "text": "@settings.title",
+          "size": 28,
+          "color": "#f4e3a1ff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "name": "Language",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            72
+          ],
+          "size": [
+            400,
+            44
+          ],
+          "parent": 9
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@settings.language",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 12,
+      "name": "Key up",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            134
+          ],
+          "size": [
+            400,
+            40
+          ],
+          "parent": 9
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "up",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 13,
+      "name": "Key down",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            184
+          ],
+          "size": [
+            400,
+            40
+          ],
+          "parent": 9
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "down",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "name": "Key left",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            234
+          ],
+          "size": [
+            400,
+            40
+          ],
+          "parent": 9
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "left",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "name": "Key right",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0
+          ],
+          "anchor_max": [
+            0.5,
+            0
+          ],
+          "pivot": [
+            0.5,
+            0
+          ],
+          "pos": [
+            0,
+            284
+          ],
+          "size": [
+            400,
+            40
+          ],
+          "parent": 9
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "right",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 16,
+      "name": "Reset keys",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            1
+          ],
+          "anchor_max": [
+            0.5,
+            1
+          ],
+          "pivot": [
+            1,
+            1
+          ],
+          "pos": [
+            -8,
+            -20
+          ],
+          "size": [
+            192,
+            44
+          ],
+          "parent": 9
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@settings.reset",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Back",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            1
+          ],
+          "anchor_max": [
+            0.5,
+            1
+          ],
+          "pivot": [
+            0,
+            1
+          ],
+          "pos": [
+            8,
+            -20
+          ],
+          "size": [
+            192,
+            44
+          ],
+          "parent": 9
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@settings.back",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Hint",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            1
+          ],
+          "anchor_max": [
+            0.5,
+            1
+          ],
+          "pivot": [
+            0.5,
+            1
+          ],
+          "pos": [
+            0,
+            -24
+          ],
+          "size": [
+            900,
+            30
+          ]
+        },
+        "UiText": {
+          "text": "@menu.hint",
+          "size": 18,
+          "color": "#ffffffa0",
+          "align": "Center"
+        }
+      }
+    }
+  ]
+}

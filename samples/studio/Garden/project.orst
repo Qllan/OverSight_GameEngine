@@ -2,5 +2,5 @@
   "name": "Garden",
   "engine": "0.1.0",
   "language": "csharp",
-  "main_scene": "Main.scene"
+  "main_scene": "Menu.scene"
 }

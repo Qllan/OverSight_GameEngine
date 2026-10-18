@@ -1,0 +1,5 @@
+up = key:W key:Up pad:LeftY- pad:DPadUp
+down = key:S key:Down pad:LeftY+ pad:DPadDown
+left = key:A key:Left pad:LeftX- pad:DPadLeft
+right = key:D key:Right pad:LeftX+ pad:DPadRight
+pause = key:Escape pad:Start

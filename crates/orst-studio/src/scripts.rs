@@ -738,9 +738,9 @@ public class Mover : Behaviour
             "{:?}",
             built.messages
         );
-        assert_eq!(scripts.load(&code.library()), Ok(4));
-        let main = project.file.main_scene.clone().unwrap();
-        let text = std::fs::read_to_string(project.assets.file(&main)).unwrap();
+        assert_eq!(scripts.load(&code.library()), Ok(6));
+        assert_eq!(project.file.main_scene.as_deref(), Some("Menu.scene"));
+        let text = std::fs::read_to_string(project.assets.file("Main.scene")).unwrap();
         let loaded = engine.load_scene(&text, &mut project.assets).unwrap();
         assert!(loaded.warnings.is_empty(), "{:?}", loaded.warnings);
 
@@ -766,6 +766,8 @@ public class Mover : Behaviour
         );
 
         let player = engine.world.find_named("Player").unwrap();
+        let defaults = crate::input_edit::read(&project.assets);
+        engine.load_input(&defaults).unwrap();
         let history = crate::history::History::default();
         let mut play = crate::play::Play::start(&mut engine, history, false, None);
         scripts.begin_play();
@@ -785,6 +787,130 @@ public class Mover : Behaviour
         scripts.end_play();
         let (restored, ..) = play.stop(&mut engine);
         restored.unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_garden_menus_start_save_and_continue_the_game() {
+        let _turn = DOTNET.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(host) = host() else { return };
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/studio/Garden");
+        let root = std::env::temp_dir().join(format!("orst-garden-menu-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        copy_dir(&sample, &root);
+        let (project, _) = crate::project::Project::open(&root).unwrap();
+        let mut engine = OrstEngine::new(Engine::headless(1280, 720).unwrap());
+        let mut scripts = Scripts::start(&host, &mut engine).unwrap();
+        let code = ScriptProject {
+            root: root.clone(),
+            language: Language::CSharp,
+            host,
+        };
+        assert!(code.build().ok);
+        scripts.load(&code.library()).unwrap();
+        // As a built game starts
+        engine.assets_dir = Some(project.assets.root.clone());
+        engine.set_save_dir(root.join("player"));
+        assert!(engine
+            .locale
+            .load_dir(&project.assets.file("Locale"))
+            .is_empty());
+        engine
+            .load_input(&crate::input_edit::read(&project.assets))
+            .unwrap();
+        engine.load_scene_file("Menu.scene").unwrap();
+        engine.swap_world();
+        assert_eq!(engine.take_error(), None);
+        let play = crate::play::Play::start(&mut engine, Default::default(), false, None);
+        scripts.begin_play();
+        struct Run {
+            play: crate::play::Play,
+            engine: Box<OrstEngine>,
+            scripts: Scripts,
+        }
+        impl Run {
+            fn ticks(&mut self, n: usize) {
+                for _ in 0..n {
+                    let scripts: &mut dyn ScriptHost = &mut self.scripts;
+                    self.play
+                        .advance(&mut self.engine, Some(scripts), crate::play::TICK);
+                }
+            }
+            fn click(&mut self, name: &str) {
+                let e = self.engine.world.find_named(name);
+                let e = e.unwrap_or_else(|| panic!("{name}"));
+                let r = self.engine.ui_rect(e);
+                let r = r.unwrap_or_else(|| panic!("{name} is hidden"));
+                self.engine.input.mouse = Vec2::new(r.x + r.w / 2.0, r.y + r.h / 2.0);
+                for down in [true, false] {
+                    let left = orst::input::MouseButton::Left;
+                    self.engine.input.set_mouse_button(left, down);
+                    self.ticks(1);
+                }
+                self.ticks(2);
+            }
+            fn key(&mut self, key: orst::input::Key) {
+                self.engine.input.set_key(key, true);
+                self.ticks(2);
+                self.engine.input.set_key(key, false);
+                self.ticks(1);
+            }
+            fn text(&self, name: &str) -> String {
+                let e = self.engine.world.find_named(name).unwrap();
+                let t: orst::components::UiText =
+                    read(&self.engine.world, e, orst::components::UI_TEXT).unwrap();
+                let engine = &self.engine;
+                engine.locale.text(engine.strings.get(t.text)).into_owned()
+            }
+            fn has(&self, name: &str) -> bool {
+                self.engine.world.find_named(name).is_some()
+            }
+        }
+        let mut run = Run {
+            play,
+            engine,
+            scripts,
+        };
+        run.ticks(2);
+        assert_eq!(run.text("Play"), "Play");
+        assert_eq!(run.text("Key up"), "Up: W");
+
+        // Settings: Russian, and Up on I
+        run.click("Settings button");
+        run.click("Language");
+        assert_eq!(run.text("Play"), "Играть");
+        run.click("Key up");
+        run.key(orst::input::Key::I);
+        assert_eq!(run.text("Key up"), "Вверх: I");
+        let prefs = &run.engine.prefs;
+        assert_eq!(prefs.get("language"), Some("ru"));
+        assert!(prefs.get("input").unwrap().contains("up = key:I key:Up"));
+        run.click("Back");
+
+        // Play, pause, save, back to the title, continue
+        run.click("Play");
+        assert!(run.has("Player"), "{:?}", run.engine.take_error());
+        assert_eq!(run.text("Coins text"), "Монеты: 0/11");
+        run.key(orst::input::Key::Escape);
+        run.click("Save");
+        assert_eq!(run.text("Pause status"), "Сохранено");
+        assert!(root.join("player/saves/garden.json").is_file());
+        run.click("To menu");
+        assert!(!run.has("Player"));
+        run.click("Continue");
+        assert!(run.has("Player"));
+        let pause = run.engine.world.find_named("Pause").unwrap();
+        assert_eq!(
+            run.engine.ui_rect(pause),
+            None,
+            "a loaded game is not paused"
+        );
+        let problems: Vec<_> = take_log()
+            .into_iter()
+            .filter(|(l, _)| *l != crate::console::Level::Info)
+            .collect();
+        assert!(problems.is_empty(), "{problems:?}");
+        run.scripts.end_play();
         let _ = std::fs::remove_dir_all(&root);
     }
 }

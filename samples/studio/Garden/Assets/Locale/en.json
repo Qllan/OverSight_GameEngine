@@ -1,0 +1,35 @@
+{
+  "menu": {
+    "title": "Garden",
+    "play": "Play",
+    "continue": "Continue",
+    "settings": "Settings",
+    "quit": "Quit",
+    "hint": "Arrows or WASD to walk, Esc to pause. Pick up every coin."
+  },
+  "settings": {
+    "title": "Settings",
+    "language": "Language: English",
+    "reset": "Reset keys",
+    "back": "Back"
+  },
+  "keys": {
+    "up": "Up",
+    "down": "Down",
+    "left": "Left",
+    "right": "Right",
+    "press": "Press a key... (Esc: keep)"
+  },
+  "hud": {
+    "coins": "Coins: {0}/{1}",
+    "win": "Every coin is yours!"
+  },
+  "pause": {
+    "title": "Pause",
+    "resume": "Resume",
+    "save": "Save",
+    "load": "Load",
+    "menu": "Title screen",
+    "saved": "Saved"
+  }
+}

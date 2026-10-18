@@ -241,6 +241,349 @@
         }
       },
       "id": 15
+    },
+    {
+      "id": 16,
+      "name": "Coins text",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0,
+            0
+          ],
+          "anchor_max": [
+            0,
+            0
+          ],
+          "pivot": [
+            0,
+            0
+          ],
+          "pos": [
+            20,
+            14
+          ],
+          "size": [
+            400,
+            36
+          ]
+        },
+        "UiText": {
+          "text": "",
+          "size": 24,
+          "color": "#ffe680ff",
+          "align": "Left"
+        }
+      }
+    },
+    {
+      "id": 17,
+      "name": "Win",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            -200
+          ],
+          "size": [
+            640,
+            64
+          ],
+          "hidden": true
+        },
+        "UiImage": {
+          "color": "#000000b0"
+        },
+        "UiText": {
+          "text": "@hud.win",
+          "size": 30,
+          "color": "#ffe680ff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 18,
+      "name": "Pause",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0,
+            0
+          ],
+          "anchor_max": [
+            1,
+            1
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            0
+          ],
+          "size": [
+            0,
+            0
+          ],
+          "hidden": true
+        },
+        "UiImage": {
+          "color": "#000000b0"
+        },
+        "PauseMenu": {}
+      }
+    },
+    {
+      "id": 19,
+      "name": "Pause title",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            -140
+          ],
+          "size": [
+            400,
+            50
+          ],
+          "parent": 18
+        },
+        "UiText": {
+          "text": "@pause.title",
+          "size": 36,
+          "color": "#f4e3a1ff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 20,
+      "name": "Resume",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            -60
+          ],
+          "size": [
+            280,
+            48
+          ],
+          "parent": 18
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@pause.resume",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "name": "Save",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            0
+          ],
+          "size": [
+            280,
+            48
+          ],
+          "parent": 18
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@pause.save",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "name": "Load",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            60
+          ],
+          "size": [
+            280,
+            48
+          ],
+          "parent": 18
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@pause.load",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "name": "To menu",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            120
+          ],
+          "size": [
+            280,
+            48
+          ],
+          "parent": 18
+        },
+        "UiImage": {
+          "color": "#3f7d4fff"
+        },
+        "UiButton": {
+          "hover": "#d8ffe0ff",
+          "pressed": "#a0c0a8ff"
+        },
+        "UiText": {
+          "text": "@pause.menu",
+          "size": 22,
+          "color": "#ffffffff",
+          "align": "Center"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "name": "Pause status",
+      "components": {
+        "UiRect": {
+          "anchor_min": [
+            0.5,
+            0.5
+          ],
+          "anchor_max": [
+            0.5,
+            0.5
+          ],
+          "pivot": [
+            0.5,
+            0.5
+          ],
+          "pos": [
+            0,
+            180
+          ],
+          "size": [
+            400,
+            30
+          ],
+          "parent": 18
+        },
+        "UiText": {
+          "text": "",
+          "size": 20,
+          "color": "#a0ffb0ff",
+          "align": "Center"
+        }
+      }
     }
   ]
 }
