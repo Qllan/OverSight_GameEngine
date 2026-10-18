@@ -88,6 +88,10 @@ impl Game {
             scripts = Some(host);
         }
         let (mut assets, _) = AssetDb::scan(data.join(ASSETS))?;
+        engine.assets_dir = Some(assets.root.clone());
+        if let Some(dir) = orst::saves::user_dir(&file.name) {
+            engine.set_save_dir(dir);
+        }
         for error in engine.locale.load_dir(&assets.file(LOCALE)) {
             crate::scripts::log(1, error.as_ptr(), error.len());
         }

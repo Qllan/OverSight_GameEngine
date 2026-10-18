@@ -286,6 +286,12 @@ int main() {
     skel.set_attachment("arm", "");
     skel.draw(target);
 
+    // Preferences
+    const char *tmp = std::getenv("TMPDIR") ? std::getenv("TMPDIR") : std::getenv("TEMP");
+    auto prefs_dir = std::string(tmp ? tmp : ".") + "/orst_smoke_cpp_prefs";
+    engine.set_save_dir(prefs_dir);
+    CHECK(engine.set_pref("name", "Ёж") && engine.pref("name") == "Ёж" && engine.pref("none", "x") == "x");
+
     // Translations
     CHECK(engine.load_locale("en", R"({"hi": "Hello"})") && engine.load_locale("ru", R"({"hi": "Привет"})"));
     CHECK(engine.languages().size() == 2 && engine.language() == "en" && engine.set_language("ru") && engine.tr("hi") == "Привет");

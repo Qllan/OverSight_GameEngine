@@ -101,6 +101,7 @@ impl Play {
     /// Put the world back as it was at Play; gives back the editor's
     /// history, unsaved flag and selection
     pub fn stop(self, engine: &mut Engine) -> (Result<(), String>, History, bool, Option<Entity>) {
+        engine.pending_world = None;
         let restored = engine.restore(&self.before);
         engine.entity_emitters.clear();
         engine.input.release_all();

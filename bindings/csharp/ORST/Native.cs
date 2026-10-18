@@ -82,6 +82,17 @@ internal static class Native
     [DllImport(Lib)] internal static extern ulong orst_find_named(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport(Lib)] internal static extern uint orst_intern(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
     [DllImport(Lib)] internal static extern nuint orst_string(IntPtr e, uint id, [In, Out] byte[]? buf, nuint size);
+    [DllImport(Lib)] internal static extern void orst_set_save_dir(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string dir);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_set_game_name(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string game);
+    [DllImport(Lib)] internal static extern nuint orst_save_dir(IntPtr e, [In, Out] byte[]? buf, nuint size);
+    [DllImport(Lib)] internal static extern void orst_set_assets_dir(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string dir);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_save_game(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string slot);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_load_game(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string slot);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_save_exists(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string slot);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_delete_save(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string slot);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_load_scene_file(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+    [DllImport(Lib)] internal static extern long orst_pref(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, [In, Out] byte[]? buf, nuint size);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_set_pref(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, [MarshalAs(UnmanagedType.LPUTF8Str)] string? value);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_load_locale(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string language, [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
     [DllImport(Lib)] internal static extern uint orst_load_locales(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string dir);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_set_language(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string language);

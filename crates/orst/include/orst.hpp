@@ -1008,6 +1008,27 @@ public:
         return out;
     }
 
+    /// Saves and preferences (see orst_save_game)
+    void set_save_dir(const std::string &dir) { orst_set_save_dir(e_, dir.c_str()); }
+    bool set_game_name(const std::string &game) { return orst_set_game_name(e_, game.c_str()); }
+    void set_assets_dir(const std::string &dir) { orst_set_assets_dir(e_, dir.c_str()); }
+    bool save_game(const std::string &slot) { return orst_save_game(e_, slot.c_str()); }
+    bool load_game(const std::string &slot) { return orst_load_game(e_, slot.c_str()); }
+    bool save_exists(const std::string &slot) const { return orst_save_exists(e_, slot.c_str()); }
+    bool delete_save(const std::string &slot) { return orst_delete_save(e_, slot.c_str()); }
+    bool load_scene_file(const std::string &path) { return orst_load_scene_file(e_, path.c_str()); }
+    /// A preference, or `fallback` when it is not set
+    std::string pref(const std::string &key, const std::string &fallback = "") const {
+        int64_t n = orst_pref(e_, key.c_str(), nullptr, 0);
+        if (n < 0) return fallback;
+        std::string out(static_cast<size_t>(n), '\0');
+        orst_pref(e_, key.c_str(), out.data(), out.size() + 1);
+        return out;
+    }
+    bool set_pref(const std::string &key, const std::string &value) {
+        return orst_set_pref(e_, key.c_str(), value.c_str());
+    }
+
     /// Translations (see orst_load_locales)
     uint32_t load_locales(const std::string &dir) { return orst_load_locales(e_, dir.c_str()); }
     bool load_locale(const std::string &language, const std::string &json) {

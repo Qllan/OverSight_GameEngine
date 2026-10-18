@@ -458,6 +458,11 @@ impl Editor {
             return;
         }
         let Ok(view) = &mut self.scene else { return };
+        // Saves and scene changes work as in the built game
+        view.engine.assets_dir = Some(self.project.assets.root.clone());
+        if let Some(dir) = orst::saves::user_dir(&self.project.file.name) {
+            view.engine.set_save_dir(dir);
+        }
         let history = std::mem::take(&mut self.history);
         self.play = Some(Play::start(
             &mut view.engine,

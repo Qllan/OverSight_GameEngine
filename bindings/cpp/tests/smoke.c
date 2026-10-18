@@ -244,6 +244,9 @@ int main(void) {
     orst_free_skeleton_data(e, rig_data);
     orst_free_skeleton(e, skel);
 
+    /* Saves need a folder */
+    CHECK(!orst_save_game(e, "one") && orst_pref(e, "volume", NULL, 0) == -1);
+
     /* Translations */
     CHECK(orst_load_locale(e, "ru", "{\"menu\": {\"play\": \"Играть\"}}") && orst_load_locale(e, "en", "{\"menu\": {\"play\": \"Play\"}}"));
     CHECK(!orst_load_locale(e, "de", "[1]") && orst_language_count(e) == 2 && orst_language(e, text, sizeof text) == 2 && strcmp(text, "ru") == 0);

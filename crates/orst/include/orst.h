@@ -349,6 +349,24 @@ OrstEntity orst_find_named(OrstEngine *e, const char *name); /* oldest with that
 uint32_t orst_intern(OrstEngine *e, const char *text);
 size_t orst_string(OrstEngine *e, uint32_t id, char *buf, size_t size);
 
+/* What a game keeps between runs, in a folder of the player's own: saved
+ * games (the world as a scene file, resources named by their path under
+ * the Assets folder) and preferences (text by key, written when set).
+ * Windowed engines use the folder of a game named after the window title.
+ * Loading a save or a scene file happens at the next orst_step; the
+ * entities are new ones. Save names keep letters, digits, space, - and _. */
+void orst_set_save_dir(OrstEngine *e, const char *dir);
+bool orst_set_game_name(OrstEngine *e, const char *game);
+size_t orst_save_dir(OrstEngine *e, char *buf, size_t size);
+void orst_set_assets_dir(OrstEngine *e, const char *dir);
+bool orst_save_game(OrstEngine *e, const char *slot);
+bool orst_load_game(OrstEngine *e, const char *slot);
+bool orst_save_exists(OrstEngine *e, const char *slot);
+bool orst_delete_save(OrstEngine *e, const char *slot);
+bool orst_load_scene_file(OrstEngine *e, const char *path); /* under the Assets folder */
+int64_t orst_pref(OrstEngine *e, const char *key, char *buf, size_t size); /* -1: not set */
+bool orst_set_pref(OrstEngine *e, const char *key, const char *value);    /* NULL removes it */
+
 /* Translations: a table of texts per language. orst_load_locales loads
  * every <language>.json in a folder ({"menu": {"play": "Play"}} gives the
  * key "menu.play"). A UiText whose text is "@menu.play" shows that key's

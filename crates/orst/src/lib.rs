@@ -40,6 +40,7 @@ pub mod post;
 pub mod prefab;
 pub mod render;
 pub mod rng;
+pub mod saves;
 pub mod scene_file;
 pub mod scenes;
 pub mod schema;

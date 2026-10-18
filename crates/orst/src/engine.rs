@@ -75,6 +75,14 @@ pub struct Engine {
     pub ui_view: crate::ui::UiView,
     /// Texts by language, for `@key` texts and scripts
     pub locale: crate::locale::Locale,
+    /// Where saves and preferences go (saves.rs); None: nowhere yet
+    pub save_dir: Option<std::path::PathBuf>,
+    pub prefs: crate::saves::Prefs,
+    /// The game's Assets folder: saves name resources under it and
+    /// load_scene_file reads from it
+    pub assets_dir: Option<std::path::PathBuf>,
+    /// A scene or a save to put in place of the world at the next step
+    pub pending_world: Option<crate::saves::Pending>,
     /// Collider layers that cast shadows
     shadow_layers: u32,
     /// Maps whose solid cells cast shadows
@@ -152,6 +160,10 @@ impl Engine {
             strings: Default::default(),
             ui_view: Default::default(),
             locale: Default::default(),
+            save_dir: None,
+            prefs: Default::default(),
+            assets_dir: None,
+            pending_world: None,
             shadow_layers: 0,
             shadow_maps: Default::default(),
             state: DrawState::default(),
@@ -189,6 +201,9 @@ impl Engine {
     #[cfg(feature = "window")]
     pub fn windowed(config: WindowConfig) -> Result<Engine, String> {
         let mut engine = Engine::headless(config.width, config.height)?;
+        if let Some(dir) = crate::saves::user_dir(&config.title) {
+            engine.set_save_dir(dir);
+        }
         let software = config.software;
         engine.window = Some(Window::open(config)?);
         // The graphics card when there is one; the CPU otherwise, and the
@@ -453,11 +468,13 @@ impl Engine {
         self.collisions.update(&mut self.world, &self.polygons);
     }
 
-    /// One tick of the built-in systems, in this order: interface buttons, motion, bodies
+    /// One tick of the built-in systems, in this order: a scene or save
+    /// asked for goes in, interface buttons, motion, bodies
     /// with mass, collisions, sprite animations, then the camera follows
     /// the current Camera2D. Games call it once per fixed tick after their
     /// own logic; the editor's Play runs exactly this.
     pub fn step(&mut self, dt: f32) {
+        self.swap_world();
         self.update_ui();
         self.update_motion(dt);
         self.physics_step(dt);

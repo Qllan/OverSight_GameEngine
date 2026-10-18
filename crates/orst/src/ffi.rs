@@ -849,6 +849,145 @@ pub unsafe extern "C" fn orst_find_named(e: *mut OrstEngine, name: *const c_char
     engine!(e, 0).world.find_named(string(name)).unwrap_or(0)
 }
 
+fn report(engine: &mut Engine, result: Result<(), String>) -> bool {
+    match result {
+        Ok(()) => true,
+        Err(err) => {
+            engine.set_error(err);
+            false
+        }
+    }
+}
+
+/// Keep saves and preferences in `dir`
+///
+/// # Safety
+/// `dir` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_set_save_dir(e: *mut OrstEngine, dir: *const c_char) {
+    engine!(e).set_save_dir(string(dir).into());
+}
+
+/// Keep saves and preferences in the folder this system gives a game
+/// named `game` (%APPDATA%\game on Windows); false without one
+///
+/// # Safety
+/// `game` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_set_game_name(e: *mut OrstEngine, game: *const c_char) -> bool {
+    let engine = engine!(e, false);
+    match crate::saves::user_dir(string(game)) {
+        Some(dir) => {
+            engine.set_save_dir(dir);
+            true
+        }
+        None => false,
+    }
+}
+
+/// The save folder into `buf`; its length ("" when there is none)
+///
+/// # Safety
+/// `buf` is NULL or `size` writable bytes
+#[no_mangle]
+pub unsafe extern "C" fn orst_save_dir(e: *mut OrstEngine, buf: *mut c_char, size: usize) -> usize {
+    let engine = engine!(e, 0);
+    let dir = engine
+        .save_dir
+        .as_ref()
+        .map(|d| d.to_string_lossy().into_owned());
+    copy_out(dir.as_deref().unwrap_or(""), buf, size)
+}
+
+/// The game's Assets folder: saves name resources under it and
+/// orst_load_scene_file reads from it
+///
+/// # Safety
+/// `dir` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_set_assets_dir(e: *mut OrstEngine, dir: *const c_char) {
+    engine!(e).assets_dir = Some(string(dir).into());
+}
+
+/// # Safety
+/// `slot` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_save_game(e: *mut OrstEngine, slot: *const c_char) -> bool {
+    let engine = engine!(e, false);
+    let result = engine.save_game(string(slot));
+    report(engine, result)
+}
+
+/// Load a saved game at the next orst_step; false when it can't be read
+///
+/// # Safety
+/// `slot` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_load_game(e: *mut OrstEngine, slot: *const c_char) -> bool {
+    let engine = engine!(e, false);
+    let result = engine.load_game(string(slot));
+    report(engine, result)
+}
+
+/// # Safety
+/// `slot` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_save_exists(e: *mut OrstEngine, slot: *const c_char) -> bool {
+    engine!(e, false).save_exists(string(slot))
+}
+
+/// # Safety
+/// `slot` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_delete_save(e: *mut OrstEngine, slot: *const c_char) -> bool {
+    engine!(e, false).delete_save(string(slot))
+}
+
+/// Put a scene file (a path under the Assets folder) in place of the
+/// world at the next orst_step
+///
+/// # Safety
+/// `path` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_load_scene_file(e: *mut OrstEngine, path: *const c_char) -> bool {
+    let engine = engine!(e, false);
+    let result = engine.load_scene_file(string(path));
+    report(engine, result)
+}
+
+/// A preference into `buf`; its length, or -1 when it is not set
+///
+/// # Safety
+/// `key` is NULL or a NUL-terminated string; `buf` NULL or `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn orst_pref(
+    e: *mut OrstEngine,
+    key: *const c_char,
+    buf: *mut c_char,
+    size: usize,
+) -> i64 {
+    match engine!(e, -1).prefs.get(string(key)) {
+        Some(v) => copy_out(v, buf, size) as i64,
+        None => -1,
+    }
+}
+
+/// Set a preference (NULL value: remove it) and write the file
+///
+/// # Safety
+/// `key` and `value` are NULL or NUL-terminated strings
+#[no_mangle]
+pub unsafe extern "C" fn orst_set_pref(
+    e: *mut OrstEngine,
+    key: *const c_char,
+    value: *const c_char,
+) -> bool {
+    let engine = engine!(e, false);
+    let value = (!value.is_null()).then(|| string(value));
+    let result = engine.prefs.set(string(key), value);
+    report(engine, result)
+}
+
 /// Add the texts of a JSON object to the table of `language`; false (see
 /// orst_last_error) when it is not one
 ///

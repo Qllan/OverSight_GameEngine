@@ -112,6 +112,82 @@ public sealed partial class Engine
         return Encoding.UTF8.GetString(buf, 0, (int)n);
     }
 
+    /// <summary>The folder for saves and preferences (a windowed game's
+    /// is named after its title); "" when there is none</summary>
+    public string SaveDir
+    {
+        get => Out((b, n) => Native.orst_save_dir(Handle, b, n));
+        set => Native.orst_set_save_dir(Handle, value);
+    }
+
+    /// <summary>Keep saves in the folder this system gives a game of this
+    /// name (%APPDATA%\Name on Windows)</summary>
+    public bool SetGameName(string game) => Native.orst_set_game_name(Handle, game);
+
+    /// <summary>The game's Assets folder: saves name resources under it,
+    /// LoadScene reads from it</summary>
+    public string AssetsDir { set => Native.orst_set_assets_dir(Handle, value); }
+
+    /// <summary>Save the whole world under a name</summary>
+    public void SaveGame(string slot)
+    {
+        if (!Native.orst_save_game(Handle, slot)) throw new OrstException(LastError);
+    }
+
+    /// <summary>Put a saved game in place of the world at the next Step;
+    /// the entities are new ones and scripts start again on them</summary>
+    public void LoadGame(string slot)
+    {
+        if (!Native.orst_load_game(Handle, slot)) throw new OrstException(LastError);
+    }
+
+    public bool SaveExists(string slot) => Native.orst_save_exists(Handle, slot);
+    public bool DeleteSave(string slot) => Native.orst_delete_save(Handle, slot);
+
+    /// <summary>Put a scene file (a path under Assets) in place of the
+    /// world at the next Step</summary>
+    public void LoadScene(string path)
+    {
+        if (!Native.orst_load_scene_file(Handle, path)) throw new OrstException(LastError);
+    }
+
+    /// <summary>A preference, or fallback when it is not set</summary>
+    public string GetPref(string key, string fallback = "")
+    {
+        var n = Native.orst_pref(Handle, key, null, 0);
+        if (n < 0) return fallback;
+        var buf = new byte[n + 1];
+        Native.orst_pref(Handle, key, buf, (nuint)buf.Length);
+        return Encoding.UTF8.GetString(buf, 0, (int)n);
+    }
+
+    public float GetPref(string key, float fallback) =>
+        float.TryParse(GetPref(key), System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
+    public int GetPref(string key, int fallback) =>
+        int.TryParse(GetPref(key), System.Globalization.NumberStyles.Integer,
+            System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : fallback;
+
+    public bool GetPref(string key, bool fallback) => GetPref(key) switch
+    {
+        "true" => true,
+        "false" => false,
+        _ => fallback,
+    };
+
+    /// <summary>Set a preference (null removes it); it is written at once</summary>
+    public void SetPref(string key, string? value)
+    {
+        if (!Native.orst_set_pref(Handle, key, value)) throw new OrstException(LastError);
+    }
+
+    public void SetPref(string key, float value) =>
+        SetPref(key, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    public void SetPref(string key, int value) =>
+        SetPref(key, value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    public void SetPref(string key, bool value) => SetPref(key, value ? "true" : "false");
+
     /// <summary>Load every &lt;language&gt;.json in dir in place of the
     /// tables there were ({"menu": {"play": "Play"}} gives "menu.play");
     /// how many languages there are</summary>

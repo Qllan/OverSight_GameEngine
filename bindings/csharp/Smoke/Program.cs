@@ -327,6 +327,25 @@ foreach (var down in new[] { false, true, false })
 }
 Check(engine.Get<UiButton>(button).Clicked && engine.Text(engine.Get<UiText>(button).Text) == "OK", "UiButton click");
 
+// Saves and preferences
+var saves = Path.Combine(Path.GetTempPath(), $"orst_smoke_cs_{Environment.ProcessId}");
+engine.SaveDir = saves;
+engine.SetPref("volume", 0.25f);
+engine.SetPref("fullscreen", true);
+Check(engine.GetPref("volume", 1f) == 0.25f && engine.GetPref("fullscreen", false) && engine.GetPref("missing", 7) == 7, "prefs");
+Check(File.ReadAllText(Path.Combine(saves, "prefs.json")).Contains("0.25"), "prefs file");
+int before = (int)engine.EntityCount;
+engine.SaveGame("one");
+Check(engine.SaveExists("one") && !engine.SaveExists("two"), "SaveGame");
+engine.Spawn();
+engine.LoadGame("one");
+engine.Step(1f / 60);
+Check(engine.EntityCount == before && engine.Text(engine.Get<UiText>(engine.UiAt(middle)).Text) == "OK", "LoadGame");
+var noSave = false;
+try { engine.LoadGame("two"); } catch (OrstException) { noSave = true; }
+Check(noSave && engine.DeleteSave("one"), "save errors");
+Directory.Delete(saves, true);
+
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }
