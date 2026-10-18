@@ -2,7 +2,7 @@ name: ORST
 
 on:
   push:
-    branches: [oversight-2d]
+    branches: [main, oversight-2d]
   pull_request:
     paths:
       - "crates/orst/**"
