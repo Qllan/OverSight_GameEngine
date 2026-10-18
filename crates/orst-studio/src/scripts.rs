@@ -391,17 +391,47 @@ pub fn build_messages(text: &str, root: &Path) -> Vec<(Level, String)> {
 
 type Attach = extern "system" fn(*mut c_void, *const c_void) -> i32;
 
-#[cfg(not(all(windows, target_env = "gnu")))]
 mod dotnet {
     use super::{Attach, Scripts};
-    use netcorehost::{nethost, pdcstr, pdcstring::PdCString};
+    use netcorehost::hostfxr::Hostfxr;
+    use netcorehost::{pdcstr, pdcstring::PdCString};
     use std::path::Path;
+
+    #[cfg(not(all(windows, target_env = "gnu")))]
+    fn load_hostfxr() -> Result<Hostfxr, String> {
+        netcorehost::nethost::load_hostfxr().map_err(|e| e.to_string())
+    }
+
+    /// What nethost does: the newest host/fxr/<version>/hostfxr.dll
+    /// under $DOTNET_ROOT or Program Files\dotnet
+    #[cfg(all(windows, target_env = "gnu"))]
+    fn load_hostfxr() -> Result<Hostfxr, String> {
+        use std::path::PathBuf;
+        let mut roots = Vec::new();
+        roots.extend(std::env::var_os("DOTNET_ROOT").map(PathBuf::from));
+        roots.extend(std::env::var_os("ProgramFiles").map(|p| PathBuf::from(p).join("dotnet")));
+        let mut found: Vec<_> = roots
+            .iter()
+            .filter_map(|root| std::fs::read_dir(root.join("host/fxr")).ok())
+            .flat_map(|dir| dir.flatten().map(|e| e.path()))
+            .filter(|p| p.join("hostfxr.dll").is_file())
+            .collect();
+        let version = |p: &PathBuf| -> Vec<u32> {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            name.split(['.', '-'])
+                .map(|n| n.parse().unwrap_or(0))
+                .collect()
+        };
+        found.sort_by_key(version);
+        let dir = found.pop().ok_or("hostfxr.dll was not found")?;
+        Hostfxr::load_from_path(dir.join("hostfxr.dll")).map_err(|e| e.to_string())
+    }
 
     pub fn start(host: &Path) -> Result<(Attach, Scripts), String> {
         let path = |name: &str| {
             PdCString::from_os_str(host.join(name).as_os_str()).map_err(|e| e.to_string())
         };
-        let fxr = nethost::load_hostfxr()
+        let fxr = load_hostfxr()
             .map_err(|e| format!("No .NET 8 runtime found ({e}); install it to use C# scripts"))?;
         let context = fxr
             .initialize_for_runtime_config(path("ORST.Scripting.runtimeconfig.json")?)
@@ -431,16 +461,6 @@ mod dotnet {
             count: 0,
         };
         Ok((attach, scripts))
-    }
-}
-
-#[cfg(all(windows, target_env = "gnu"))]
-mod dotnet {
-    use super::{Attach, Scripts};
-    use std::path::Path;
-
-    pub fn start(_: &Path) -> Result<(Attach, Scripts), String> {
-        Err("C# scripts need the MSVC build of ORST".into())
     }
 }
 
