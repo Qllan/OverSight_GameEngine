@@ -406,6 +406,7 @@ bool orst_get_field(OrstEngine *e, uint32_t component, uint32_t index, OrstField
 #define ORST_SPRITE_ANIMATOR 9
 #define ORST_CAMERA_2D 10
 #define ORST_PARTICLE_EMITTER 11
+#define ORST_TILEMAP_RENDERER 12
 
 typedef struct OrstTransform {
     OrstVec2 pos;
@@ -522,6 +523,18 @@ typedef struct OrstParticleEmitter {
     uint8_t emitting;
     uint8_t pad_[3];
 } OrstParticleEmitter;
+
+/* Draws a tile map: every tile layer of map, the first at draw layer
+ * `layer` and each next one above it. The map lies where its file puts it
+ * (cell 0, 0 at the world origin), so the Transform does not move it. */
+typedef struct OrstTilemapRenderer {
+    uint32_t map;
+    int32_t layer;
+    OrstColor tint;
+    uint8_t y_sort; /* sort tiles with sprites by the bottom of their cell */
+    uint8_t hidden;
+    uint8_t pad_[2];
+} OrstTilemapRenderer;
 
 /* How two shapes overlap: move the second by normal * depth and they only touch */
 typedef struct OrstOverlap {

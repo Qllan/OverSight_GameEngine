@@ -20,8 +20,9 @@ pub const NAME: u32 = 8;
 pub const SPRITE_ANIMATOR: u32 = 9;
 pub const CAMERA_2D: u32 = 10;
 pub const PARTICLE_EMITTER: u32 = 11;
+pub const TILEMAP_RENDERER: u32 = 12;
 /// Ids up to this one are the engine's own
-pub const LAST_BUILTIN: u32 = PARTICLE_EMITTER;
+pub const LAST_BUILTIN: u32 = TILEMAP_RENDERER;
 
 pub const BODY_DYNAMIC: u32 = 0;
 pub const BODY_FIXED: u32 = 1;
@@ -404,6 +405,35 @@ impl Default for ParticleEmitter {
     }
 }
 
+/// Draws a tile map: every tile layer of `map`, the first at draw layer
+/// `layer` and each next one above it. The map lies where its file puts
+/// it (cell 0, 0 at the world origin), as collisions and paths see it, so
+/// the entity's Transform does not move it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TilemapRenderer {
+    pub map: u32,
+    pub layer: i32,
+    pub tint: Color,
+    /// Sort tiles with sprites by the bottom of their cell
+    pub y_sort: u8,
+    pub hidden: u8,
+    pub _pad: [u8; 2],
+}
+
+impl Default for TilemapRenderer {
+    fn default() -> Self {
+        TilemapRenderer {
+            map: 0,
+            layer: 0,
+            tint: Color::WHITE,
+            y_sort: 0,
+            hidden: 0,
+            _pad: [0; 2],
+        }
+    }
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -431,6 +461,11 @@ pub fn register(world: &mut World) {
             size(std::mem::size_of::<ParticleEmitter>()),
             4,
         ),
+        world.component(
+            "TilemapRenderer",
+            size(std::mem::size_of::<TilemapRenderer>()),
+            4,
+        ),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -449,7 +484,8 @@ pub fn register(world: &mut World) {
             NAME,
             SPRITE_ANIMATOR,
             CAMERA_2D,
-            PARTICLE_EMITTER
+            PARTICLE_EMITTER,
+            TILEMAP_RENDERER
         ],
         "built-ins come first"
     );
@@ -598,6 +634,16 @@ fn builtin_fields() -> Vec<(u32, Vec<Field>)> {
             ],
         ),
         (PARTICLE_EMITTER, emitter_fields()),
+        (
+            TILEMAP_RENDERER,
+            vec![
+                Field::new("map", T::Tilemap, at(offset_of!(TilemapRenderer, map))),
+                Field::new("layer", T::I32, at(offset_of!(TilemapRenderer, layer))),
+                Field::new("tint", T::Color, at(offset_of!(TilemapRenderer, tint))),
+                Field::new("y_sort", T::Bool, at(offset_of!(TilemapRenderer, y_sort))),
+                Field::new("hidden", T::Bool, at(offset_of!(TilemapRenderer, hidden))),
+            ],
+        ),
     ]
 }
 
@@ -657,6 +703,7 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         SPRITE_ANIMATOR => Some(bytes(SpriteAnimator::default())),
         CAMERA_2D => Some(bytes(Camera2D::default())),
         PARTICLE_EMITTER => Some(bytes(ParticleEmitter::default())),
+        TILEMAP_RENDERER => Some(bytes(TilemapRenderer::default())),
         _ => None,
     }
 }
@@ -759,8 +806,8 @@ mod tests {
         let long = "я".repeat(40); // 80 bytes: cut to 32 letters
         assert_eq!(Name::new(&long).as_str(), "я".repeat(32));
         // Every byte is described but padding and Body's contacts
-        let left = [0, 0, 0, 4, 3, 2, 3, 0, 3, 3, 3];
-        for (id, left) in (TRANSFORM..=PARTICLE_EMITTER).zip(left) {
+        let left = [0, 0, 0, 4, 3, 2, 3, 0, 3, 3, 3, 2];
+        for (id, left) in (TRANSFORM..=TILEMAP_RENDERER).zip(left) {
             let described: u32 = w.fields(id).iter().map(|f| f.ty.size()).sum();
             assert_eq!(
                 w.storage(id).unwrap().size - described,

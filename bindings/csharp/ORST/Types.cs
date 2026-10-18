@@ -372,6 +372,25 @@ public struct ParticleEmitter
     public bool Emitting { readonly get => emitting != 0; set => emitting = (byte)(value ? 1 : 0); }
 }
 
+/// <summary>Draws a tile map: every tile layer of Map, the first at draw
+/// layer Layer and each next one above it. The map lies where its file puts
+/// it (cell 0, 0 at the world origin), so the Transform does not move it.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct TilemapRenderer
+{
+    public uint Map;
+    public int Layer;
+    public Color Tint;
+    private byte ySort, hidden, pad0, pad1;
+
+    public TilemapRenderer() : this(0) { }
+    public TilemapRenderer(uint map, int layer = 0) { Map = map; Layer = layer; Tint = Color.White; }
+
+    /// <summary>Sort tiles with sprites by the bottom of their cell</summary>
+    public bool YSort { readonly get => ySort != 0; set => ySort = (byte)(value ? 1 : 0); }
+    public bool Hidden { readonly get => hidden != 0; set => hidden = (byte)(value ? 1 : 0); }
+}
+
 /// <summary>Makes the entity the camera: Step centres the view on it,
 /// turned with it, at this zoom. The first current one wins.</summary>
 [StructLayout(LayoutKind.Sequential)]

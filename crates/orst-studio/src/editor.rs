@@ -12,7 +12,8 @@ use crate::project::{Language, Project};
 use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
 use crate::scripts::{self, BuildResult, ScriptHost, ScriptProject, Scripts, Sources};
 use orst::components::{
-    read, write, Name, SpriteRenderer, Transform, NAME, SPRITE_RENDERER, TRANSFORM,
+    read, write, Name, SpriteRenderer, TilemapRenderer, Transform, NAME, SPRITE_RENDERER,
+    TILEMAP_RENDERER, TRANSFORM,
 };
 use orst::ecs::Entity;
 use orst::scene_file::Assets;
@@ -511,15 +512,40 @@ impl Editor {
         }
     }
 
-    /// An image dropped into the scene becomes a sprite there
+    /// An image dropped into the scene becomes a sprite there, a Tiled map
+    /// (.tmj) an entity that draws it
     pub fn drop_asset(&mut self, path: &str, at: orst::Vec2) -> Result<(), String> {
-        if !is_image(path) {
-            return Err(format!("{path}: only images can be put into the scene"));
+        let map = path.to_ascii_lowercase().ends_with(".tmj");
+        if !is_image(path) && !map {
+            return Err(format!(
+                "{path}: only images and maps can be put into the scene"
+            ));
         }
         let Ok(view) = &mut self.scene else {
             return Err("no scene view".into());
         };
         let engine = &mut view.engine;
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let name = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+        if map {
+            let map = self
+                .project
+                .assets
+                .load(engine, FieldType::Tilemap, &path.into())?;
+            self.history.record(&engine.world);
+            self.history.close();
+            let e = engine.world.spawn();
+            write(&mut engine.world, e, NAME, &Name::new(name));
+            write(&mut engine.world, e, TRANSFORM, &Transform::default());
+            let r = TilemapRenderer {
+                map,
+                ..Default::default()
+            };
+            write(&mut engine.world, e, TILEMAP_RENDERER, &r);
+            self.dirty = true;
+            self.select(Some(e));
+            return Ok(());
+        }
         let texture = self
             .project
             .assets
@@ -528,8 +554,6 @@ impl Editor {
         self.history.record(&engine.world);
         self.history.close();
         let e = engine.world.spawn();
-        let name = path.rsplit('/').next().unwrap_or(path);
-        let name = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
         write(&mut engine.world, e, NAME, &Name::new(name));
         let t = Transform {
             pos: at,

@@ -162,6 +162,11 @@ struct ParticleEmitter : OrstParticleEmitter {
 struct Camera2D : OrstCamera2D {
     constexpr Camera2D(float zoom = 1.0f) : OrstCamera2D{zoom, 1, {0, 0, 0}} {}
 };
+/// Draws a tile map (see OrstTilemapRenderer)
+struct TilemapRenderer : OrstTilemapRenderer {
+    constexpr TilemapRenderer(uint32_t map = 0, int32_t layer = 0)
+        : OrstTilemapRenderer{map, layer, {255, 255, 255, 255}, 0, 0, {0, 0}} {}
+};
 /// What an entity is called (see OrstName)
 struct Name : OrstName {
     Name() : OrstName{} {}
@@ -206,6 +211,8 @@ template <>
 struct ComponentName<Camera2D> { static constexpr const char *value = "Camera2D"; };
 template <>
 struct ComponentName<ParticleEmitter> { static constexpr const char *value = "ParticleEmitter"; };
+template <>
+struct ComponentName<TilemapRenderer> { static constexpr const char *value = "TilemapRenderer"; };
 
 enum class Transition : int32_t { Cut = ORST_TRANSITION_CUT, Fade = ORST_TRANSITION_FADE, Wipe = ORST_TRANSITION_WIPE };
 enum class Space : int32_t { World = ORST_SPACE_WORLD, Screen = ORST_SPACE_SCREEN };

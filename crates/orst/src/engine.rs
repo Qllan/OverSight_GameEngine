@@ -641,6 +641,24 @@ impl Engine {
             };
             self.draw_sprite(s.texture, &sprite);
         }
+        use crate::components::{TilemapRenderer, TILEMAP_RENDERER};
+        for ent in self.world.query(&[TILEMAP_RENDERER]) {
+            let Some(r) = read::<TilemapRenderer>(&self.world, ent, TILEMAP_RENDERER) else {
+                continue;
+            };
+            let Some(map) = self.tilemaps.get(r.map).filter(|_| r.hidden == 0) else {
+                continue;
+            };
+            for i in 0..map.layers.len() {
+                let opts = LayerDraw {
+                    layer: r.layer + i as i32,
+                    y_sort: r.y_sort != 0,
+                    tint: r.tint,
+                    ..LayerDraw::default()
+                };
+                map.draw_layer(&mut self.renderer, i, &opts);
+            }
+        }
         for (&ent, em) in &self.entity_emitters {
             if self.world.alive(ent) {
                 let src = particle_src(&self.textures, &em.config);
@@ -1838,6 +1856,30 @@ mod tests {
         assert_eq!(e.pixel(1, 1), Some(BLUE));
         assert_eq!(e.pixel(6, 2), Some(RED));
         assert!(e.load_tilemap("missing.tmj").is_err());
+
+        // The same map on an entity, wherever the entity is
+        use crate::components::{write, TilemapRenderer, Transform, TILEMAP_RENDERER, TRANSFORM};
+        let ent = e.world.spawn();
+        let far = Transform {
+            pos: Vec2::new(100.0, 100.0),
+            ..Transform::default()
+        };
+        write(&mut e.world, ent, TRANSFORM, &far);
+        let mut r = TilemapRenderer {
+            map: id,
+            ..TilemapRenderer::default()
+        };
+        write(&mut e.world, ent, TILEMAP_RENDERER, &r);
+        e.begin_frame(Color::BLACK);
+        e.draw_entities();
+        e.end_frame();
+        assert_eq!((e.pixel(1, 1), e.pixel(6, 2)), (Some(BLUE), Some(RED)));
+        r.hidden = 1;
+        write(&mut e.world, ent, TILEMAP_RENDERER, &r);
+        e.begin_frame(Color::BLACK);
+        e.draw_entities();
+        e.end_frame();
+        assert_eq!(e.pixel(1, 1), Some(Color::BLACK));
     }
 
     #[test]
