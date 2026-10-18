@@ -1,0 +1,246 @@
+{
+  "orst_scene": 1,
+  "entities": [
+    {
+      "name": "Map",
+      "components": {
+        "Transform": {},
+        "TilemapRenderer": {
+          "map": "Level.tmj",
+          "layer": -10
+        }
+      },
+      "id": 1
+    },
+    {
+      "name": "Rules",
+      "components": {
+        "Score": {
+          "ToWin": 11
+        },
+        "Lighting": {
+          "Ambient": 0.35
+        }
+      },
+      "id": 2
+    },
+    {
+      "name": "Player",
+      "components": {
+        "Transform": {
+          "pos": [
+            56,
+            136
+          ]
+        },
+        "SpriteRenderer": {
+          "texture": "art/hero.png",
+          "origin": [
+            8,
+            8
+          ],
+          "layer": 3
+        },
+        "SpriteAnimator": {
+          "frame_w": 16,
+          "frame_h": 16,
+          "first": 0,
+          "count": 4,
+          "fps": 6
+        },
+        "Velocity": {},
+        "Body": {
+          "bounds": [
+            -5,
+            -4,
+            10,
+            11
+          ],
+          "tilemap": "Level.tmj"
+        },
+        "Collider": {
+          "kind": "Box",
+          "size": [
+            10,
+            12
+          ]
+        },
+        "PlayerMove": {
+          "Speed": 100
+        },
+        "Camera2D": {
+          "zoom": 3,
+          "current": true
+        },
+        "Light": {
+          "color": "#ffffffff",
+          "intensity": 0.6,
+          "radius": 70
+        }
+      },
+      "id": 3
+    },
+    {
+      "prefab": "Prefabs/Coin.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            88,
+            40
+          ]
+        }
+      },
+      "id": 4
+    },
+    {
+      "prefab": "Prefabs/Coin.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            200,
+            56
+          ]
+        }
+      },
+      "id": 5
+    },
+    {
+      "prefab": "Prefabs/Coin.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            264,
+            104
+          ]
+        }
+      },
+      "id": 6
+    },
+    {
+      "prefab": "Prefabs/Coin.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            360,
+            200
+          ]
+        }
+      },
+      "id": 7
+    },
+    {
+      "prefab": "Prefabs/Coin.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            440,
+            136
+          ]
+        }
+      },
+      "id": 8
+    },
+    {
+      "prefab": "Prefabs/Coin.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            120,
+            232
+          ]
+        }
+      },
+      "id": 9
+    },
+    {
+      "name": "Big coin",
+      "prefab": "Prefabs/Coin.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            376,
+            40
+          ],
+          "scale": [
+            1.6,
+            1.6
+          ]
+        },
+        "Coin": {
+          "Value": 5
+        },
+        "Light": {
+          "radius": 60
+        }
+      },
+      "id": 10
+    },
+    {
+      "prefab": "Prefabs/Torch.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            232,
+            120
+          ]
+        }
+      },
+      "id": 11
+    },
+    {
+      "prefab": "Prefabs/Torch.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            248,
+            152
+          ]
+        }
+      },
+      "id": 12
+    },
+    {
+      "prefab": "Prefabs/Torch.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            40,
+            40
+          ]
+        }
+      },
+      "id": 13
+    },
+    {
+      "prefab": "Prefabs/Torch.prefab",
+      "components": {
+        "Transform": {
+          "pos": [
+            440,
+            248
+          ]
+        }
+      },
+      "id": 14
+    },
+    {
+      "name": "Lamp",
+      "prefab": "Prefabs/Torch.prefab",
+      "removed": [
+        "ParticleEmitter"
+      ],
+      "components": {
+        "Transform": {
+          "pos": [
+            120,
+            184
+          ]
+        },
+        "Light": {
+          "color": "#a0c8ffff"
+        }
+      },
+      "id": 15
+    }
+  ]
+}

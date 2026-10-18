@@ -21,3 +21,6 @@ default = []
 # Enabled by maturin (see pyproject.toml). Left off for `cargo test`,
 # which needs to link against libpython.
 extension-module = ["pyo3/extension-module"]
+
+[workspace]
+members = [".", "crates/orst", "crates/orst-studio"]

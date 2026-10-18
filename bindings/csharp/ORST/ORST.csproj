@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- ORST for C#: P/Invoke over the Rust-built orst library.
+       Build the library first (cargo build -release -p orst); it is
+       copied next to your game from OrstLibDir. -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ORST</RootNamespace>
+    <!-- Not ORST.dll: on Windows that name would collide with the
+         native orst.dll in the same folder -->
+    <AssemblyName>ORST.Net</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <OrstLibDir Condition="'$(OrstLibDir)' == ''">$(MSBuildThisFileDirectory)../../../target/release/</OrstLibDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The script host of ORST Studio wraps the studio's own engine -->
+    <InternalsVisibleTo Include="ORST.Scripting" />
+  </ItemGroup>
+  <!-- NuGet package (dotnet pack; crates/orst/sdk/package.py does it
+       for the SDK): the binding plus the native library under runtimes/,
+       which .NET loads on its own -->
+  <PropertyGroup>
+    <PackageId>ORST.Net</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>ORST</Authors>
+    <Description>ORST Game Engine: a 2D game engine for C#, with the native library inside.</Description>
+    <PackageLicenseExpression>MIT OR Apache-2.0</PackageLicenseExpression>
+    <PackageTags>gamedev;2d;engine</PackageTags>
+    <RepositoryUrl>https://github.com/Qllan/OverSight_GameEngine</RepositoryUrl>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(OrstLibDir)orst.dll" Condition="Exists('$(OrstLibDir)orst.dll')" CopyToOutputDirectory="PreserveNewest" Link="orst.dll" Pack="true" PackagePath="runtimes/win-x64/native/" />
+    <None Include="$(OrstLibDir)liborst.so" Condition="Exists('$(OrstLibDir)liborst.so')" CopyToOutputDirectory="PreserveNewest" Link="liborst.so" Pack="true" PackagePath="runtimes/linux-x64/native/" />
+    <None Include="$(OrstLibDir)liborst.dylib" Condition="Exists('$(OrstLibDir)liborst.dylib')" CopyToOutputDirectory="PreserveNewest" Link="liborst.dylib" Pack="true" PackagePath="runtimes/osx/native/" />
+  </ItemGroup>
+</Project>

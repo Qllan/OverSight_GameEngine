@@ -1,0 +1,178 @@
+name: ORST
+
+on:
+  push:
+    branches: [main, oversight-2d]
+  pull_request:
+    paths:
+      - "crates/orst/**"
+      - "crates/orst-studio/**"
+      - "bindings/**"
+      - "samples/**"
+      - ".github/workflows/orst.yml"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Rust tests (GPU tests on the WARP software adapter)
+        env:
+          ORST_REQUIRE_GPU: "1"
+        run: cargo test -p orst
+
+      - name: Build orst.dll
+        run: cargo build --release -p orst
+
+      - name: ORST Studio tests and ORST.exe
+        env:
+          ORST_REQUIRE_DOTNET: "1"
+          ORST_REQUIRE_CMAKE: "1"
+        run: |
+          cargo test -p orst-studio
+          cargo build --release -p orst-studio
+          dotnet build bindings/csharp/Scripting -c Release -nologo -o target/release/Scripting
+          New-Item -ItemType Directory -Force target/release/include | Out-Null
+          Copy-Item crates/orst/include/orst.h, crates/orst/include/orst.hpp, crates/orst/include/orst_script.hpp target/release/include/
+
+      - name: C and C++ smoke tests (MSVC)
+        run: |
+          cmake -S bindings/cpp -B build/bindings
+          cmake --build build/bindings --config Release
+          ctest --test-dir build/bindings -C Release --output-on-failure
+
+      - name: C++ samples, scripted runs without a window
+        run: |
+          cmake -S samples/cpp -B build/samples
+          cmake --build build/samples --config Release
+          New-Item -ItemType Directory -Force shots | Out-Null
+          foreach ($s in "topdown", "platformer", "isometric") {
+            & "build/samples/Release/$s.exe" --headless 200 --screenshot "shots/cpp_$s.png"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            & "build/samples/Release/$s.exe" --headless 200 --gpu --screenshot "shots/gpu_$s.png"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: C# smoke test
+        run: dotnet run --project bindings/csharp/Smoke -c Release
+
+      - name: C# samples, scripted runs without a window
+        run: |
+          foreach ($p in "TopDown", "Platformer", "Isometric") {
+            dotnet build "samples/csharp/$p" -c Release -nologo
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+            & "samples/csharp/$p/bin/Release/net8.0/$p.exe" --headless 200 --screenshot "shots/cs_$($p.ToLower()).png"
+            if ($LASTEXITCODE -ne 0) { exit 1 }
+          }
+
+      - name: C++ and C# draw the same frames
+        run: |
+          foreach ($s in "topdown", "platformer", "isometric") {
+            $a = (Get-FileHash "shots/cpp_$s.png").Hash
+            $b = (Get-FileHash "shots/cs_$s.png").Hash
+            if ($a -ne $b) { Write-Error "$s differs between C++ and C#"; exit 1 }
+          }
+
+      - name: Package the SDK and build a game against it
+        run: |
+          python crates/orst/sdk/package.py --out dist
+          $sdk = (Get-ChildItem dist -Directory -Filter "orst-sdk-*").FullName
+          cmake -S crates/orst/sdk/test -B build/sdk -DCMAKE_PREFIX_PATH="$sdk"
+          cmake --build build/sdk --config Release
+          ctest --test-dir build/sdk -C Release --output-on-failure
+          dotnet run --project crates/orst/sdk/test-csharp -c Release -p:OrstSdk="$sdk"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: New games from the SDK templates build
+        run: |
+          $sdk = (Get-ChildItem dist -Directory -Filter "orst-sdk-*").FullName
+          New-Item -ItemType Directory -Force build/games | Out-Null
+          Set-Location build/games
+          & "$sdk/new-game.cmd" CoinCpp cpp
+          & "$sdk/new-game.cmd" CoinCs
+          cmake -S CoinCpp -B CoinCpp/build
+          cmake --build CoinCpp/build --config Release
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          if (-not (Test-Path CoinCpp/build/Release/orst.dll)) { Write-Error "orst.dll is not next to the game" }
+          dotnet build CoinCs -c Release -nologo
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orst-sdk-windows-x64
+          path: dist/*.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: orst-studio-windows-x64
+          path: |
+            target/release/ORST.exe
+            target/release/Scripting/
+            target/release/include/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sample-screenshots
+          path: shots
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: System libraries (sound, gamepads, software Vulkan for GPU tests)
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev mesa-vulkan-drivers
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Format
+        run: cargo fmt -p orst -p orst-studio --check
+
+      - name: Clippy
+        run: cargo clippy -p orst -p orst-studio --all-targets -- -D warnings
+
+      - name: Rust tests
+        env:
+          ORST_REQUIRE_GPU: "1"
+          ORST_REQUIRE_DOTNET: "1"
+          ORST_REQUIRE_CMAKE: "1"
+        run: cargo test -p orst -p orst-studio
+
+      - name: Package the SDK and build a game against it
+        run: |
+          cargo build --release -p orst
+          python3 crates/orst/sdk/package.py --out dist
+          sdk=$(echo $PWD/dist/orst-sdk-*/)
+          cmake -S crates/orst/sdk/test -B build/sdk -DCMAKE_PREFIX_PATH="$sdk"
+          cmake --build build/sdk
+          ctest --test-dir build/sdk --output-on-failure
+          dotnet run --project crates/orst/sdk/test-csharp -c Release -p:OrstSdk="$sdk"
+
+      - name: New games from the SDK templates build
+        run: |
+          sdk=$(cd dist/orst-sdk-*/ && pwd)
+          mkdir -p build/games && cd build/games
+          "$sdk/new-game.sh" CoinCpp cpp
+          "$sdk/new-game.sh" CoinCs
+          cmake -S CoinCpp -B CoinCpp/build
+          cmake --build CoinCpp/build
+          test -f CoinCpp/build/liborst.so
+          dotnet build CoinCs -c Release -nologo

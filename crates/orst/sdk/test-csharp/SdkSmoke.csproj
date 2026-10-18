@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The C# smoke test against the ORST.Net package from the SDK, the
+       way a game uses it:
+       dotnet run -project crates/orst/sdk/test-csharp -p:OrstSdk=<sdk> -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Only the SDK folder, so "*" can only mean the packed version -->
+    <RestoreSources>$(OrstSdk)/nuget</RestoreSources>
+    <!-- Not the user's cache: a re-packed 0.1.0 must not be served stale -->
+    <RestorePackagesPath>$(MSBuildThisFileDirectory)obj/packages</RestorePackagesPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="ORST.Net" Version="*" />
+    <Compile Include="../../../../bindings/csharp/Smoke/Program.cs" Link="Program.cs" />
+  </ItemGroup>
+</Project>

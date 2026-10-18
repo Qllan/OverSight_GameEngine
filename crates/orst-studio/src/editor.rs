@@ -1,0 +1,2020 @@
+//! The editor with a project open: menu and toolbar on top, Hierarchy on
+//! the left, Inspector on the right, Project and Console below, Scene and
+//! Game in the middle
+
+use crate::console::{Console, Level};
+use crate::egui;
+use crate::gizmo::Tool;
+use crate::history::History;
+use crate::inspector::{self, Action};
+use crate::play::{self, Play};
+use crate::prefabs;
+use crate::project::{Language, Project};
+use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
+use crate::scripts::{self, BuildResult, ScriptHost, ScriptProject, Scripts, Sources};
+use crate::sprite_anim::AnimEdit;
+use crate::tiles::{self, TilePaint};
+use orst::components::{
+    read, write, Name, SpriteRenderer, TilemapRenderer, Transform, NAME, SPRITE_RENDERER,
+    TILEMAP_RENDERER, TRANSFORM,
+};
+use orst::ecs::Entity;
+use orst::scene_file::Assets;
+use orst::schema::FieldType;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Center {
+    Scene,
+    Game,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bottom {
+    Project,
+    Console,
+}
+
+pub struct Editor {
+    pub project: Project,
+    pub console: Console,
+    pub center: Center,
+    pub bottom: Bottom,
+    /// The asset picked in the Project window
+    pub selected_asset: Option<String>,
+    /// The edited scene; Err when the engine could not start
+    pub scene: Result<SceneView, String>,
+    pub selected: Option<Entity>,
+    pub history: History,
+    /// The open scene's file under Assets; None until it is first saved
+    pub scene_path: Option<String>,
+    /// Changed since it was opened or saved
+    pub dirty: bool,
+    /// Unsaved changes stand in the way of this; the user is asked
+    ask_save: Option<After>,
+    /// The Save scene as window: the name typed, and what comes after
+    save_as: Option<(String, Option<After>)>,
+    /// The New script window: the name typed
+    new_script: Option<String>,
+    /// The Build game dialog: the folder, and whether to run the game
+    build_game: Option<(String, bool)>,
+    /// A game being built, and whether to run it then
+    exporting: Option<(mpsc::Receiver<Exported>, bool)>,
+    /// Tile painting on the selected map
+    pub tiles: TilePaint,
+    /// The sprite animation editor
+    anim: AnimEdit,
+    /// The New tilemap dialog
+    new_map: Option<NewMap>,
+    want_close: bool,
+    title: String,
+    /// The game is running in the editor; Stop throws its changes away
+    pub play: Option<Play>,
+    pub scripts: ScriptState,
+}
+
+/// Scripts in C# or C++: built when a script under Assets changes,
+/// loaded in place when the build is good (after Stop, while playing)
+#[derive(Default)]
+pub struct ScriptState {
+    pub host: Option<Box<dyn ScriptHost>>,
+    project: Option<ScriptProject>,
+    /// The sources of the build loaded or running now
+    sources: Sources,
+    building: Option<mpsc::Receiver<BuildResult>>,
+    /// A good build waits for Stop
+    pending: bool,
+    next_check: Option<Instant>,
+}
+
+/// What the New tilemap dialog asks for
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewMap {
+    /// Under Assets, without .tmj
+    pub name: String,
+    /// The tileset image, under Assets
+    pub image: String,
+    pub tile: [u32; 2],
+    pub size: [u32; 2],
+}
+
+impl Default for NewMap {
+    fn default() -> Self {
+        NewMap {
+            name: String::new(),
+            image: String::new(),
+            tile: [16, 16],
+            size: [40, 25],
+        }
+    }
+}
+
+/// A built game's exe, or what stopped the build
+type Exported = Result<PathBuf, Vec<(Level, String)>>;
+
+/// What waits for unsaved changes to be saved or dropped
+#[derive(Debug, Clone, PartialEq)]
+enum After {
+    New,
+    Open(String),
+    Close,
+}
+
+impl Editor {
+    pub fn new(
+        project: Project,
+        mut console: Console,
+        wgpu: Option<&eframe::egui_wgpu::RenderState>,
+    ) -> Editor {
+        let scene = SceneView::new(wgpu);
+        match &scene {
+            Ok(view) => console.info(format!("Scene view on {}", view.engine.renderer_name())),
+            Err(e) => console.error(format!("The scene view could not start: {e}")),
+        }
+        Editor {
+            project,
+            console,
+            center: Center::Scene,
+            bottom: Bottom::Project,
+            selected_asset: None,
+            scene,
+            selected: None,
+            history: History::default(),
+            scene_path: None,
+            dirty: false,
+            ask_save: None,
+            save_as: None,
+            new_script: None,
+            build_game: None,
+            exporting: None,
+            tiles: TilePaint::default(),
+            anim: AnimEdit::default(),
+            new_map: None,
+            want_close: false,
+            title: String::new(),
+            play: None,
+            scripts: ScriptState::default(),
+        }
+        .with_scripts()
+        .with_main_scene()
+    }
+
+    /// Start the script host and load the scripts before the scene, which
+    /// may hold their components; a build out of date is made again first
+    fn with_scripts(mut self) -> Editor {
+        // .NET is one per process: editor tests must not take it from the
+        // scripts tests running beside them
+        if cfg!(test) {
+            return self;
+        }
+        let Ok(view) = &mut self.scene else {
+            return self;
+        };
+        let language = self.project.file.language;
+        let host = match language {
+            Language::CSharp => {
+                let Some(host) = Scripts::host_dir() else {
+                    self.console
+                        .warn("C# scripts are off: ORST.Scripting was not found next to ORST.exe");
+                    return self;
+                };
+                match Scripts::start(&host, &mut view.engine) {
+                    Ok(s) => self.scripts.host = Some(Box::new(s)),
+                    Err(e) => {
+                        self.console.warn(format!("C# scripts are off: {e}"));
+                        return self;
+                    }
+                }
+                host
+            }
+            Language::Cpp => {
+                let Some(include) = crate::native::include_dir() else {
+                    self.console.warn(
+                        "C++ scripts are off: orst_script.hpp was not found next to ORST.exe",
+                    );
+                    return self;
+                };
+                let loaded = self.project.root.join("Library/Scripts/loaded");
+                let native = crate::native::NativeScripts::new(&mut view.engine, loaded);
+                self.scripts.host = Some(Box::new(native));
+                include
+            }
+        };
+        let project = ScriptProject {
+            root: self.project.root.clone(),
+            language,
+            host,
+        };
+        if let Err(e) = project.write_project() {
+            self.console.error(e);
+        }
+        let sources = project.sources();
+        self.scripts.sources = sources;
+        self.scripts.project = Some(project.clone());
+        if sources.count > 0 {
+            if project.built() != Some(sources) || !project.library().is_file() {
+                self.console.info("Building scripts");
+                let result = project.build();
+                self.build_done(result);
+            } else {
+                self.load_scripts();
+            }
+        }
+        self
+    }
+
+    /// Report a build; load it when it is good
+    fn build_done(&mut self, result: BuildResult) {
+        // Files changed during the build make the watcher build again
+        self.scripts.sources = result.sources;
+        let errors = result
+            .messages
+            .iter()
+            .filter(|(l, _)| *l == crate::console::Level::Error)
+            .count();
+        for (level, text) in result.messages {
+            self.console.log(level, text);
+        }
+        if !result.ok {
+            let s = if errors == 1 { "" } else { "s" };
+            self.console.error(format!(
+                "Scripts did not build ({errors} error{s}); the last good build stays"
+            ));
+        } else if self.play.is_some() {
+            self.scripts.pending = true;
+            self.console.info("Scripts built; they load after Stop");
+        } else {
+            self.load_scripts();
+        }
+    }
+
+    /// Load the last good build in place of the scripts before. When a
+    /// component's fields changed, undo steps from before cannot be put
+    /// back and are dropped.
+    fn load_scripts(&mut self) {
+        self.scripts.pending = false;
+        let (Some(host), Some(project), Ok(view)) = (
+            &mut self.scripts.host,
+            &self.scripts.project,
+            &mut self.scene,
+        ) else {
+            return;
+        };
+        let before = layouts(&view.engine.world);
+        match host.load(&project.library()) {
+            Ok(n) => self.console.info(format!(
+                "Scripts loaded: {n} behaviour{}",
+                if n == 1 { "" } else { "s" }
+            )),
+            Err(e) => self.console.error(format!("Scripts did not load: {e}")),
+        }
+        if layouts(&view.engine.world) != before && self.history.can_undo() {
+            self.history = History::default();
+            self.console
+                .info("Script fields changed: the undo history was cleared");
+        }
+    }
+
+    /// Build again when a .cs file changed, at most once a second
+    fn watch_scripts(&mut self, ctx: &egui::Context) {
+        for (level, text) in scripts::take_log() {
+            self.console.log(level, text);
+        }
+        if let Some(rx) = &self.scripts.building {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.scripts.building = None;
+                    self.build_done(result);
+                }
+                Err(mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(Duration::from_millis(200))
+                }
+                Err(mpsc::TryRecvError::Disconnected) => self.scripts.building = None,
+            }
+        }
+        if self.scripts.pending && self.play.is_none() {
+            self.load_scripts();
+        }
+        let now = Instant::now();
+        if let Some(t) = self.scripts.next_check.filter(|&t| now < t) {
+            ctx.request_repaint_after(t - now);
+            return;
+        }
+        self.scripts.next_check = Some(now + Duration::from_secs(1));
+        ctx.request_repaint_after(Duration::from_secs(1));
+        let Some(project) = &self.scripts.project else {
+            return;
+        };
+        // A game build makes the scripts itself
+        if self.scripts.building.is_some() || self.exporting.is_some() {
+            return;
+        }
+        let sources = project.sources();
+        if sources == self.scripts.sources {
+            return;
+        }
+        self.scripts.sources = sources;
+        if sources.count == 0 {
+            if let Some(host) = &mut self.scripts.host {
+                host.unload();
+            }
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let project = project.clone();
+        let repaint = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(project.build());
+            repaint.request_repaint();
+        });
+        self.scripts.building = Some(rx);
+    }
+
+    fn with_main_scene(mut self) -> Editor {
+        if let Some(path) = self.project.file.main_scene.clone() {
+            if let Err(e) = self.open_scene(&path) {
+                self.console.error(e);
+            }
+        }
+        self
+    }
+
+    /// Replace the edited scene with the file `path` under Assets
+    pub fn open_scene(&mut self, path: &str) -> Result<(), String> {
+        let file = self.project.assets.file(path);
+        let text = std::fs::read_to_string(&file).map_err(|e| format!("{path}: {e}"))?;
+        let Ok(view) = &mut self.scene else {
+            return Err("no scene view".into());
+        };
+        let engine = &mut view.engine;
+        let mut before = Vec::new();
+        engine.world.save(&mut before);
+        clear_world(&mut engine.world);
+        match engine.load_scene(&text, &mut self.project.assets) {
+            Ok(loaded) => {
+                for w in loaded.warnings {
+                    self.console.warn(format!("{path}: {w}"));
+                }
+                self.console
+                    .info(format!("Opened {path}: {} entities", loaded.entities.len()));
+            }
+            Err(e) => {
+                let _ = engine.world.load(&before);
+                return Err(format!("{path}: {e}"));
+            }
+        }
+        self.reset_scene(Some(path.to_string()));
+        Ok(())
+    }
+
+    /// An empty scene, not yet saved anywhere
+    pub fn new_scene(&mut self) {
+        if let Ok(view) = &mut self.scene {
+            clear_world(&mut view.engine.world);
+        }
+        self.reset_scene(None);
+    }
+
+    fn reset_scene(&mut self, path: Option<String>) {
+        self.scene_path = path;
+        self.history = History::default();
+        self.selected = None;
+        self.dirty = false;
+    }
+
+    /// Write the scene to `path` under Assets. The first scene saved
+    /// becomes the one the game starts with.
+    pub fn save_scene(&mut self, path: &str) -> Result<(), String> {
+        let Ok(view) = &self.scene else {
+            return Err("no scene view".into());
+        };
+        let engine = &view.engine;
+        let entities = engine.world.query(&[]);
+        let (text, warnings) = engine.save_scene(&entities, &self.project.assets);
+        let file = self.project.assets.file(path);
+        if let Some(dir) = file.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("{path}: {e}"))?;
+        }
+        std::fs::write(&file, text).map_err(|e| format!("{path}: {e}"))?;
+        // Painted tiles go into their map files
+        if let Err(e) = self.tiles.save(engine) {
+            self.console.error(e);
+        }
+        for w in warnings {
+            self.console.warn(format!("{path}: {w}"));
+        }
+        self.console.info(format!("Saved {path}"));
+        self.scene_path = Some(path.to_string());
+        self.dirty = false;
+        if self.project.file.main_scene.is_none() {
+            self.project.file.main_scene = Some(path.to_string());
+            self.project.save()?;
+        }
+        // The new file gets its .meta
+        self.rescan();
+        Ok(())
+    }
+
+    /// Run the scene as the game, from how it is now
+    pub fn start_play(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
+        let Ok(view) = &mut self.scene else { return };
+        let history = std::mem::take(&mut self.history);
+        self.play = Some(Play::start(
+            &mut view.engine,
+            history,
+            self.dirty,
+            self.selected,
+        ));
+        if let Some(host) = &mut self.scripts.host {
+            host.begin_play();
+        }
+        self.center = Center::Game;
+        self.console.info("Play");
+    }
+
+    /// Stop the game and put the scene back as it was at Play
+    pub fn stop_play(&mut self) {
+        let (Some(play), Ok(view)) = (self.play.take(), &mut self.scene) else {
+            return;
+        };
+        if let Some(host) = &mut self.scripts.host {
+            host.end_play();
+        }
+        let (restored, history, dirty, selected) = play.stop(&mut view.engine);
+        if let Err(e) = restored {
+            self.console
+                .error(format!("The scene could not be put back: {e}"));
+        }
+        self.history = history;
+        self.dirty = dirty;
+        self.selected = selected;
+        self.center = Center::Scene;
+    }
+
+    /// Save to the scene's own file, or ask for a name the first time
+    fn save(&mut self, then: Option<After>) {
+        if self.play.is_some() {
+            self.console
+                .warn("Stop the game to save: changes made while playing are not kept");
+            return;
+        }
+        match self.scene_path.clone() {
+            Some(path) => match self.save_scene(&path) {
+                Ok(()) => {
+                    if let Some(after) = then {
+                        self.proceed(after);
+                    }
+                }
+                Err(e) => self.console.error(e),
+            },
+            None => self.save_as = Some(("New Scene".into(), then)),
+        }
+    }
+
+    /// Do `after`, asking first when there are unsaved changes
+    fn request(&mut self, after: After) {
+        if self.dirty {
+            self.ask_save = Some(after);
+        } else {
+            self.proceed(after);
+        }
+    }
+
+    fn proceed(&mut self, after: After) {
+        self.stop_play();
+        match after {
+            After::New => self.new_scene(),
+            After::Open(path) => {
+                if let Err(e) = self.open_scene(&path) {
+                    self.console.error(e);
+                }
+            }
+            After::Close => self.want_close = true,
+        }
+    }
+
+    /// A new entity with a Name and a Transform at the middle of the view
+    pub fn create_entity(&mut self) {
+        let Ok(view) = &mut self.scene else { return };
+        let engine = &mut view.engine;
+        self.history.record(engine);
+        self.history.close();
+        let e = engine.world.spawn();
+        let t = Transform {
+            pos: view.camera.center,
+            ..Default::default()
+        };
+        write(&mut engine.world, e, TRANSFORM, &t);
+        write(&mut engine.world, e, NAME, &Name::new("Entity"));
+        self.dirty = true;
+        self.select(Some(e));
+    }
+
+    pub fn delete_selected(&mut self) {
+        if let (Ok(view), Some(e)) = (&mut self.scene, self.selected) {
+            self.history.record(&view.engine);
+            self.history.close();
+            view.engine.world.despawn(e);
+            self.dirty = true;
+        }
+        self.select(None);
+    }
+
+    fn select(&mut self, e: Option<Entity>) {
+        self.selected = e;
+    }
+
+    pub fn scene_event(&mut self, event: SceneEvent) {
+        match event {
+            SceneEvent::Pick(e) => self.select(e),
+            SceneEvent::Transform(e, t) => {
+                let Ok(view) = &mut self.scene else { return };
+                let engine = &mut view.engine;
+                if read::<Transform>(&engine.world, e, TRANSFORM) != Some(t) {
+                    self.history.record(engine);
+                    write(&mut engine.world, e, TRANSFORM, &t);
+                    self.dirty = true;
+                }
+            }
+            SceneEvent::Drop(path, at) => {
+                if let Err(e) = self.drop_asset(&path, at) {
+                    self.console.error(e);
+                }
+            }
+            SceneEvent::Paint(at) => {
+                let Ok(view) = &mut self.scene else { return };
+                let Some(map) = self.selected.and_then(|e| tiles::map_of(&view.engine, e)) else {
+                    return;
+                };
+                // The whole stroke is one undo step
+                self.history.record(&view.engine);
+                if self.tiles.stroke(&mut view.engine, map, at) {
+                    self.dirty = true;
+                }
+            }
+            SceneEvent::PaintEnd => {
+                self.tiles.end_stroke();
+                self.history.close();
+            }
+        }
+    }
+
+    /// An image dropped into the scene becomes a sprite there, a Tiled map
+    /// (.tmj) an entity that draws it
+    pub fn drop_asset(&mut self, path: &str, at: orst::Vec2) -> Result<(), String> {
+        let map = path.to_ascii_lowercase().ends_with(".tmj");
+        let prefab = prefabs::is_prefab(path);
+        if !is_image(path) && !map && !prefab {
+            return Err(format!(
+                "{path}: only images, maps and prefabs can be put into the scene"
+            ));
+        }
+        let Ok(view) = &mut self.scene else {
+            return Err("no scene view".into());
+        };
+        let engine = &mut view.engine;
+        if prefab {
+            self.history.record(engine);
+            self.history.close();
+            let e = prefabs::place(engine, &mut self.project.assets, path, at)?;
+            self.dirty = true;
+            self.select(Some(e));
+            return Ok(());
+        }
+        let name = path.rsplit('/').next().unwrap_or(path);
+        let name = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
+        if map {
+            let map = self
+                .project
+                .assets
+                .load(engine, FieldType::Tilemap, &path.into())?;
+            self.history.record(engine);
+            self.history.close();
+            let e = engine.world.spawn();
+            write(&mut engine.world, e, NAME, &Name::new(name));
+            write(&mut engine.world, e, TRANSFORM, &Transform::default());
+            let r = TilemapRenderer {
+                map,
+                ..Default::default()
+            };
+            write(&mut engine.world, e, TILEMAP_RENDERER, &r);
+            self.dirty = true;
+            self.select(Some(e));
+            return Ok(());
+        }
+        let texture = self
+            .project
+            .assets
+            .load(engine, FieldType::Texture, &path.into())?;
+        let (w, h) = engine.texture_size(texture).unwrap_or((0, 0));
+        self.history.record(engine);
+        self.history.close();
+        let e = engine.world.spawn();
+        write(&mut engine.world, e, NAME, &Name::new(name));
+        let t = Transform {
+            pos: at,
+            ..Default::default()
+        };
+        write(&mut engine.world, e, TRANSFORM, &t);
+        let s = SpriteRenderer {
+            texture,
+            origin: orst::Vec2::new(w as f32 / 2.0, h as f32 / 2.0),
+            ..Default::default()
+        };
+        write(&mut engine.world, e, SPRITE_RENDERER, &s);
+        self.dirty = true;
+        self.select(Some(e));
+        Ok(())
+    }
+
+    /// Undo (or redo) the last change to the scene
+    pub fn undo(&mut self, redo: bool) {
+        let Ok(view) = &mut self.scene else { return };
+        let engine = &mut view.engine;
+        let done = if redo {
+            self.history.redo(engine)
+        } else {
+            self.history.undo(engine)
+        };
+        let world = &engine.world;
+        match done {
+            Ok(changed) => self.dirty |= changed,
+            Err(e) => self.console.error(format!("Undo failed: {e}")),
+        }
+        if self.selected.is_some_and(|e| !world.alive(e)) {
+            self.selected = None;
+        }
+    }
+
+    /// One frame of the editor; `close` asks to go back to the hub
+    pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        _wgpu: Option<&eframe::egui_wgpu::RenderState>,
+        close: &mut bool,
+    ) {
+        egui::Panel::top("menu").show(ui, |ui| {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button("File", |ui| {
+                    if ui.button("New scene").clicked() {
+                        self.request(After::New);
+                    }
+                    if ui.button("Save scene").on_hover_text("Ctrl+S").clicked() {
+                        self.save(None);
+                    }
+                    if ui.button("Save scene as...").clicked() {
+                        let name = self
+                            .scene_path
+                            .as_deref()
+                            .map_or("New Scene", |p| p.trim_end_matches(".scene"))
+                            .to_string();
+                        self.save_as = Some((name, None));
+                    }
+                    ui.separator();
+                    let building = self.exporting.is_some() || self.scripts.building.is_some();
+                    let button = ui.add_enabled(!building, egui::Button::new("Build game..."));
+                    if button.clicked() {
+                        let dir = self.project.root.join(crate::export::DEFAULT_DIR);
+                        self.build_game = Some((dir.display().to_string(), true));
+                    }
+                    ui.separator();
+                    if ui.button("Refresh assets").clicked() {
+                        self.rescan();
+                    }
+                    if ui.button("Close project").clicked() {
+                        self.request(After::Close);
+                    }
+                });
+                ui.menu_button("Edit", |ui| {
+                    if ui
+                        .add_enabled(
+                            self.history.can_undo(),
+                            egui::Button::new("Undo").shortcut_text("Ctrl+Z"),
+                        )
+                        .clicked()
+                    {
+                        self.undo(false);
+                    }
+                    if ui
+                        .add_enabled(
+                            self.history.can_redo(),
+                            egui::Button::new("Redo").shortcut_text("Ctrl+Y"),
+                        )
+                        .clicked()
+                    {
+                        self.undo(true);
+                    }
+                });
+                ui.menu_button("Entity", |ui| {
+                    if ui.button("Create empty").clicked() {
+                        self.create_entity();
+                    }
+                    if ui
+                        .add_enabled(self.selected.is_some(), egui::Button::new("Delete"))
+                        .clicked()
+                    {
+                        self.delete_selected();
+                    }
+                });
+                ui.separator();
+                self.play_buttons(ui);
+                ui.separator();
+                ui.label(&self.project.file.name);
+                ui.weak(self.scene_title());
+            });
+        });
+        egui::Panel::left("hierarchy")
+            .resizable(true)
+            .default_size(220.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong("Hierarchy");
+                    if ui
+                        .small_button("+")
+                        .on_hover_text("Create an empty entity")
+                        .clicked()
+                    {
+                        self.create_entity();
+                    }
+                });
+                ui.separator();
+                self.hierarchy_ui(ui);
+            });
+        egui::Panel::right("inspector")
+            .resizable(true)
+            .default_size(300.0)
+            .show(ui, |ui| {
+                ui.strong("Inspector");
+                ui.separator();
+                if self.selected.is_some() {
+                    self.entity_ui(ui);
+                    return;
+                }
+                match &self.selected_asset {
+                    Some(path) => {
+                        ui.label(path);
+                        if let Some(uid) = self.project.assets.uid(path) {
+                            ui.weak(format!("uid {uid}"));
+                        }
+                    }
+                    None => {
+                        ui.weak("Nothing selected");
+                    }
+                }
+            });
+        egui::Panel::bottom("bottom")
+            .resizable(true)
+            .default_size(200.0)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.bottom, Bottom::Project, "Project");
+                    ui.selectable_value(&mut self.bottom, Bottom::Console, "Console");
+                });
+                ui.separator();
+                match self.bottom {
+                    Bottom::Project => self.project_ui(ui),
+                    Bottom::Console => self.console.ui(ui),
+                }
+            });
+        egui::CentralPanel::default_margins().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.center, Center::Scene, "Scene");
+                ui.selectable_value(&mut self.center, Center::Game, "Game");
+                if let (Center::Scene, Ok(view)) = (self.center, &mut self.scene) {
+                    ui.separator();
+                    for (tool, name, key) in [
+                        (Tool::Move, "Move", "W"),
+                        (Tool::Rotate, "Rotate", "E"),
+                        (Tool::Scale, "Scale", "R"),
+                    ] {
+                        ui.selectable_value(&mut view.tool, tool, name)
+                            .on_hover_text(format!("{key}; hold Ctrl to snap"));
+                    }
+                    ui.separator();
+                    let p = &mut view.preview;
+                    ui.toggle_value(&mut p.particles, "Particles")
+                        .on_hover_text("Run particle emitters without Play");
+                    ui.toggle_value(&mut p.light, "Light")
+                        .on_hover_text("Light the scene with its Light entities");
+                    if p.light {
+                        ui.add(
+                            egui::Slider::new(&mut p.ambient, 0.0..=1.0)
+                                .text("Ambient")
+                                .max_decimals(2),
+                        );
+                    }
+                }
+            });
+            ui.separator();
+            match (self.center, &mut self.scene) {
+                (Center::Scene, Ok(view)) => {
+                    let map = self
+                        .selected
+                        .filter(|_| self.play.is_none())
+                        .and_then(|e| tiles::map_of(&view.engine, e));
+                    if map.is_some() {
+                        let b = ui.input(|i| i.key_pressed(egui::Key::B) && i.modifiers.is_none());
+                        if b && !ui.ctx().egui_wants_keyboard_input() {
+                            self.tiles.on = !self.tiles.on;
+                        }
+                    }
+                    view.painting = self.tiles.on && map.is_some();
+                    view.playing = self.play.is_some();
+                    view.brush = map
+                        .zip(view.hover)
+                        .and_then(|(map, at)| tiles::cell_rect(&view.engine, map, at));
+                    let events = view.ui(ui, self.selected);
+                    for event in events {
+                        self.scene_event(event);
+                    }
+                }
+                (Center::Scene, Err(e)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, e.as_str());
+                }
+                (Center::Game, Ok(view)) => {
+                    let camera = match &self.play {
+                        Some(p) => p.camera,
+                        None => play::game_camera(&mut view.engine),
+                    };
+                    view.game_ui(ui, camera, self.play.is_some());
+                }
+                (Center::Game, Err(e)) => {
+                    ui.colored_label(ui.visuals().error_fg_color, e.as_str());
+                }
+            }
+        });
+        self.watch_scripts(ui.ctx());
+        self.watch_export(ui.ctx());
+        self.run_game(ui.ctx());
+        let save = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::S);
+        if ui.input_mut(|i| i.consume_shortcut(&save)) {
+            self.save(None);
+        }
+        let typing = ui.ctx().egui_wants_keyboard_input();
+        if !typing {
+            let (undo, redo, delete) = ui.input_mut(|i| {
+                let z = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Z);
+                let y = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::Y);
+                let shift_z = egui::KeyboardShortcut::new(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::Z,
+                );
+                let redo = i.consume_shortcut(&y) || i.consume_shortcut(&shift_z);
+                (
+                    i.consume_shortcut(&z),
+                    redo,
+                    i.key_pressed(egui::Key::Delete),
+                )
+            });
+            if undo || redo {
+                self.undo(redo);
+            }
+            if delete && self.selected.is_some() {
+                self.delete_selected();
+            }
+        }
+        // A drag or a field being typed in is one step of undo
+        let busy = ui.input(|i| i.pointer.any_down()) || ui.memory(|m| m.focused().is_some());
+        if !busy {
+            self.history.close();
+        }
+        self.dialogs(ui.ctx());
+        let title = format!(
+            "{} - {} - ORST Studio",
+            self.scene_title(),
+            self.project.file.name
+        );
+        if title != self.title {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
+        *close |= std::mem::take(&mut self.want_close);
+    }
+
+    fn play_buttons(&mut self, ui: &mut egui::Ui) {
+        let playing = self.play.is_some();
+        let label = if playing { "Stop" } else { "Play" };
+        let play = egui::Button::new(label).selected(playing);
+        if ui.add(play).on_hover_text("Ctrl+P").clicked() {
+            if playing {
+                self.stop_play();
+            } else {
+                self.start_play();
+            }
+        }
+        let paused = self.play.as_ref().is_some_and(|p| p.paused);
+        if ui
+            .add_enabled(playing, egui::Button::new("Pause").selected(paused))
+            .clicked()
+        {
+            if let Some(p) = &mut self.play {
+                p.paused = !p.paused;
+            }
+        }
+        if ui
+            .add_enabled(playing, egui::Button::new("Step"))
+            .on_hover_text("One tick, then pause")
+            .clicked()
+        {
+            if let Some(p) = &mut self.play {
+                p.step_once();
+            }
+        }
+        if self.scripts.building.is_some() {
+            ui.spinner();
+            ui.weak("Building scripts");
+        }
+        if let Some(p) = &self.play {
+            ui.colored_label(
+                ui.visuals().warn_fg_color,
+                format!("Playing, tick {}", p.ticks),
+            );
+        }
+    }
+
+    /// Run the ticks of this frame while playing; Ctrl+P starts and stops
+    fn run_game(&mut self, ctx: &egui::Context) {
+        let toggle = egui::KeyboardShortcut::new(egui::Modifiers::COMMAND, egui::Key::P);
+        if ctx.input_mut(|i| i.consume_shortcut(&toggle)) {
+            if self.play.is_some() {
+                self.stop_play();
+            } else {
+                self.start_play();
+            }
+        }
+        if let (Some(p), Ok(view)) = (&mut self.play, &mut self.scene) {
+            let dt = ctx.input(|i| i.stable_dt);
+            let scripts = self.scripts.host.as_deref_mut();
+            p.advance(&mut view.engine, scripts.map(|s| s as _), dt);
+            if !p.paused {
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// "Level 1.scene", with a star while there are unsaved changes
+    fn scene_title(&self) -> String {
+        let name = self
+            .scene_path
+            .as_deref()
+            .map_or("Untitled", |p| p.rsplit('/').next().unwrap_or(p));
+        format!("{name}{}", if self.dirty { "*" } else { "" })
+    }
+
+    fn dialogs(&mut self, ctx: &egui::Context) {
+        if let Some(after) = self.ask_save.clone() {
+            let mut answer = None;
+            egui::Window::new("Unsaved changes")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label(format!("Save the changes to {}?", self.scene_title()));
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() {
+                            answer = Some(0);
+                        }
+                        if ui.button("Don't save").clicked() {
+                            answer = Some(1);
+                        }
+                        if ui.button("Cancel").clicked() {
+                            answer = Some(2);
+                        }
+                    });
+                });
+            match answer {
+                Some(0) => {
+                    self.ask_save = None;
+                    self.save(Some(after));
+                }
+                Some(1) => {
+                    self.ask_save = None;
+                    self.proceed(after);
+                }
+                Some(_) => self.ask_save = None,
+                None => {}
+            }
+        }
+        if let Some(mut name) = self.new_script.take() {
+            let mut keep = true;
+            let mut chosen = None;
+            let title = match self.project.file.language {
+                Language::CSharp => "New C# script",
+                Language::Cpp => "New C++ script",
+            };
+            egui::Window::new(title)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label("Class name");
+                    let r = ui.text_edit_singleline(&mut name);
+                    r.request_focus();
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.horizontal(|ui| {
+                        if ui.button("Create").clicked() || enter {
+                            chosen = Some(name.clone());
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            match chosen.map(|n| self.create_script(&n)) {
+                Some(Ok(())) => {}
+                Some(Err(e)) => {
+                    self.console.error(e);
+                    self.new_script = Some(name);
+                }
+                None if keep => self.new_script = Some(name),
+                None => {}
+            }
+        }
+        if let Some(mut m) = self.new_map.take() {
+            let mut keep = true;
+            let mut chosen = false;
+            let images: Vec<String> = self
+                .project
+                .assets
+                .paths()
+                .filter(|p| is_image(p))
+                .map(String::from)
+                .collect();
+            egui::Window::new("New tilemap")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    egui::Grid::new("new_map").num_columns(2).show(ui, |ui| {
+                        ui.label("Name");
+                        ui.text_edit_singleline(&mut m.name);
+                        ui.end_row();
+                        ui.label("Tileset image");
+                        egui::ComboBox::from_id_salt("tileset")
+                            .selected_text(&m.image)
+                            .show_ui(ui, |ui| {
+                                for p in &images {
+                                    ui.selectable_value(&mut m.image, p.clone(), p);
+                                }
+                            });
+                        ui.end_row();
+                        ui.label("Tile size");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut m.tile[0]).range(1..=1024));
+                            ui.add(egui::DragValue::new(&mut m.tile[1]).range(1..=1024));
+                        });
+                        ui.end_row();
+                        ui.label("Map size in tiles");
+                        ui.horizontal(|ui| {
+                            ui.add(egui::DragValue::new(&mut m.size[0]).range(1..=1000));
+                            ui.add(egui::DragValue::new(&mut m.size[1]).range(1..=1000));
+                        });
+                        ui.end_row();
+                    });
+                    ui.horizontal(|ui| {
+                        chosen = ui.button("Create").clicked();
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            match chosen.then(|| self.create_map(&m)) {
+                Some(Ok(())) => {}
+                Some(Err(e)) => {
+                    self.console.error(e);
+                    self.new_map = Some(m);
+                }
+                None if keep => self.new_map = Some(m),
+                None => {}
+            }
+        }
+        if let Some((mut dir, mut run)) = self.build_game.take() {
+            let mut keep = true;
+            let mut chosen = false;
+            egui::Window::new("Build game")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label("Folder");
+                    ui.add(egui::TextEdit::singleline(&mut dir).desired_width(420.0));
+                    ui.checkbox(&mut run, "Run the game when it is built");
+                    ui.horizontal(|ui| {
+                        chosen = ui.button("Build").clicked();
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            if chosen {
+                self.start_export(PathBuf::from(dir.trim()), run);
+            } else if keep {
+                self.build_game = Some((dir, run));
+            }
+        }
+        if let Some((mut name, then)) = self.save_as.take() {
+            let mut keep = true;
+            let mut chosen = None;
+            egui::Window::new("Save scene as")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+                .show(ctx, |ui| {
+                    ui.label("Name, under Assets (folders with /)");
+                    let r = ui.text_edit_singleline(&mut name);
+                    r.request_focus();
+                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() || enter {
+                            chosen = Some(scene_file_name(&name));
+                        }
+                        if ui.button("Cancel").clicked() {
+                            keep = false;
+                        }
+                    });
+                });
+            match chosen {
+                Some(Ok(path)) => match self.save_scene(&path) {
+                    Ok(()) => {
+                        if let Some(after) = then {
+                            self.proceed(after);
+                        }
+                    }
+                    Err(e) => self.console.error(e),
+                },
+                Some(Err(e)) => {
+                    self.console.error(e);
+                    self.save_as = Some((name, then));
+                }
+                None if keep => self.save_as = Some((name, then)),
+                None => {}
+            }
+        }
+    }
+
+    /// A new map file from the dialog's answers, put into the scene and
+    /// selected with Paint on
+    pub fn create_map(&mut self, m: &NewMap) -> Result<(), String> {
+        let name = m.name.trim().trim_end_matches(".tmj").trim_matches('/');
+        if name.is_empty() {
+            return Err("the map needs a name".into());
+        }
+        let path = format!("{name}.tmj");
+        let file = self.project.assets.file(&path);
+        if file.exists() {
+            return Err(format!("{path} already exists"));
+        }
+        let Ok(view) = &mut self.scene else {
+            return Err("no scene view".into());
+        };
+        let texture = self
+            .project
+            .assets
+            .load(
+                &mut view.engine,
+                FieldType::Texture,
+                &m.image.as_str().into(),
+            )
+            .map_err(|e| format!("tileset image: {e}"))?;
+        let size = view.engine.texture_size(texture).unwrap_or((0, 0));
+        if size.0 < m.tile[0] || size.1 < m.tile[1] {
+            return Err(format!("{} is smaller than one tile", m.image));
+        }
+        // The image's path as the map file sees it
+        let depth = path.matches('/').count();
+        let image = format!("{}{}", "../".repeat(depth), m.image);
+        let text = orst::tiled::new_map(
+            m.size[0], m.size[1], m.tile[0], m.tile[1], &image, size, "Ground",
+        );
+        let io = |e: std::io::Error| format!("{path}: {e}");
+        std::fs::create_dir_all(file.parent().unwrap()).map_err(io)?;
+        std::fs::write(&file, text).map_err(io)?;
+        self.rescan();
+        self.drop_asset(&path, orst::Vec2::default())?;
+        self.tiles.on = true;
+        self.tiles.erase = false;
+        self.tiles.layer = 0;
+        self.tiles.tile = 1;
+        self.console.info(format!("Created {path}"));
+        Ok(())
+    }
+
+    /// Build the game into `out` in the background (File → Build game)
+    pub fn start_export(&mut self, out: PathBuf, run: bool) {
+        if self.dirty {
+            self.console.warn(format!(
+                "{} has unsaved changes, which the game will not have",
+                self.scene_title()
+            ));
+        }
+        self.console
+            .info(format!("Building the game into {}", out.display()));
+        let root = self.project.root.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::export::export(&root, &out));
+        });
+        self.exporting = Some((rx, run));
+    }
+
+    /// Report a finished game build, and run the game when asked
+    fn watch_export(&mut self, ctx: &egui::Context) {
+        let Some((rx, run)) = &self.exporting else {
+            return;
+        };
+        let run = *run;
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(200));
+                return;
+            }
+            Err(mpsc::TryRecvError::Disconnected) => Err(vec![(
+                Level::Error,
+                "The game build stopped with an error".to_string(),
+            )]),
+        };
+        self.exporting = None;
+        match result {
+            Ok(exe) => {
+                self.console.info(format!("Game built: {}", exe.display()));
+                if run {
+                    let mut game = std::process::Command::new(&exe);
+                    if let Some(dir) = exe.parent() {
+                        game.current_dir(dir);
+                    }
+                    if let Err(e) = game.spawn() {
+                        self.console.error(format!("The game did not start: {e}"));
+                    }
+                }
+            }
+            Err(messages) => {
+                for (level, text) in messages {
+                    self.console.log(level, text);
+                }
+                self.console.error("The game was not built");
+            }
+        }
+    }
+
+    /// Assets/Scripts/<class>.cs (or .cpp) from the template, opened in
+    /// the system's editor for such files; the watcher builds it
+    pub fn create_script(&mut self, name: &str) -> Result<(), String> {
+        let class = crate::project::class_name(name)?;
+        let language = self.project.file.language;
+        let path = format!(
+            "{}/{class}.{}",
+            crate::project::SCRIPTS,
+            language.extension()
+        );
+        let file = self.project.assets.file(&path);
+        if file.exists() {
+            return Err(format!("{path} already exists"));
+        }
+        let io = |e: std::io::Error| format!("{path}: {e}");
+        std::fs::create_dir_all(file.parent().unwrap()).map_err(io)?;
+        std::fs::write(&file, crate::project::script_source(&class, language)).map_err(io)?;
+        self.rescan();
+        self.selected_asset = Some(path.clone());
+        self.console.info(format!("Created {path}"));
+        if !cfg!(test) {
+            if let Err(e) = open_external(&file) {
+                self.console.warn(format!("{path}: {e}"));
+            }
+        }
+        Ok(())
+    }
+
+    fn hierarchy_ui(&mut self, ui: &mut egui::Ui) {
+        let Ok(view) = &self.scene else {
+            ui.weak("No scene");
+            return;
+        };
+        let mut picked = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                for e in view.engine.world.query(&[]) {
+                    let label = scene_view::label(&view.engine, e);
+                    if ui
+                        .selectable_label(self.selected == Some(e), label)
+                        .clicked()
+                    {
+                        picked = Some(e);
+                    }
+                }
+            });
+        if let Some(e) = picked {
+            self.select(Some(e));
+        }
+    }
+
+    /// The selected entity: its name and components
+    fn entity_ui(&mut self, ui: &mut egui::Ui) {
+        let (Ok(view), Some(e)) = (&mut self.scene, self.selected) else {
+            return;
+        };
+        if !view.engine.world.alive(e) {
+            self.selected = None;
+            return;
+        }
+        let (engine, tiles, anim) = (&view.engine, &mut self.tiles, &mut self.anim);
+        let mut extra = Vec::new();
+        let mut more = |ui: &mut egui::Ui| {
+            if let Some(map) = tiles::map_of(engine, e) {
+                ui.separator();
+                ui.strong("Tiles");
+                tiles.ui(ui, engine, map);
+            }
+            if engine.world.has(e, orst::components::SPRITE_ANIMATOR) {
+                ui.separator();
+                ui.strong("Animation");
+                extra = anim.ui(ui, engine, e);
+            }
+        };
+        let overrides = prefabs::overrides(engine, &self.project.assets, e);
+        let mut actions = inspector::ui(ui, &view.engine, e, &overrides, &mut more);
+        actions.append(&mut extra);
+        if actions.is_empty() {
+            return;
+        }
+        let engine = &mut view.engine;
+        self.history.record(engine);
+        self.dirty = true;
+        let mut prefab_action = None;
+        for action in actions {
+            let world = &mut engine.world;
+            match action {
+                Action::Set {
+                    component,
+                    field,
+                    value,
+                } => {
+                    world.set_field(e, component, &field, value);
+                }
+                Action::SetAsset {
+                    component,
+                    field,
+                    ty,
+                    path,
+                } => match self.project.assets.load(engine, ty, &path.as_str().into()) {
+                    Ok(id) => {
+                        let value = orst::schema::Value::U32(id);
+                        engine.world.set_field(e, component, &field, value);
+                        self.history.close();
+                    }
+                    Err(err) => self.console.error(err),
+                },
+                Action::Add(id) => {
+                    inspector::add_component(world, e, id);
+                    self.history.close();
+                }
+                Action::Remove(id) => {
+                    world.remove(e, id);
+                    self.history.close();
+                }
+                Action::MakePrefab
+                | Action::ApplyPrefab
+                | Action::RevertPrefab
+                | Action::UnlinkPrefab => {
+                    self.history.close();
+                    prefab_action = Some(action);
+                }
+            }
+        }
+        if let Some(action) = prefab_action {
+            if let Err(err) = self.prefab_action(e, action) {
+                self.console.error(err);
+            }
+        }
+    }
+
+    /// Make, apply, revert or unlink the prefab of `e` (the change is
+    /// already recorded for undo)
+    pub fn prefab_action(&mut self, e: Entity, action: Action) -> Result<(), String> {
+        let Ok(view) = &mut self.scene else {
+            return Err("no scene view".into());
+        };
+        let engine = &mut view.engine;
+        let assets = &mut self.project.assets;
+        match action {
+            Action::MakePrefab => {
+                let name = engine
+                    .world
+                    .get(e, NAME)
+                    .map(orst::schema::text_str)
+                    .unwrap_or("");
+                let path = prefabs::new_path(assets, name);
+                prefabs::write_prefab(engine, assets, e, &path)?;
+                self.rescan();
+                let Ok(view) = &mut self.scene else {
+                    unreachable!()
+                };
+                let engine = &mut view.engine;
+                let p =
+                    self.project
+                        .assets
+                        .load(engine, FieldType::Prefab, &path.as_str().into())?;
+                engine.set_prefab_instance(e, p);
+                self.console.info(format!("Made prefab {path}"));
+            }
+            Action::ApplyPrefab => {
+                let n = prefabs::apply(engine, assets, e)?;
+                self.console
+                    .info(format!("Applied to the prefab and {n} other instance(s)"));
+            }
+            Action::RevertPrefab => {
+                for w in prefabs::revert(engine, assets, e) {
+                    self.console.warn(w);
+                }
+            }
+            Action::UnlinkPrefab => engine.set_prefab_instance(e, 0),
+            _ => {}
+        }
+        self.dirty = true;
+        Ok(())
+    }
+
+    fn rescan(&mut self) {
+        match self.project.rescan() {
+            Ok(scan) => {
+                for path in &scan.created {
+                    self.console.info(format!("New asset: {path}"));
+                }
+                for path in &scan.orphans {
+                    self.console.warn(format!("{path}.meta has no asset"));
+                }
+            }
+            Err(e) => self.console.error(e),
+        }
+    }
+
+    /// The Assets folder as a tree
+    fn project_ui(&mut self, ui: &mut egui::Ui) {
+        let new = match self.project.file.language {
+            Language::CSharp => "New C# script",
+            Language::Cpp => "New C++ script",
+        };
+        ui.horizontal(|ui| {
+            if ui
+                .small_button(new)
+                .on_hover_text("A Behaviour in Assets/Scripts")
+                .clicked()
+            {
+                self.new_script = Some("NewBehaviour".into());
+            }
+            if ui
+                .small_button("New tilemap")
+                .on_hover_text("A Tiled map (.tmj) cut from an image, put into the scene")
+                .clicked()
+            {
+                let image = self.project.assets.paths().find(|p| is_image(p));
+                self.new_map = Some(NewMap {
+                    name: "Level".into(),
+                    image: image.unwrap_or_default().to_string(),
+                    ..NewMap::default()
+                });
+            }
+        });
+        let tree = Tree::of(self.project.assets.paths());
+        let mut opened = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink(false)
+            .show(ui, |ui| {
+                if tree.files.is_empty() && tree.dirs.is_empty() {
+                    ui.weak("Assets is empty: put images, sounds and maps into it");
+                }
+                tree.ui(ui, "", &mut self.selected_asset, &mut opened);
+            });
+        if let Some(path) = opened {
+            if path.ends_with(".scene") {
+                self.request(After::Open(path));
+            } else if path.ends_with(".cs") {
+                let file = self.project.assets.file(&path);
+                if let Err(e) = open_external(&file) {
+                    self.console.error(format!("{path}: {e}"));
+                }
+            }
+        }
+    }
+}
+
+/// Open a file in the app the system has for it
+fn open_external(file: &std::path::Path) -> Result<(), String> {
+    let program = if cfg!(windows) {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program)
+        .arg(file)
+        .spawn()
+        .map(drop)
+        .map_err(|e| format!("{program} did not start: {e}"))
+}
+
+fn is_image(path: &str) -> bool {
+    let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    matches!(ext.as_str(), "png" | "jpg" | "jpeg")
+}
+
+fn clear_world(world: &mut orst::ecs::World) {
+    for e in world.query(&[]) {
+        world.despawn(e);
+    }
+}
+
+/// What the user typed as a scene name, as a path under Assets
+pub fn scene_file_name(name: &str) -> Result<String, String> {
+    let name = name.trim().trim_matches('/').replace('\\', "/");
+    let bad = name.is_empty()
+        || name
+            .split('/')
+            .any(|p| p.trim().is_empty() || p == "." || p == "..")
+        || name.contains(|c: char| ":*?\"<>|".contains(c));
+    if bad {
+        return Err(format!("\"{name}\" can't be a scene name"));
+    }
+    Ok(if name.ends_with(".scene") {
+        name
+    } else {
+        format!("{name}.scene")
+    })
+}
+
+/// Folders and files of asset paths
+#[derive(Default, Debug, PartialEq)]
+pub struct Tree {
+    pub dirs: BTreeMap<String, Tree>,
+    pub files: Vec<String>,
+}
+
+impl Tree {
+    pub fn of<'a>(paths: impl Iterator<Item = &'a str>) -> Tree {
+        let mut root = Tree::default();
+        for path in paths {
+            let mut node = &mut root;
+            let mut parts: Vec<&str> = path.split('/').collect();
+            let file = parts.pop().unwrap_or_default();
+            for dir in parts {
+                node = node.dirs.entry(dir.to_string()).or_default();
+            }
+            node.files.push(file.to_string());
+        }
+        root
+    }
+
+    /// `opened`: the file double-clicked
+    fn ui(
+        &self,
+        ui: &mut egui::Ui,
+        prefix: &str,
+        selected: &mut Option<String>,
+        opened: &mut Option<String>,
+    ) {
+        for (name, dir) in &self.dirs {
+            let path = format!("{prefix}{name}/");
+            egui::CollapsingHeader::new(format!("{name}/"))
+                .id_salt(&path)
+                .default_open(false)
+                .show(ui, |ui| dir.ui(ui, &path, selected, opened));
+        }
+        for name in &self.files {
+            let path = format!("{prefix}{name}");
+            let picked = selected.as_deref() == Some(path.as_str());
+            let r = ui
+                .selectable_label(picked, name.as_str())
+                .interact(egui::Sense::drag());
+            r.dnd_set_drag_payload(AssetPath(path.clone()));
+            if r.double_clicked() {
+                *opened = Some(path.clone());
+            }
+            if r.clicked() {
+                *selected = Some(path);
+            }
+        }
+    }
+}
+
+/// Each component's size and fields, to see that a script changed them
+fn layouts(world: &orst::ecs::World) -> Vec<(u32, Vec<orst::schema::Field>)> {
+    (1..=world.component_types())
+        .filter_map(|id| world.storage(id).map(|s| (s.size, s.fields.clone())))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn editor(name: &str) -> Editor {
+        let root = crate::project::temp_dir(name);
+        let project = Project::create(&root, "Test", crate::project::Language::CSharp).unwrap();
+        Editor::new(project, Console::default(), None)
+    }
+
+    fn frame(ctx: &egui::Context, editor: &mut Editor) {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 720.0),
+            )),
+            ..Default::default()
+        };
+        let mut close = false;
+        let mut out = ctx.run_ui(input, |ui| editor.ui(ui, None, &mut close));
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn every_component_shows_in_the_inspector() {
+        let mut ed = editor("inspector");
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        for id in 1..=world.component_types() {
+            inspector::add_component(world, e, id);
+        }
+        let ctx = egui::Context::default();
+        for _ in 0..3 {
+            frame(&ctx, &mut ed);
+        }
+        assert!(
+            !ed.console
+                .lines
+                .iter()
+                .any(|l| l.level == crate::console::Level::Error),
+            "the scene view started"
+        );
+    }
+
+    #[test]
+    fn creating_and_deleting_entities_undo() {
+        let mut ed = editor("undo");
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        ed.delete_selected();
+        let alive = |ed: &Editor| ed.scene.as_ref().unwrap().engine.world.alive(e);
+        assert!(!alive(&ed));
+        ed.undo(false);
+        assert!(alive(&ed));
+        ed.undo(false);
+        assert!(!alive(&ed) && ed.scene.as_ref().unwrap().engine.world.count() == 0);
+        ed.undo(true);
+        assert!(alive(&ed));
+    }
+
+    #[test]
+    fn scenes_save_and_open_again() {
+        let mut ed = editor("scenes");
+        let root = ed.project.root.clone();
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        world.set_field(
+            e,
+            NAME,
+            "text",
+            orst::schema::Value::Text(orst::schema::text_bytes("Hero")),
+        );
+        assert!(ed.dirty);
+        ed.request(After::New);
+        assert_eq!(
+            ed.ask_save,
+            Some(After::New),
+            "unsaved changes are asked about"
+        );
+        ed.ask_save = None;
+
+        ed.save_scene("levels/One.scene").unwrap();
+        assert!(!ed.dirty);
+        assert!(root.join("Assets/levels/One.scene").is_file());
+        assert!(
+            ed.project.assets.uid("levels/One.scene").is_some(),
+            "it got a .meta"
+        );
+        assert_eq!(
+            ed.project.file.main_scene.as_deref(),
+            Some("levels/One.scene")
+        );
+
+        ed.request(After::New);
+        assert_eq!(ed.scene.as_ref().unwrap().engine.world.count(), 0);
+        assert_eq!(ed.scene_path, None);
+
+        // The project opens on its main scene
+        let (project, _) = Project::open(&root).unwrap();
+        let ed = Editor::new(project, Console::default(), None);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert!(engine.world.find_named("Hero").is_some());
+        assert_eq!(ed.scene_path.as_deref(), Some("levels/One.scene"));
+        assert!(!ed.dirty && !ed.history.can_undo());
+    }
+
+    #[test]
+    fn dropped_images_become_sprites_and_gizmo_drags_undo() {
+        let mut ed = editor("drop");
+        let png = ed.project.assets.file("hero.png");
+        let mut pixels = Vec::new();
+        for _ in 0..(8 * 4) {
+            pixels.extend_from_slice(&[255, 0, 0, 255]);
+        }
+        image_png(&png, 8, 4, &pixels);
+        ed.rescan();
+        assert!(ed
+            .drop_asset("notes.txt", orst::Vec2::new(0.0, 0.0))
+            .is_err());
+        ed.drop_asset("hero.png", orst::Vec2::new(30.0, 40.0))
+            .unwrap();
+        let e = ed.selected.unwrap();
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert_eq!(scene_view::label(engine, e), "hero");
+        let s: SpriteRenderer = read(&engine.world, e, SPRITE_RENDERER).unwrap();
+        assert_eq!(s.origin, orst::Vec2::new(4.0, 2.0));
+        assert_eq!(engine.texture_size(s.texture), Some((8, 4)));
+
+        // A drag is many transforms and one undo step
+        for x in [31.0, 35.0, 50.0] {
+            let t = Transform {
+                pos: orst::Vec2::new(x, 40.0),
+                ..Default::default()
+            };
+            ed.scene_event(SceneEvent::Transform(e, t));
+        }
+        ed.history.close();
+        let x = |ed: &Editor| {
+            let world = &ed.scene.as_ref().unwrap().engine.world;
+            read::<Transform>(world, e, TRANSFORM).unwrap().pos.x
+        };
+        assert_eq!(x(&ed), 50.0);
+        ed.undo(false);
+        assert_eq!(x(&ed), 30.0);
+
+        ed.save_scene("s.scene").unwrap();
+        let text = std::fs::read_to_string(ed.project.assets.file("s.scene")).unwrap();
+        assert!(text.contains("hero.png") && text.contains("uid"), "{text}");
+    }
+
+    #[test]
+    fn maps_made_and_painted_in_the_editor_save_to_their_files() {
+        let mut ed = editor("tilemap");
+        let png = ed.project.assets.file("art/tiles.png");
+        std::fs::create_dir_all(png.parent().unwrap()).unwrap();
+        image_png(&png, 32, 16, &[200u8; 32 * 16 * 4]);
+        ed.rescan();
+        let m = NewMap {
+            name: "levels/One".into(),
+            image: "art/tiles.png".into(),
+            tile: [16, 16],
+            size: [4, 3],
+        };
+        ed.create_map(&m).unwrap();
+        assert!(ed.create_map(&m).is_err(), "the file is there");
+        let e = ed.selected.unwrap();
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let map = tiles::map_of(engine, e).expect("the new entity draws the map");
+        assert_eq!(engine.tilemap(map).unwrap().tilesets[0].sheet.count, 2);
+        assert!(ed.tiles.on);
+
+        // A stroke over two cells, one undo step
+        ed.tiles.tile = 2;
+        for x in [5.0, 9.0, 21.0] {
+            ed.scene_event(SceneEvent::Paint(orst::Vec2::new(x, 20.0)));
+        }
+        ed.scene_event(SceneEvent::PaintEnd);
+        let tile = |ed: &Editor, x| {
+            let engine = &ed.scene.as_ref().unwrap().engine;
+            engine.tilemap(map).unwrap().layers[0].get(x, 1)
+        };
+        assert_eq!((tile(&ed, 0), tile(&ed, 1)), (2, 2));
+        assert!(ed.dirty);
+        ed.undo(false);
+        assert_eq!((tile(&ed, 0), tile(&ed, 1)), (0, 0));
+        ed.undo(true);
+
+        ed.save_scene("levels/One.scene").unwrap();
+        let file = ed.project.assets.file("levels/One.tmj");
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("\"../art/tiles.png\""), "{text}");
+        let mut none = |_: &std::path::Path| Ok(1);
+        let saved = orst::tiled::parse(&text, file.parent().unwrap(), &mut none).unwrap();
+        assert_eq!(saved.layers[0].get(1, 1), 2);
+        assert!(ed
+            .tiles
+            .unsaved(&ed.scene.as_ref().unwrap().engine)
+            .is_empty());
+
+        // The scene opens again with its map
+        let (project, _) = Project::open(&ed.project.root).unwrap();
+        let ed = Editor::new(project, Console::default(), None);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let e = engine.world.find_named("One").unwrap();
+        let map = tiles::map_of(engine, e).unwrap();
+        assert_eq!(engine.tilemap(map).unwrap().layers[0].get(0, 1), 2);
+    }
+
+    #[test]
+    fn prefab_changes_reach_instances_that_kept_their_values() {
+        let mut ed = editor("prefab");
+        ed.create_entity();
+        let coin = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        write(world, coin, NAME, &Name::new("Coin"));
+        ed.history.record(&ed.scene.as_ref().unwrap().engine);
+        ed.prefab_action(coin, Action::MakePrefab).unwrap();
+        let path = "Prefabs/Coin.prefab";
+        assert!(ed.project.assets.file(path).is_file());
+        assert!(ed.project.assets.uid(path).is_some(), "it has its .meta");
+
+        ed.drop_asset(path, orst::Vec2::new(30.0, 40.0)).unwrap();
+        let a = ed.selected.unwrap();
+        ed.drop_asset(path, orst::Vec2::new(50.0, 0.0)).unwrap();
+        let b = ed.selected.unwrap();
+        let engine = &mut ed.scene.as_mut().unwrap().engine;
+        assert_eq!(engine.world.find_named("Coin"), Some(coin));
+        let t: Transform = read(&engine.world, a, TRANSFORM).unwrap();
+        assert_eq!(t.pos, orst::Vec2::new(30.0, 40.0));
+
+        // b changes its scale; a changes rotation and applies it
+        let mut tb: Transform = read(&engine.world, b, TRANSFORM).unwrap();
+        tb.scale = orst::Vec2::new(3.0, 3.0);
+        write(&mut engine.world, b, TRANSFORM, &tb);
+        let mut ta = t;
+        ta.rotation = 1.0;
+        write(&mut engine.world, a, TRANSFORM, &ta);
+        let overrides = prefabs::overrides(engine, &ed.project.assets, a);
+        assert!(overrides.contains(&("Transform".into(), "rotation".into())));
+        ed.prefab_action(a, Action::ApplyPrefab).unwrap();
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let tr = |e| read::<Transform>(&engine.world, e, TRANSFORM).unwrap();
+        assert_eq!(
+            (tr(coin).rotation, tr(coin).pos),
+            (1.0, orst::Vec2::default())
+        );
+        assert_eq!(
+            (tr(b).rotation, tr(b).scale, tr(b).pos.x),
+            (1.0, orst::Vec2::new(3.0, 3.0), 50.0)
+        );
+        assert_eq!(tr(a).pos, orst::Vec2::new(30.0, 40.0));
+        let text = std::fs::read_to_string(ed.project.assets.file(path)).unwrap();
+        assert!(
+            !text.contains("30.0"),
+            "the instance's place stays its own: {text}"
+        );
+
+        // Revert drops b's scale and keeps its place
+        ed.prefab_action(b, Action::RevertPrefab).unwrap();
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let tb: Transform = read(&engine.world, b, TRANSFORM).unwrap();
+        assert_eq!((tb.scale, tb.pos.x), (orst::Vec2::new(1.0, 1.0), 50.0));
+
+        // The scene stores instances by the prefab and opens again
+        ed.save_scene("Main.scene").unwrap();
+        let text = std::fs::read_to_string(ed.project.assets.file("Main.scene")).unwrap();
+        assert!(text.contains("\"prefab\""), "{text}");
+        let (project, _) = Project::open(&ed.project.root).unwrap();
+        let ed = Editor::new(project, Console::default(), None);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let instances = engine.world.query(&[orst::components::PREFAB]);
+        assert_eq!(instances.len(), 3);
+        let rotations: Vec<f32> = instances
+            .iter()
+            .map(|&e| {
+                read::<Transform>(&engine.world, e, TRANSFORM)
+                    .unwrap()
+                    .rotation
+            })
+            .collect();
+        assert_eq!(rotations, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn the_animation_editor_shows_for_animated_sprites() {
+        let mut ed = editor("anim");
+        let png = ed.project.assets.file("hero.png");
+        image_png(&png, 64, 32, &[255u8; 64 * 32 * 4]);
+        ed.rescan();
+        ed.drop_asset("hero.png", orst::Vec2::default()).unwrap();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        inspector::add_component(world, e, orst::components::SPRITE_ANIMATOR);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut ed);
+        frame(&ctx, &mut ed);
+    }
+
+    #[test]
+    fn the_scene_previews_particles_and_light_without_play() {
+        let mut ed = editor("preview");
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        inspector::add_component(world, e, orst::components::PARTICLE_EMITTER);
+        let ctx = egui::Context::default();
+        let view = ed.scene.as_mut().unwrap();
+        view.preview.particles = true;
+        view.preview.light = true;
+        ed.dirty = false;
+        frame(&ctx, &mut ed);
+        frame(&ctx, &mut ed);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert_eq!(engine.entity_emitters.len(), 1);
+        assert_eq!(engine.renderer.effects.len(), 1, "lit");
+        let before = engine
+            .world
+            .get(e, orst::components::PARTICLE_EMITTER)
+            .unwrap()
+            .to_vec();
+        assert!(!ed.dirty, "the scene itself does not change");
+        let view = ed.scene.as_mut().unwrap();
+        view.preview = Default::default();
+        frame(&ctx, &mut ed);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert!(engine.entity_emitters.is_empty() && engine.renderer.effects.is_empty());
+        assert_eq!(
+            engine
+                .world
+                .get(e, orst::components::PARTICLE_EMITTER)
+                .unwrap(),
+            &before[..]
+        );
+    }
+
+    fn image_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {
+        image::save_buffer(path, rgba, w, h, image::ColorType::Rgba8).unwrap();
+    }
+
+    #[test]
+    fn stop_throws_away_what_play_changed() {
+        let mut ed = editor("play");
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        let v = orst::components::Velocity {
+            linear: orst::Vec2::new(60.0, 0.0),
+            ..Default::default()
+        };
+        write(world, e, orst::components::VELOCITY, &v);
+        let ctx = egui::Context::default();
+        ed.start_play();
+        assert_eq!(ed.center, Center::Game);
+        ed.save(None);
+        ed.play.as_mut().unwrap().step_once();
+        frame(&ctx, &mut ed);
+        frame(&ctx, &mut ed);
+        assert_eq!(ed.play.as_ref().unwrap().ticks, 1);
+        ed.delete_selected();
+        ed.stop_play();
+        let world = &ed.scene.as_ref().unwrap().engine.world;
+        let t: Transform = read(world, e, TRANSFORM).unwrap();
+        assert_eq!(t.pos, orst::Vec2::new(0.0, 0.0));
+        assert_eq!(ed.selected, Some(e), "the entity deleted in play is back");
+        assert!(
+            ed.history.can_undo() && ed.dirty,
+            "the editor's history is back"
+        );
+        assert!(ed.scene_path.is_none(), "nothing was saved while playing");
+    }
+
+    #[test]
+    fn scene_names_become_paths_under_assets() {
+        assert_eq!(scene_file_name(" Level 1 ").unwrap(), "Level 1.scene");
+        assert_eq!(scene_file_name("maps\\a.scene").unwrap(), "maps/a.scene");
+        for bad in ["", "../x", "a//b", "a:b", "/"] {
+            assert!(scene_file_name(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn asset_paths_become_a_tree() {
+        let t = Tree::of(["a.png", "art/b.png", "art/ui/c.png", "art/d.wav"].into_iter());
+        assert_eq!(t.files, ["a.png"]);
+        let art = &t.dirs["art"];
+        assert_eq!(art.files, ["b.png", "d.wav"]);
+        assert_eq!(art.dirs["ui"].files, ["c.png"]);
+    }
+
+    #[test]
+    fn new_scripts_come_from_the_template() {
+        let mut ed = editor("new_script");
+        ed.create_script("coin pickup").unwrap();
+        let path = "Scripts/CoinPickup.cs";
+        assert_eq!(ed.selected_asset.as_deref(), Some(path));
+        assert!(ed.project.assets.uid(path).is_some(), "it has a .meta");
+        let text = std::fs::read_to_string(ed.project.assets.file(path)).unwrap();
+        assert!(text.contains("class CoinPickup : Behaviour"));
+        assert!(
+            ed.create_script("CoinPickup").is_err(),
+            "never over a script"
+        );
+    }
+}

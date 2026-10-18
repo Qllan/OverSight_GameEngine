@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Runs C# scripts inside ORST Studio: the studio starts .NET in its
+       own process, loads this assembly and calls Host. Scripts reference
+       it for Behaviour. dotnet build -c Release; the studio looks for
+       bin/Release/net8.0 (or a Scripting folder next to ORST.exe). -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>ORST</RootNamespace>
+    <AssemblyName>ORST.Scripting</AssemblyName>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Writes the runtimeconfig.json the studio starts .NET with -->
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <RollForward>LatestMajor</RollForward>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ORST/ORST.csproj" />
+  </ItemGroup>
+</Project>

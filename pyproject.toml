@@ -6,7 +6,7 @@ build-backend = "maturin"
 name = "vn_engine"
 version = "0.1.0"
 description = "Visual Novel Engine - 2D game engine with block-based visual logic"
-readme = "README.md"
+readme = "docs/VN_ENGINE.md"
 requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Rust",
