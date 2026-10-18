@@ -1823,6 +1823,65 @@ mod tests {
         assert_eq!(e.renderer.drawn_sprites, 1);
     }
 
+    /// A tile next to another on its sheet showed a line of it along its
+    /// edge when the camera stood between pixels
+    #[test]
+    fn tiles_do_not_show_their_sheet_neighbours() {
+        let mut engines = vec![("software", Engine::headless(97, 61).unwrap())];
+        #[cfg(feature = "gpu")]
+        if let Ok(e) = Engine::headless_gpu(97, 61) {
+            engines.push(("gpu", e));
+        }
+        for (name, mut e) in engines {
+            // Green over red, 4x4 each
+            let mut rgba = Vec::new();
+            for y in 0..8 {
+                for _ in 0..4 {
+                    rgba.extend(if y < 4 {
+                        [0, 200, 0, 255]
+                    } else {
+                        [255, 0, 0, 255]
+                    });
+                }
+            }
+            let texture = e.texture_from_rgba(4, 8, &rgba).unwrap();
+            let sheet = crate::anim::SpriteSheet {
+                frame_w: 4,
+                frame_h: 4,
+                columns: 1,
+                count: 2,
+                margin: 0,
+                spacing: 0,
+            };
+            let mut map = Tilemap::new(crate::tilemap::Orientation::Orthogonal, 20, 20, 4, 4);
+            map.add_tileset(crate::tilemap::Tileset::new(1, texture, sheet));
+            let l = map.add_layer("g");
+            for y in 0..20 {
+                for x in 0..20 {
+                    map.layers[l].set(x, y, 1);
+                }
+            }
+            let id = e.add_tilemap(map);
+            let mut red = 0;
+            for k in 0..30 {
+                e.set_camera(Camera {
+                    center: Vec2::new(40.0 + k as f32 * 0.31, 40.0 + k as f32 * 0.137),
+                    zoom: 3.0,
+                    ..Camera::default()
+                });
+                e.begin_frame(Color::BLACK);
+                e.draw_tilemap(id, 0);
+                e.end_frame();
+                for y in 0..61 {
+                    for x in (0..97).step_by(8) {
+                        red += (e.pixel(x, y).unwrap().r > 0) as u32;
+                    }
+                }
+            }
+            assert_eq!(red, 0, "{name}");
+        }
+    }
+
     #[test]
     fn loads_and_draws_a_tiled_map() {
         let dir = std::env::temp_dir().join(format!("orst_engine_map_{}", std::process::id()));

@@ -449,7 +449,7 @@ impl Renderer {
             SpreadMode::Pad,
             quality,
             s.tint.a as f32 / 255.0,
-            Transform::from_translate(-src.x, -src.y),
+            inset_pattern(src),
         );
         let paint = Paint {
             shader: pattern,
@@ -467,6 +467,25 @@ impl Renderer {
         let p = self.canvas.pixel(x, y)?.demultiply();
         Some(Color::rgba(p.red(), p.green(), p.blue(), p.alpha()))
     }
+}
+
+/// How far inside its region a sprite samples, in texels. A pixel on the
+/// sprite's edge can land a hair outside the region, and nearest
+/// sampling then shows the next frame or tile of the sheet: a line between
+/// map tiles. Both renderers pull the region in by this much.
+pub(crate) const SAMPLE_INSET: f32 = 1.0 / 64.0;
+
+/// The region `src`, pulled in by SAMPLE_INSET on every side
+pub(crate) fn inset(src: Rect) -> Rect {
+    let (ex, ey) = (SAMPLE_INSET.min(src.w / 4.0), SAMPLE_INSET.min(src.h / 4.0));
+    Rect::new(src.x + ex, src.y + ey, src.w - 2.0 * ex, src.h - 2.0 * ey)
+}
+
+/// The pattern transform showing `src` (inset) on a 0..w x 0..h rectangle
+fn inset_pattern(src: Rect) -> Transform {
+    let r = inset(src);
+    let (kx, ky) = (r.w / src.w.max(1e-6), r.h / src.h.max(1e-6));
+    Transform::from_row(1.0 / kx, 0.0, 0.0, 1.0 / ky, -r.x / kx, -r.y / ky)
 }
 
 /// Whether a local rectangle can touch a canvas of `size`

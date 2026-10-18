@@ -376,9 +376,11 @@ struct Uniforms { size: vec2<f32> };
 @group(1) @binding(0) var tex: texture_2d<f32>;
 @group(1) @binding(1) var samp: sampler;
 
+// Centroid: with MSAA an edge pixel's centre can lie outside the quad,
+// and a uv taken there reads the next tile or frame of the sheet
 struct VOut {
     @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
+    @location(0) @interpolate(perspective, centroid) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
 };
 
@@ -1303,6 +1305,7 @@ impl Gpu {
                         }
                         let color = premultiplied(sprite.tint);
                         let (tw, th) = (tw as f32, th as f32);
+                        let sample = crate::render::inset(src);
                         // A region past the texture's edge needs its own
                         // texture's clamping, not the atlas neighbours
                         let inside =
@@ -1311,15 +1314,16 @@ impl Gpu {
                             Some((page, x, y)) => {
                                 let a = ATLAS_SIZE as f32;
                                 let uv = Rect::new(
-                                    (x + src.x) / a,
-                                    (y + src.y) / a,
-                                    src.w / a,
-                                    src.h / a,
+                                    (x + sample.x) / a,
+                                    (y + sample.y) / a,
+                                    sample.w / a,
+                                    sample.h / a,
                                 );
                                 self.quad_at(Source::Page(page), q, uv, color);
                             }
                             None => {
-                                let uv = Rect::new(src.x / tw, src.y / th, src.w / tw, src.h / th);
+                                let s = sample;
+                                let uv = Rect::new(s.x / tw, s.y / th, s.w / tw, s.h / th);
                                 self.quad_at(Source::Texture(*texture), q, uv, color);
                             }
                         }
@@ -1433,12 +1437,9 @@ impl Gpu {
             if !self.textures.contains_key(&source) {
                 continue;
             }
-            let uv = Rect::new(
-                src.x / tw as f32,
-                src.y / th as f32,
-                src.w / tw as f32,
-                src.h / th as f32,
-            );
+            let s = crate::render::inset(src);
+            let (tw, th) = (tw as f32, th as f32);
+            let uv = Rect::new(s.x / tw, s.y / th, s.w / tw, s.h / th);
             self.quad_at(Source::Texture(source), q, uv, m);
         }
         first..self.batches.len()
