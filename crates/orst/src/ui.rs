@@ -21,6 +21,19 @@ pub const UI_LAYER: i32 = 1 << 30;
 /// loop cannot hang the layout)
 const MAX_DEPTH: usize = 32;
 
+/// Where the interface goes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UiView {
+    /// On the screen, over the world (games)
+    #[default]
+    Screen,
+    /// Not drawn (the editor's view of the world)
+    Hidden,
+    /// Laid out on a screen this big placed in the world at the origin,
+    /// so a camera can pan and zoom over it (the editor's interface view)
+    World(u32, u32),
+}
+
 /// One box, laid out
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Placed {
@@ -56,14 +69,30 @@ impl Engine {
         if chain.is_empty() {
             return None;
         }
-        let (w, h) = self.size();
-        let mut rect = Rect::new(0.0, 0.0, w as f32, h as f32);
+        let mut rect = self.ui_screen();
         let mut key = Vec::with_capacity(chain.len());
         for (ent, r) in chain.iter().rev() {
             rect = place(rect, r);
             key.push((r.layer, *ent));
         }
         Some((rect, key))
+    }
+
+    /// The box the interface is laid out in
+    pub fn ui_screen(&self) -> Rect {
+        let (w, h) = match self.ui_view {
+            UiView::World(w, h) => (w, h),
+            _ => self.size(),
+        };
+        Rect::new(0.0, 0.0, w as f32, h as f32)
+    }
+
+    /// The box the UiRect of `e` sits in: its parent's, or the screen
+    pub fn ui_parent_rect(&self, e: Entity) -> Rect {
+        read::<UiRect>(&self.world, e, UI_RECT)
+            .filter(|r| r.parent != 0 && r.parent != e)
+            .and_then(|r| self.ui_rect(r.parent))
+            .unwrap_or_else(|| self.ui_screen())
     }
 
     /// Every visible box in drawing order, lowest first
@@ -101,7 +130,10 @@ impl Engine {
     /// Only the topmost button under the mouse takes it.
     pub fn update_ui(&mut self) {
         let layout = self.ui_layout();
-        let mouse = self.input.mouse;
+        let mouse = match self.ui_view {
+            UiView::World(..) => self.mouse_world(),
+            _ => self.input.mouse,
+        };
         let top = layout
             .iter()
             .rev()
@@ -137,20 +169,32 @@ impl Engine {
 
     /// Draw the interface over the world (in draw_entities)
     pub fn draw_ui(&mut self) {
+        let space = match self.ui_view {
+            UiView::Screen => Space::Screen,
+            UiView::Hidden => return,
+            UiView::World(..) => Space::World,
+        };
         for (i, p) in self.ui_layout().into_iter().enumerate() {
             let depth = i as f32;
             let tint = read::<UiButton>(&self.world, p.entity, UI_BUTTON)
                 .map_or(Color::WHITE, |b| b.tint());
             if let Some(image) = read::<UiImage>(&self.world, p.entity, UI_IMAGE) {
-                self.draw_ui_image(&image, p.rect, tint, depth);
+                self.draw_ui_image(&image, p.rect, tint, depth, space);
             }
             if let Some(text) = read::<UiText>(&self.world, p.entity, UI_TEXT) {
-                self.draw_ui_text(&text, p.rect, depth);
+                self.draw_ui_text(&text, p.rect, depth, space);
             }
         }
     }
 
-    fn draw_ui_image(&mut self, image: &UiImage, rect: Rect, tint: Color, depth: f32) {
+    fn draw_ui_image(
+        &mut self,
+        image: &UiImage,
+        rect: Rect,
+        tint: Color,
+        depth: f32,
+        space: Space,
+    ) {
         let color = multiply(image.color, tint);
         let size = self
             .textures
@@ -163,7 +207,7 @@ impl Engine {
                 thickness: 0.0,
             };
             let kind = DrawKind::Shape { shape, color };
-            self.renderer.push(UI_LAYER, depth, Space::Screen, kind);
+            self.renderer.push(UI_LAYER, depth, space, kind);
             return;
         };
         let src = match image.src {
@@ -184,11 +228,11 @@ impl Engine {
                 texture: image.texture,
                 sprite,
             };
-            self.renderer.push(UI_LAYER, depth, Space::Screen, kind);
+            self.renderer.push(UI_LAYER, depth, space, kind);
         }
     }
 
-    fn draw_ui_text(&mut self, t: &UiText, rect: Rect, depth: f32) {
+    fn draw_ui_text(&mut self, t: &UiText, rect: Rect, depth: f32, space: Space) {
         let text = self.strings.get(t.text).to_string();
         if text.is_empty() {
             return;
@@ -216,7 +260,7 @@ impl Engine {
             size: t.size,
             color: t.color,
         };
-        self.renderer.push(UI_LAYER, depth, Space::Screen, kind);
+        self.renderer.push(UI_LAYER, depth, space, kind);
     }
 }
 
@@ -229,6 +273,19 @@ pub fn place(parent: Rect, r: &UiRect) -> Rect {
     let x = a.x + (b.x - a.x) * r.pivot.x + r.pos.x - w * r.pivot.x;
     let y = a.y + (b.y - a.y) * r.pivot.y + r.pos.y - h * r.pivot.y;
     Rect::new(x, y, w.max(0.0), h.max(0.0))
+}
+
+/// The UiRect `r` changed so that in `parent` it makes the box `want`
+/// (place backwards: the anchors and pivot stay)
+pub fn fit(parent: Rect, r: &UiRect, want: Rect) -> UiRect {
+    let at = |t: Vec2| Vec2::new(parent.x + parent.w * t.x, parent.y + parent.h * t.y);
+    let (a, b) = (at(r.anchor_min), at(r.anchor_max));
+    let size = Vec2::new(want.w - (b.x - a.x), want.h - (b.y - a.y));
+    let pos = Vec2::new(
+        want.x + want.w * r.pivot.x - (a.x + (b.x - a.x) * r.pivot.x),
+        want.y + want.h * r.pivot.y - (a.y + (b.y - a.y) * r.pivot.y),
+    );
+    UiRect { pos, size, ..*r }
 }
 
 /// Pieces of `src` and where they go in `dest`: the whole of it, or nine
@@ -389,6 +446,19 @@ mod tests {
             .filter(|&(x, y)| e.pixel(x, y).is_some_and(|c| c.g > 200))
             .count();
         assert!(white > 20, "the text in the middle: {white}");
+    }
+
+    #[test]
+    fn fit_undoes_place() {
+        let parent = Rect::new(10.0, 20.0, 300.0, 200.0);
+        let r = UiRect {
+            anchor_min: Vec2::new(0.25, 0.0),
+            anchor_max: Vec2::new(1.0, 0.5),
+            pivot: Vec2::new(0.25, 0.75),
+            ..Default::default()
+        };
+        let want = Rect::new(40.0, 30.0, 120.0, 64.0);
+        assert_eq!(place(parent, &fit(parent, &r, want)), want);
     }
 
     #[test]

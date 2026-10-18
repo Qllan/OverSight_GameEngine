@@ -71,6 +71,8 @@ pub struct Engine {
     pub prefabs: Store<crate::prefab::Prefab>,
     /// The texts of String fields
     pub strings: crate::strings::Strings,
+    /// Where the interface goes (the editor shows it apart from the world)
+    pub ui_view: crate::ui::UiView,
     /// Collider layers that cast shadows
     shadow_layers: u32,
     /// Maps whose solid cells cast shadows
@@ -146,6 +148,7 @@ impl Engine {
             shaders: Store::default(),
             prefabs: Store::default(),
             strings: Default::default(),
+            ui_view: Default::default(),
             shadow_layers: 0,
             shadow_maps: Default::default(),
             state: DrawState::default(),

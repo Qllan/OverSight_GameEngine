@@ -11,6 +11,7 @@ use orst::components::{read, Name, SpriteRenderer, Transform, NAME, SPRITE_RENDE
 use orst::ecs::Entity;
 use orst::ffi::OrstEngine;
 use orst::post::Effect;
+use orst::ui::UiView;
 use orst::{Camera, Color, Engine, Vec2};
 
 const BACKGROUND: Color = Color::rgba(38, 40, 46, 255);
@@ -46,6 +47,11 @@ pub struct SceneView {
     pub playing: bool,
     /// The lighting last put on the view
     lit: Option<f32>,
+    /// Show the interface on the game's screen instead of the world
+    pub interface: bool,
+    /// The interface view's camera, fitted to the screen at first
+    pub ui_camera: Option<Camera>,
+    pub ui_drag: Option<crate::ui_view::UiDrag>,
 }
 
 /// What the Scene window shows of the game without Play
@@ -83,6 +89,8 @@ pub enum SceneEvent {
     Paint(Vec2),
     /// The paint stroke ended
     PaintEnd,
+    /// A drag in the interface view gave the entity this box
+    Ui(Entity, orst::components::UiRect),
 }
 
 /// How the canvas reaches egui
@@ -121,13 +129,16 @@ impl SceneView {
             preview: Preview::default(),
             playing: false,
             lit: None,
+            interface: false,
+            ui_camera: None,
+            ui_drag: None,
         };
         view.engine.set_camera(Camera::default());
         Ok(view)
     }
 
     /// The canvas filling `ui`, sized to it in physical pixels
-    fn canvas(
+    pub fn canvas(
         &mut self,
         ui: &mut egui::Ui,
         sense: egui::Sense,
@@ -145,7 +156,7 @@ impl SceneView {
     }
 
     /// Show the last frame in `rect`, with the engine's error if any
-    fn present(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+    pub fn present(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         if let Some(id) = self.texture(ui.ctx()) {
             let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
             ui.painter().image(id, rect, uv, egui::Color32::WHITE);
@@ -173,6 +184,7 @@ impl SceneView {
             crate::game_input::feed(ui, rect, &mut self.engine.input);
         }
         self.engine.set_camera(camera);
+        self.engine.ui_view = UiView::Screen;
         self.engine.begin_frame(Color::BLACK);
         self.engine.draw_entities();
         self.engine.end_frame();
@@ -181,6 +193,9 @@ impl SceneView {
 
     /// The view filling `ui`
     pub fn ui(&mut self, ui: &mut egui::Ui, selected: Option<Entity>) -> Vec<SceneEvent> {
+        if self.interface {
+            return self.interface_ui(ui, selected);
+        }
         let (rect, response, size) = self.canvas(ui, egui::Sense::click_and_drag());
         let ppp = ui.ctx().pixels_per_point();
         let to_canvas =
@@ -484,6 +499,7 @@ pub fn draw(
     gizmo: Option<(Tool, Option<gizmo::Handle>)>,
     brush: Option<orst::Rect>,
 ) {
+    engine.ui_view = UiView::Hidden;
     engine.begin_frame(BACKGROUND);
     let camera = engine.camera();
     let px = 1.0 / camera.zoom;

@@ -15,16 +15,26 @@ use crate::scripts::{self, BuildResult, ScriptHost, ScriptProject, Scripts, Sour
 use crate::sprite_anim::AnimEdit;
 use crate::tiles::{self, TilePaint};
 use orst::components::{
-    read, write, Name, SpriteRenderer, TilemapRenderer, Transform, NAME, SPRITE_RENDERER,
-    TILEMAP_RENDERER, TRANSFORM,
+    read, write, Name, SpriteRenderer, TilemapRenderer, Transform, UiButton, UiImage, UiRect,
+    UiText, NAME, SPRITE_RENDERER, TILEMAP_RENDERER, TRANSFORM, UI_BUTTON, UI_IMAGE, UI_RECT,
+    UI_TEXT,
 };
 use orst::ecs::Entity;
 use orst::scene_file::Assets;
 use orst::schema::FieldType;
+use orst::{Color, Vec2};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
+
+/// What Entity > Create UI makes
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiKind {
+    Panel,
+    Text,
+    Button,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Center {
@@ -516,6 +526,61 @@ impl Editor {
         self.select(Some(e));
     }
 
+    /// A new box of the interface, inside the selected one if it is a
+    /// box; the Scene window turns to the interface
+    pub fn create_ui(&mut self, kind: UiKind) {
+        let Ok(view) = &mut self.scene else { return };
+        let engine = &mut view.engine;
+        self.history.record(engine);
+        self.history.close();
+        let parent = self.selected.filter(|&p| engine.world.has(p, UI_RECT));
+        let e = engine.world.spawn();
+        let (name, size) = match kind {
+            UiKind::Panel => ("Panel", Vec2::new(320.0, 240.0)),
+            UiKind::Text => ("Text", Vec2::new(160.0, 30.0)),
+            UiKind::Button => ("Button", Vec2::new(160.0, 40.0)),
+        };
+        let r = UiRect {
+            parent: parent.unwrap_or(0),
+            size,
+            ..Default::default()
+        };
+        write(&mut engine.world, e, UI_RECT, &r);
+        let text = |engine: &mut orst::Engine, text: &str, color: Color| UiText {
+            text: engine.strings.intern(text),
+            size: 18.0,
+            color,
+            ..Default::default()
+        };
+        match kind {
+            UiKind::Panel => {
+                let image = UiImage {
+                    color: Color::rgba(20, 22, 28, 220),
+                    ..Default::default()
+                };
+                write(&mut engine.world, e, UI_IMAGE, &image);
+            }
+            UiKind::Text => {
+                let t = text(engine, "Text", Color::WHITE);
+                write(&mut engine.world, e, UI_TEXT, &t);
+            }
+            UiKind::Button => {
+                let image = UiImage {
+                    color: Color::rgba(70, 110, 190, 255),
+                    ..Default::default()
+                };
+                write(&mut engine.world, e, UI_IMAGE, &image);
+                write(&mut engine.world, e, UI_BUTTON, &UiButton::default());
+                let t = text(engine, "Button", Color::WHITE);
+                write(&mut engine.world, e, UI_TEXT, &t);
+            }
+        }
+        write(&mut engine.world, e, NAME, &Name::new(name));
+        view.interface = true;
+        self.dirty = true;
+        self.select(Some(e));
+    }
+
     pub fn delete_selected(&mut self) {
         if let (Ok(view), Some(e)) = (&mut self.scene, self.selected) {
             self.history.record(&view.engine);
@@ -539,6 +604,15 @@ impl Editor {
                 if read::<Transform>(&engine.world, e, TRANSFORM) != Some(t) {
                     self.history.record(engine);
                     write(&mut engine.world, e, TRANSFORM, &t);
+                    self.dirty = true;
+                }
+            }
+            SceneEvent::Ui(e, r) => {
+                let Ok(view) = &mut self.scene else { return };
+                let engine = &mut view.engine;
+                if read::<UiRect>(&engine.world, e, UI_RECT) != Some(r) {
+                    self.history.record(engine);
+                    write(&mut engine.world, e, UI_RECT, &r);
                     self.dirty = true;
                 }
             }
@@ -715,6 +789,17 @@ impl Editor {
                     if ui.button("Create empty").clicked() {
                         self.create_entity();
                     }
+                    ui.menu_button("Create UI", |ui| {
+                        for (kind, label) in [
+                            (UiKind::Panel, "Panel"),
+                            (UiKind::Text, "Text"),
+                            (UiKind::Button, "Button"),
+                        ] {
+                            if ui.button(label).clicked() {
+                                self.create_ui(kind);
+                            }
+                        }
+                    });
                     if ui
                         .add_enabled(self.selected.is_some(), egui::Button::new("Delete"))
                         .clicked()
@@ -787,6 +872,10 @@ impl Editor {
                 ui.selectable_value(&mut self.center, Center::Scene, "Scene");
                 ui.selectable_value(&mut self.center, Center::Game, "Game");
                 if let (Center::Scene, Ok(view)) = (self.center, &mut self.scene) {
+                    ui.separator();
+                    ui.toggle_value(&mut view.interface, "UI").on_hover_text(
+                        "Show the interface on the game's screen; F fits it in the view",
+                    );
                     ui.separator();
                     for (tool, name, key) in [
                         (Tool::Move, "Move", "W"),
@@ -1727,6 +1816,34 @@ mod tests {
         assert!(engine.world.find_named("Hero").is_some());
         assert_eq!(ed.scene_path.as_deref(), Some("levels/One.scene"));
         assert!(!ed.dirty && !ed.history.can_undo());
+    }
+
+    #[test]
+    fn ui_boxes_nest_and_their_drags_undo() {
+        let mut ed = editor("ui");
+        ed.create_ui(UiKind::Panel);
+        let panel = ed.selected.unwrap();
+        ed.create_ui(UiKind::Button);
+        let button = ed.selected.unwrap();
+        let view = ed.scene.as_ref().unwrap();
+        assert!(view.interface, "the Scene window shows the interface");
+        let engine = &view.engine;
+        let r: UiRect = read(&engine.world, button, UI_RECT).unwrap();
+        assert_eq!(r.parent, panel, "inside the selected box");
+        let t: UiText = read(&engine.world, button, UI_TEXT).unwrap();
+        assert_eq!(engine.strings.get(t.text), "Button");
+        assert!(engine.world.has(button, UI_BUTTON) && engine.world.has(button, UI_IMAGE));
+        let moved = UiRect {
+            pos: Vec2::new(30.0, 0.0),
+            ..r
+        };
+        ed.scene_event(SceneEvent::Ui(button, moved));
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert_eq!(read::<UiRect>(&engine.world, button, UI_RECT), Some(moved));
+        ed.history.close();
+        ed.undo(false);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert_eq!(read::<UiRect>(&engine.world, button, UI_RECT), Some(r));
     }
 
     #[test]
