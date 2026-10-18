@@ -5,10 +5,11 @@
 
 use crate::egui;
 use crate::scene_view::{label, AssetPath};
-use orst::components::NAME;
+use orst::components::{NAME, PREFAB};
 use orst::ecs::{Entity, World};
 use orst::schema::{text_bytes, text_str, Field, FieldType, Value, FLAG_ANGLE, FLAG_LAYERS};
 use orst::{Color, Engine, Rect, Vec2};
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
@@ -26,18 +27,31 @@ pub enum Action {
     },
     Add(u32),
     Remove(u32),
+    /// Save the entity as a new prefab and make it an instance
+    MakePrefab,
+    /// Put the instance's changes into its prefab and every instance
+    ApplyPrefab,
+    /// Drop the instance's changes but its position
+    RevertPrefab,
+    /// Make the instance an entity of its own
+    UnlinkPrefab,
 }
+
+/// What a prefab instance changes, as (component, field) names
+pub type Overrides = HashSet<(String, String)>;
 
 enum Change {
     Value(Value),
     Asset(String),
 }
 
-/// The entity's name and components; `more` adds to the end of the list
+/// The entity's name and components; `more` adds to the end of the list.
+/// Fields in `overrides` are bold: the instance changed them.
 pub fn ui(
     ui: &mut egui::Ui,
     engine: &Engine,
     e: Entity,
+    overrides: &Overrides,
     more: &mut dyn FnMut(&mut egui::Ui),
 ) -> Vec<Action> {
     let world = &engine.world;
@@ -61,16 +75,60 @@ pub fn ui(
             });
         }
     });
+    match engine.prefab_instance(e) {
+        Some(p) => {
+            let file = engine.prefab_file(p).and_then(|f| f.file_name());
+            let file = file.map_or("?".into(), |f| f.to_string_lossy());
+            ui.horizontal(|ui| {
+                ui.label("Prefab");
+                ui.strong(file);
+            });
+            ui.horizontal(|ui| {
+                if ui
+                    .button("Apply")
+                    .on_hover_text("Put the changes in bold into the prefab and all its instances")
+                    .clicked()
+                {
+                    actions.push(Action::ApplyPrefab);
+                }
+                if ui
+                    .button("Revert")
+                    .on_hover_text("Take the prefab's values back; the position stays")
+                    .clicked()
+                {
+                    actions.push(Action::RevertPrefab);
+                }
+                if ui
+                    .button("Unlink")
+                    .on_hover_text("Keep this entity as it is, no longer an instance")
+                    .clicked()
+                {
+                    actions.push(Action::UnlinkPrefab);
+                }
+            });
+        }
+        None => {
+            if ui
+                .button("Make prefab")
+                .on_hover_text("Save the entity to Assets/Prefabs to place it again and again")
+                .clicked()
+            {
+                actions.push(Action::MakePrefab);
+            }
+        }
+    }
     ui.separator();
 
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
             for id in 1..=world.component_types() {
-                if id == NAME || !world.has(e, id) {
+                if id == NAME || id == PREFAB || !world.has(e, id) {
                     continue;
                 }
                 let title = world.storage(id).map_or("?", |s| s.name.as_str());
+                let changed =
+                    |field: &str| overrides.contains(&(title.to_string(), field.to_string()));
                 egui::CollapsingHeader::new(egui::RichText::new(title).strong())
                     .id_salt(("component", id))
                     .default_open(true)
@@ -87,7 +145,12 @@ pub fn ui(
                                     let Some(value) = world.field(e, id, &f.name) else {
                                         continue;
                                     };
-                                    ui.label(&f.name);
+                                    if changed(&f.name) {
+                                        ui.label(egui::RichText::new(&f.name).strong())
+                                            .on_hover_text("Changed in this instance");
+                                    } else {
+                                        ui.label(&f.name);
+                                    }
                                     match field_ui(ui, engine, f, value, &entities) {
                                         Some(Change::Value(value)) => actions.push(Action::Set {
                                             component: id,
@@ -114,7 +177,7 @@ pub fn ui(
             }
             ui.add_space(8.0);
             let missing: Vec<u32> = (1..=world.component_types())
-                .filter(|&id| id != NAME && !world.has(e, id))
+                .filter(|&id| id != NAME && id != PREFAB && !world.has(e, id))
                 .collect();
             if !missing.is_empty() {
                 egui::ComboBox::from_id_salt("add component")

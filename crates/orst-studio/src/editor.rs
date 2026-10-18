@@ -8,6 +8,7 @@ use crate::gizmo::Tool;
 use crate::history::History;
 use crate::inspector::{self, Action};
 use crate::play::{self, Play};
+use crate::prefabs;
 use crate::project::{Language, Project};
 use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
 use crate::scripts::{self, BuildResult, ScriptHost, ScriptProject, Scripts, Sources};
@@ -564,15 +565,24 @@ impl Editor {
     /// (.tmj) an entity that draws it
     pub fn drop_asset(&mut self, path: &str, at: orst::Vec2) -> Result<(), String> {
         let map = path.to_ascii_lowercase().ends_with(".tmj");
-        if !is_image(path) && !map {
+        let prefab = prefabs::is_prefab(path);
+        if !is_image(path) && !map && !prefab {
             return Err(format!(
-                "{path}: only images and maps can be put into the scene"
+                "{path}: only images, maps and prefabs can be put into the scene"
             ));
         }
         let Ok(view) = &mut self.scene else {
             return Err("no scene view".into());
         };
         let engine = &mut view.engine;
+        if prefab {
+            self.history.record(engine);
+            self.history.close();
+            let e = prefabs::place(engine, &mut self.project.assets, path, at)?;
+            self.dirty = true;
+            self.select(Some(e));
+            return Ok(());
+        }
         let name = path.rsplit('/').next().unwrap_or(path);
         let name = name.rsplit_once('.').map_or(name, |(stem, _)| stem);
         if map {
@@ -1305,13 +1315,15 @@ impl Editor {
                 tiles.ui(ui, engine, map);
             }
         };
-        let actions = inspector::ui(ui, &view.engine, e, &mut more);
+        let overrides = prefabs::overrides(engine, &self.project.assets, e);
+        let actions = inspector::ui(ui, &view.engine, e, &overrides, &mut more);
         if actions.is_empty() {
             return;
         }
         let engine = &mut view.engine;
         self.history.record(engine);
         self.dirty = true;
+        let mut prefab_action = None;
         for action in actions {
             let world = &mut engine.world;
             match action {
@@ -1343,8 +1355,66 @@ impl Editor {
                     world.remove(e, id);
                     self.history.close();
                 }
+                Action::MakePrefab
+                | Action::ApplyPrefab
+                | Action::RevertPrefab
+                | Action::UnlinkPrefab => {
+                    self.history.close();
+                    prefab_action = Some(action);
+                }
             }
         }
+        if let Some(action) = prefab_action {
+            if let Err(err) = self.prefab_action(e, action) {
+                self.console.error(err);
+            }
+        }
+    }
+
+    /// Make, apply, revert or unlink the prefab of `e` (the change is
+    /// already recorded for undo)
+    pub fn prefab_action(&mut self, e: Entity, action: Action) -> Result<(), String> {
+        let Ok(view) = &mut self.scene else {
+            return Err("no scene view".into());
+        };
+        let engine = &mut view.engine;
+        let assets = &mut self.project.assets;
+        match action {
+            Action::MakePrefab => {
+                let name = engine
+                    .world
+                    .get(e, NAME)
+                    .map(orst::schema::text_str)
+                    .unwrap_or("");
+                let path = prefabs::new_path(assets, name);
+                prefabs::write_prefab(engine, assets, e, &path)?;
+                self.rescan();
+                let Ok(view) = &mut self.scene else {
+                    unreachable!()
+                };
+                let engine = &mut view.engine;
+                let p =
+                    self.project
+                        .assets
+                        .load(engine, FieldType::Prefab, &path.as_str().into())?;
+                engine.set_prefab_instance(e, p);
+                self.console.info(format!("Made prefab {path}"));
+            }
+            Action::ApplyPrefab => {
+                let n = prefabs::apply(engine, assets, e)?;
+                self.console
+                    .info(format!("Applied to the prefab and {n} other instance(s)"));
+            }
+            Action::RevertPrefab => {
+                for w in prefabs::revert(engine, assets, e) {
+                    self.console.warn(w);
+                }
+            }
+            Action::UnlinkPrefab => engine.set_prefab_instance(e, 0),
+            _ => {}
+        }
+        self.dirty = true;
+        Ok(())
     }
 
     fn rescan(&mut self) {
@@ -1725,6 +1795,81 @@ mod tests {
         let e = engine.world.find_named("One").unwrap();
         let map = tiles::map_of(engine, e).unwrap();
         assert_eq!(engine.tilemap(map).unwrap().layers[0].get(0, 1), 2);
+    }
+
+    #[test]
+    fn prefab_changes_reach_instances_that_kept_their_values() {
+        let mut ed = editor("prefab");
+        ed.create_entity();
+        let coin = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        write(world, coin, NAME, &Name::new("Coin"));
+        ed.history.record(&ed.scene.as_ref().unwrap().engine);
+        ed.prefab_action(coin, Action::MakePrefab).unwrap();
+        let path = "Prefabs/Coin.prefab";
+        assert!(ed.project.assets.file(path).is_file());
+        assert!(ed.project.assets.uid(path).is_some(), "it has its .meta");
+
+        ed.drop_asset(path, orst::Vec2::new(30.0, 40.0)).unwrap();
+        let a = ed.selected.unwrap();
+        ed.drop_asset(path, orst::Vec2::new(50.0, 0.0)).unwrap();
+        let b = ed.selected.unwrap();
+        let engine = &mut ed.scene.as_mut().unwrap().engine;
+        assert_eq!(engine.world.find_named("Coin"), Some(coin));
+        let t: Transform = read(&engine.world, a, TRANSFORM).unwrap();
+        assert_eq!(t.pos, orst::Vec2::new(30.0, 40.0));
+
+        // b changes its scale; a changes rotation and applies it
+        let mut tb: Transform = read(&engine.world, b, TRANSFORM).unwrap();
+        tb.scale = orst::Vec2::new(3.0, 3.0);
+        write(&mut engine.world, b, TRANSFORM, &tb);
+        let mut ta = t;
+        ta.rotation = 1.0;
+        write(&mut engine.world, a, TRANSFORM, &ta);
+        let overrides = prefabs::overrides(engine, &ed.project.assets, a);
+        assert!(overrides.contains(&("Transform".into(), "rotation".into())));
+        ed.prefab_action(a, Action::ApplyPrefab).unwrap();
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let tr = |e| read::<Transform>(&engine.world, e, TRANSFORM).unwrap();
+        assert_eq!(
+            (tr(coin).rotation, tr(coin).pos),
+            (1.0, orst::Vec2::default())
+        );
+        assert_eq!(
+            (tr(b).rotation, tr(b).scale, tr(b).pos.x),
+            (1.0, orst::Vec2::new(3.0, 3.0), 50.0)
+        );
+        assert_eq!(tr(a).pos, orst::Vec2::new(30.0, 40.0));
+        let text = std::fs::read_to_string(ed.project.assets.file(path)).unwrap();
+        assert!(
+            !text.contains("30.0"),
+            "the instance's place stays its own: {text}"
+        );
+
+        // Revert drops b's scale and keeps its place
+        ed.prefab_action(b, Action::RevertPrefab).unwrap();
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let tb: Transform = read(&engine.world, b, TRANSFORM).unwrap();
+        assert_eq!((tb.scale, tb.pos.x), (orst::Vec2::new(1.0, 1.0), 50.0));
+
+        // The scene stores instances by the prefab and opens again
+        ed.save_scene("Main.scene").unwrap();
+        let text = std::fs::read_to_string(ed.project.assets.file("Main.scene")).unwrap();
+        assert!(text.contains("\"prefab\""), "{text}");
+        let (project, _) = Project::open(&ed.project.root).unwrap();
+        let ed = Editor::new(project, Console::default(), None);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        let instances = engine.world.query(&[orst::components::PREFAB]);
+        assert_eq!(instances.len(), 3);
+        let rotations: Vec<f32> = instances
+            .iter()
+            .map(|&e| {
+                read::<Transform>(&engine.world, e, TRANSFORM)
+                    .unwrap()
+                    .rotation
+            })
+            .collect();
+        assert_eq!(rotations, [1.0, 1.0, 1.0]);
     }
 
     fn image_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {

@@ -24,7 +24,7 @@
 //! a field that is gone, a missing texture) as warnings and goes on, so
 //! one stale line does not lose a level.
 
-use crate::components::{Name, NAME};
+use crate::components::{read, write, Name, PrefabInstance, NAME, PREFAB};
 use crate::ecs::Entity;
 use crate::engine::Engine;
 use crate::schema::{Field, FieldType, Value};
@@ -70,6 +70,7 @@ impl Assets for Files {
         let file = match ty {
             FieldType::Texture => engine.texture_file(id)?,
             FieldType::Tilemap => engine.tilemap_file(id)?,
+            FieldType::Prefab => engine.prefab_file(id)?,
             _ => return None,
         };
         self.relative(file).map(Json::String)
@@ -81,6 +82,7 @@ impl Assets for Files {
         let ids: Vec<u32> = match ty {
             FieldType::Texture => engine.textures.ids().collect(),
             FieldType::Tilemap => engine.tilemaps.ids().collect(),
+            FieldType::Prefab => engine.prefabs.ids().collect(),
             _ => return Err(format!("{} is not a file", ty.name())),
         };
         if let Some(id) = ids
@@ -93,6 +95,7 @@ impl Assets for Files {
         let path = path.to_str().ok_or("a path that is not UTF-8")?;
         match ty {
             FieldType::Texture => engine.load_texture(path),
+            FieldType::Prefab => engine.load_prefab(path),
             _ => engine.load_tilemap(path),
         }
     }
@@ -113,82 +116,158 @@ impl Engine {
     /// field pointing outside `entities`.
     pub fn save_scene(&self, entities: &[Entity], assets: &dyn Assets) -> (String, Vec<String>) {
         let mut warnings = Vec::new();
-        let ids: HashMap<Entity, u64> = entities
+        let ids = numbering(entities);
+        let list: Vec<Json> = entities
             .iter()
-            .enumerate()
-            .map(|(i, &e)| (e, i as u64 + 1))
+            .zip(1u64..)
+            .map(|(&e, i)| self.entity_json(e, i, &ids, assets, true, &mut warnings))
             .collect();
-        let world = &self.world;
-        let mut list = Vec::new();
-        for (&e, i) in entities.iter().zip(1u64..) {
-            let mut out = Map::new();
-            out.insert("id".into(), json!(i));
-            let mut components = Map::new();
-            for c in 1..=world.component_types() {
-                let Some(bytes) = world.get(e, c) else {
-                    continue;
-                };
-                let storage = world.storage(c).unwrap();
-                if c == NAME {
-                    out.insert("name".into(), json!(crate::schema::text_str(bytes)));
-                    continue;
-                }
-                let mut fields = Map::new();
-                if storage.fields.is_empty() && !bytes.is_empty() {
-                    fields.insert("$bytes".into(), json!(hex(bytes)));
-                }
-                for f in &storage.fields {
-                    let where_ = || format!("entity {i}, {}.{}", storage.name, f.name);
-                    let v = match (f.ty, f.read(bytes)) {
-                        (_, Value::U32(0))
-                            if matches!(
-                                f.ty,
-                                FieldType::Texture | FieldType::Tilemap | FieldType::Polygon
-                            ) =>
-                        {
-                            Json::Null
-                        }
-                        (FieldType::Polygon, Value::U32(id)) => match self.polygons.get(id) {
-                            Some(points) => {
-                                json!(points.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())
-                            }
-                            None => {
-                                warnings.push(format!("{}: no polygon {id}", where_()));
-                                Json::Null
-                            }
-                        },
-                        (FieldType::Texture | FieldType::Tilemap, Value::U32(id)) => {
-                            match assets.name(self, f.ty, id) {
-                                Some(name) => name,
-                                None => {
-                                    warnings.push(format!(
-                                        "{}: {} {id} has no file in the project",
-                                        where_(),
-                                        f.ty.name()
-                                    ));
-                                    Json::Null
-                                }
-                            }
-                        }
-                        (_, Value::Entity(0)) => json!(0),
-                        (_, Value::Entity(target)) => match ids.get(&target) {
-                            Some(&id) => json!(id),
-                            None => {
-                                warnings.push(format!("{}: points outside the scene", where_()));
-                                json!(0)
-                            }
-                        },
-                        (_, v) => f.to_json(v),
-                    };
-                    fields.insert(f.name.clone(), v);
-                }
-                components.insert(storage.name.clone(), Json::Object(fields));
-            }
-            out.insert("components".into(), Json::Object(components));
-            list.push(Json::Object(out));
-        }
         let scene = json!({"orst_scene": SCENE_VERSION, "entities": list});
         (serde_json::to_string_pretty(&scene).unwrap(), warnings)
+    }
+
+    /// One entity of `scope` as a scene file writes it, numbered as
+    /// save_scene numbers `scope`: what refill_entity takes back
+    pub fn scene_entity(
+        &self,
+        e: Entity,
+        scope: &[Entity],
+        assets: &dyn Assets,
+    ) -> (Json, Vec<String>) {
+        let mut warnings = Vec::new();
+        let mut ids = numbering(scope);
+        let next = ids.len() as u64 + 1;
+        let i = *ids.entry(e).or_insert(next);
+        (
+            self.entity_json(e, i, &ids, assets, true, &mut warnings),
+            warnings,
+        )
+    }
+
+    /// The entity as a prefab file: itself alone, not linked to the prefab
+    /// it may be an instance of
+    pub fn prefab_of(&self, e: Entity, assets: &dyn Assets) -> (String, Vec<String>) {
+        let mut warnings = Vec::new();
+        let item = self.entity_json(e, 1, &numbering(&[e]), assets, false, &mut warnings);
+        let scene = json!({"orst_scene": SCENE_VERSION, "entities": [item]});
+        (serde_json::to_string_pretty(&scene).unwrap(), warnings)
+    }
+
+    /// Give `e` exactly the components `item` (from scene_entity) holds,
+    /// its prefab's included
+    pub fn refill_entity(
+        &mut self,
+        e: Entity,
+        item: &Json,
+        scope: &[Entity],
+        assets: &mut dyn Assets,
+    ) -> Vec<String> {
+        for c in 1..=self.world.component_types() {
+            self.world.remove(e, c);
+        }
+        let mut entities: HashMap<u64, Entity> =
+            numbering(scope).into_iter().map(|(e, i)| (i, e)).collect();
+        let id = item.get("id").and_then(Json::as_u64).unwrap_or(0);
+        entities.insert(id, e);
+        let mut warnings = Vec::new();
+        self.fill_entity(e, id, item, &entities, assets, &mut warnings);
+        warnings
+    }
+
+    fn entity_json(
+        &self,
+        e: Entity,
+        i: u64,
+        ids: &HashMap<Entity, u64>,
+        assets: &dyn Assets,
+        linked: bool,
+        warnings: &mut Vec<String>,
+    ) -> Json {
+        let world = &self.world;
+        let mut out = Map::new();
+        out.insert("id".into(), json!(i));
+        let mut components = Map::new();
+        for c in 1..=world.component_types() {
+            let Some(bytes) = world.get(e, c) else {
+                continue;
+            };
+            let storage = world.storage(c).unwrap();
+            if c == NAME {
+                out.insert("name".into(), json!(crate::schema::text_str(bytes)));
+                continue;
+            }
+            if c == PREFAB {
+                continue;
+            }
+            let mut fields = Map::new();
+            if storage.fields.is_empty() && !bytes.is_empty() {
+                fields.insert("$bytes".into(), json!(hex(bytes)));
+            }
+            for f in &storage.fields {
+                let where_ = || format!("entity {i}, {}.{}", storage.name, f.name);
+                let v = match (f.ty, f.read(bytes)) {
+                    (_, Value::U32(0))
+                        if matches!(
+                            f.ty,
+                            FieldType::Texture | FieldType::Tilemap | FieldType::Polygon
+                        ) =>
+                    {
+                        Json::Null
+                    }
+                    (FieldType::Polygon, Value::U32(id)) => match self.polygons.get(id) {
+                        Some(points) => {
+                            json!(points.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>())
+                        }
+                        None => {
+                            warnings.push(format!("{}: no polygon {id}", where_()));
+                            Json::Null
+                        }
+                    },
+                    (FieldType::Texture | FieldType::Tilemap, Value::U32(id)) => {
+                        match assets.name(self, f.ty, id) {
+                            Some(name) => name,
+                            None => {
+                                warnings.push(format!(
+                                    "{}: {} {id} has no file in the project",
+                                    where_(),
+                                    f.ty.name()
+                                ));
+                                Json::Null
+                            }
+                        }
+                    }
+                    (_, Value::Entity(0)) => json!(0),
+                    (_, Value::Entity(target)) => match ids.get(&target) {
+                        Some(&id) => json!(id),
+                        None => {
+                            warnings.push(format!("{}: points outside the scene", where_()));
+                            json!(0)
+                        }
+                    },
+                    (_, v) => f.to_json(v),
+                };
+                fields.insert(f.name.clone(), v);
+            }
+            components.insert(storage.name.clone(), Json::Object(fields));
+        }
+        let link = read::<PrefabInstance>(world, e, PREFAB).filter(|_| linked);
+        if let Some(p) = link.map(|l| l.prefab) {
+            match assets.name(self, FieldType::Prefab, p) {
+                Some(name) => {
+                    out.insert("prefab".into(), name);
+                    let (changed, removed) = self.overrides(p, i, components);
+                    components = changed;
+                    if !removed.is_empty() {
+                        out.insert("removed".into(), json!(removed));
+                    }
+                }
+                None => warnings.push(format!(
+                    "entity {i}: prefab {p} has no file in the project, saved unlinked"
+                )),
+            }
+        }
+        out.insert("components".into(), Json::Object(components));
+        Json::Object(out)
     }
 
     /// Spawn the entities of a scene file. Fails without spawning anything
@@ -234,61 +313,87 @@ impl Engine {
             let id = item["id"].as_u64().unwrap();
             let e = entities[&id];
             out.entities.push(e);
-            if let Some(name) = item.get("name") {
-                match name.as_str() {
-                    Some(name) => {
-                        crate::components::write(&mut self.world, e, NAME, &Name::new(name));
-                    }
-                    None => out
-                        .warnings
-                        .push(format!("entity {id}: the name is not a string")),
-                }
-            }
-            let Some(components) = item.get("components").and_then(Json::as_object) else {
-                continue;
-            };
-            for (cname, data) in components {
-                let what = format!("entity {id}, {cname}");
-                let Some(c) = self.world.component_id(cname) else {
-                    out.warnings
-                        .push(format!("{what}: no such component is registered"));
-                    continue;
-                };
-                let storage = self.world.storage(c).unwrap();
-                let size = storage.size as usize;
-                let fields: Vec<Field> = storage.fields.clone();
-                // A field the file lacks keeps the component's default
-                // (a script's field initialiser, say)
-                let mut bytes = self.world.default_value(c);
-                let Some(data) = data.as_object() else {
-                    out.warnings.push(format!("{what}: not an object"));
-                    continue;
-                };
-                for (key, v) in data {
-                    if key == "$bytes" {
-                        match unhex(v.as_str().unwrap_or("")) {
-                            Some(b) if b.len() == size => bytes = b,
-                            _ => out
-                                .warnings
-                                .push(format!("{what}: $bytes are not {size} bytes in hex")),
-                        }
-                        continue;
-                    }
-                    let Some(f) = fields.iter().find(|f| &f.name == key) else {
-                        out.warnings.push(format!("{what}: no field {key:?}"));
-                        continue;
-                    };
-                    match self.field_from_json(f, v, &entities, assets) {
-                        Ok(value) => {
-                            f.write(&mut bytes, value);
-                        }
-                        Err(why) => out.warnings.push(format!("{what}.{key}: {why}")),
-                    }
-                }
-                self.world.set(e, c, &bytes);
-            }
+            self.fill_entity(e, id, item, &entities, assets, &mut out.warnings);
         }
         Ok(out)
+    }
+
+    /// Give `e` the name and components of a scene file entity: its
+    /// prefab's, with what the entity changes on top
+    fn fill_entity(
+        &mut self,
+        e: Entity,
+        id: u64,
+        item: &Json,
+        entities: &HashMap<u64, Entity>,
+        assets: &mut dyn Assets,
+        warnings: &mut Vec<String>,
+    ) {
+        let mut name = item.get("name").cloned();
+        let own = item.get("components").and_then(Json::as_object);
+        let mut components = own.cloned().unwrap_or_default();
+        if let Some(prefab) = item.get("prefab") {
+            match assets.load(self, FieldType::Prefab, prefab) {
+                Ok(p) => {
+                    write(&mut self.world, e, PREFAB, &PrefabInstance { prefab: p });
+                    let removed = item.get("removed").and_then(Json::as_array);
+                    components = self.instance_components(p, id, own, removed);
+                    if name.is_none() {
+                        name = self
+                            .prefabs
+                            .get(p)
+                            .and_then(|p| p.name.clone())
+                            .map(Json::from);
+                    }
+                }
+                Err(why) => warnings.push(format!("entity {id}: prefab: {why}")),
+            }
+        }
+        if let Some(name) = name {
+            match name.as_str() {
+                Some(name) => {
+                    write(&mut self.world, e, NAME, &Name::new(name));
+                }
+                None => warnings.push(format!("entity {id}: the name is not a string")),
+            }
+        }
+        for (cname, data) in &components {
+            let what = format!("entity {id}, {cname}");
+            let Some(c) = self.world.component_id(cname) else {
+                warnings.push(format!("{what}: no such component is registered"));
+                continue;
+            };
+            let storage = self.world.storage(c).unwrap();
+            let size = storage.size as usize;
+            let fields: Vec<Field> = storage.fields.clone();
+            // A field the file lacks keeps the component's default
+            // (a script's field initialiser, say)
+            let mut bytes = self.world.default_value(c);
+            let Some(data) = data.as_object() else {
+                warnings.push(format!("{what}: not an object"));
+                continue;
+            };
+            for (key, v) in data {
+                if key == "$bytes" {
+                    match unhex(v.as_str().unwrap_or("")) {
+                        Some(b) if b.len() == size => bytes = b,
+                        _ => warnings.push(format!("{what}: $bytes are not {size} bytes in hex")),
+                    }
+                    continue;
+                }
+                let Some(f) = fields.iter().find(|f| &f.name == key) else {
+                    warnings.push(format!("{what}: no field {key:?}"));
+                    continue;
+                };
+                match self.field_from_json(f, v, entities, assets) {
+                    Ok(value) => {
+                        f.write(&mut bytes, value);
+                    }
+                    Err(why) => warnings.push(format!("{what}.{key}: {why}")),
+                }
+            }
+            self.world.set(e, c, &bytes);
+        }
     }
 
     fn field_from_json(
@@ -334,7 +439,16 @@ impl Engine {
     }
 }
 
-fn hex(bytes: &[u8]) -> String {
+/// Scene file ids of `entities`: 1, 2, ... in order
+fn numbering(entities: &[Entity]) -> HashMap<Entity, u64> {
+    entities
+        .iter()
+        .enumerate()
+        .map(|(i, &e)| (e, i as u64 + 1))
+        .collect()
+}
+
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

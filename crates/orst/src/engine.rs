@@ -67,6 +67,8 @@ pub struct Engine {
     pub polygons: Store<Vec<Vec2>>,
     /// WGSL sources of post effect shaders
     pub shaders: Store<String>,
+    /// Loaded prefabs, shared by their instances
+    pub prefabs: Store<crate::prefab::Prefab>,
     /// Collider layers that cast shadows
     shadow_layers: u32,
     /// Maps whose solid cells cast shadows
@@ -140,6 +142,7 @@ impl Engine {
             skeletons: Store::default(),
             polygons: Store::default(),
             shaders: Store::default(),
+            prefabs: Store::default(),
             shadow_layers: 0,
             shadow_maps: Default::default(),
             state: DrawState::default(),

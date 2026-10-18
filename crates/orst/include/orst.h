@@ -407,6 +407,7 @@ bool orst_get_field(OrstEngine *e, uint32_t component, uint32_t index, OrstField
 #define ORST_CAMERA_2D 10
 #define ORST_PARTICLE_EMITTER 11
 #define ORST_TILEMAP_RENDERER 12
+#define ORST_PREFAB 13 /* marks a prefab instance; scene loading sets it */
 
 typedef struct OrstTransform {
     OrstVec2 pos;

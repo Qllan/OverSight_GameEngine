@@ -13,6 +13,7 @@ mod inspector;
 mod native;
 mod play;
 mod player;
+mod prefabs;
 mod project;
 mod scene_view;
 mod scripts;

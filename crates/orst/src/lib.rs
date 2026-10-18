@@ -36,6 +36,7 @@ pub mod physics;
 #[path = "physics_off.rs"]
 pub mod physics;
 pub mod post;
+pub mod prefab;
 pub mod render;
 pub mod rng;
 pub mod scene_file;

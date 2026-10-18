@@ -34,6 +34,9 @@ pub enum FieldType {
     U8 = 12,
     /// 64 bytes of UTF-8, the rest zeros (a Name)
     Text = 13,
+    /// A prefab (prefab.rs). Scene files name prefabs through `Assets`
+    /// like textures; components cannot have fields of it.
+    Prefab = 14,
 }
 
 impl FieldType {
@@ -61,7 +64,7 @@ impl FieldType {
         use FieldType::*;
         match self {
             Bool | U8 => 1,
-            F32 | I32 | U32 | Color | Texture | Tilemap | Polygon => 4,
+            F32 | I32 | U32 | Color | Texture | Tilemap | Polygon | Prefab => 4,
             Vec2 | Entity => 8,
             Rect => 16,
             Text => TEXT_BYTES as u32,
@@ -84,6 +87,7 @@ impl FieldType {
             Polygon => "polygon",
             U8 => "u8",
             Text => "text",
+            Prefab => "prefab",
         }
     }
 }
@@ -172,9 +176,11 @@ impl Field {
         match self.ty {
             FieldType::F32 => Value::F32(f(0)),
             FieldType::I32 => Value::I32(u() as i32),
-            FieldType::U32 | FieldType::Texture | FieldType::Tilemap | FieldType::Polygon => {
-                Value::U32(u())
-            }
+            FieldType::U32
+            | FieldType::Texture
+            | FieldType::Tilemap
+            | FieldType::Polygon
+            | FieldType::Prefab => Value::U32(u()),
             FieldType::Bool => Value::Bool(b[0] != 0),
             FieldType::U8 => Value::U32(b[0] as u32),
             FieldType::Vec2 => Value::Vec2(Vec2::new(f(0), f(4))),
@@ -250,7 +256,8 @@ impl Field {
             | FieldType::U8
             | FieldType::Texture
             | FieldType::Tilemap
-            | FieldType::Polygon => match v.as_str() {
+            | FieldType::Polygon
+            | FieldType::Prefab => match v.as_str() {
                 Some(name) => Value::U32(self.options.iter().position(|o| o == name)? as u32),
                 None => {
                     let n = u32::try_from(v.as_u64()?).ok()?;

@@ -21,8 +21,9 @@ pub const SPRITE_ANIMATOR: u32 = 9;
 pub const CAMERA_2D: u32 = 10;
 pub const PARTICLE_EMITTER: u32 = 11;
 pub const TILEMAP_RENDERER: u32 = 12;
+pub const PREFAB: u32 = 13;
 /// Ids up to this one are the engine's own
-pub const LAST_BUILTIN: u32 = TILEMAP_RENDERER;
+pub const LAST_BUILTIN: u32 = PREFAB;
 
 pub const BODY_DYNAMIC: u32 = 0;
 pub const BODY_FIXED: u32 = 1;
@@ -434,6 +435,16 @@ impl Default for TilemapRenderer {
     }
 }
 
+/// Marks an entity as an instance of a prefab (prefab.rs): the scene file
+/// stores only what the instance changes. It has no fields, so the
+/// inspector and scene files treat it apart, like Name.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PrefabInstance {
+    /// The prefab's id in `Engine::prefabs`
+    pub prefab: u32,
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -466,6 +477,7 @@ pub fn register(world: &mut World) {
             size(std::mem::size_of::<TilemapRenderer>()),
             4,
         ),
+        world.component("Prefab", size(std::mem::size_of::<PrefabInstance>()), 4),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -485,7 +497,8 @@ pub fn register(world: &mut World) {
             SPRITE_ANIMATOR,
             CAMERA_2D,
             PARTICLE_EMITTER,
-            TILEMAP_RENDERER
+            TILEMAP_RENDERER,
+            PREFAB
         ],
         "built-ins come first"
     );
@@ -704,6 +717,7 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         CAMERA_2D => Some(bytes(Camera2D::default())),
         PARTICLE_EMITTER => Some(bytes(ParticleEmitter::default())),
         TILEMAP_RENDERER => Some(bytes(TilemapRenderer::default())),
+        PREFAB => Some(bytes(PrefabInstance::default())),
         _ => None,
     }
 }
@@ -806,8 +820,8 @@ mod tests {
         let long = "я".repeat(40); // 80 bytes: cut to 32 letters
         assert_eq!(Name::new(&long).as_str(), "я".repeat(32));
         // Every byte is described but padding and Body's contacts
-        let left = [0, 0, 0, 4, 3, 2, 3, 0, 3, 3, 3, 2];
-        for (id, left) in (TRANSFORM..=TILEMAP_RENDERER).zip(left) {
+        let left = [0, 0, 0, 4, 3, 2, 3, 0, 3, 3, 3, 2, 4];
+        for (id, left) in (TRANSFORM..=PREFAB).zip(left) {
             let described: u32 = w.fields(id).iter().map(|f| f.ty.size()).sum();
             assert_eq!(
                 w.storage(id).unwrap().size - described,
