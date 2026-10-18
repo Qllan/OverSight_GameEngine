@@ -17,6 +17,7 @@ mod prefabs;
 mod project;
 mod scene_view;
 mod scripts;
+mod sprite_anim;
 mod tiles;
 
 pub(crate) use eframe::egui;

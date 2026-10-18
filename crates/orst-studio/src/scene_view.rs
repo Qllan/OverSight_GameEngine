@@ -468,6 +468,8 @@ pub fn draw(
     );
 
     engine.set_layer(0);
+    // Animated sprites show their clip's frame, not the whole sheet
+    engine.animate_sprites(0.0);
     engine.draw_entities();
 
     engine.set_layer(i32::MAX);

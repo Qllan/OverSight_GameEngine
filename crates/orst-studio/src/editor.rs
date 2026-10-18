@@ -12,6 +12,7 @@ use crate::prefabs;
 use crate::project::{Language, Project};
 use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
 use crate::scripts::{self, BuildResult, ScriptHost, ScriptProject, Scripts, Sources};
+use crate::sprite_anim::AnimEdit;
 use crate::tiles::{self, TilePaint};
 use orst::components::{
     read, write, Name, SpriteRenderer, TilemapRenderer, Transform, NAME, SPRITE_RENDERER,
@@ -64,6 +65,8 @@ pub struct Editor {
     exporting: Option<(mpsc::Receiver<Exported>, bool)>,
     /// Tile painting on the selected map
     pub tiles: TilePaint,
+    /// The sprite animation editor
+    anim: AnimEdit,
     /// The New tilemap dialog
     new_map: Option<NewMap>,
     want_close: bool,
@@ -148,6 +151,7 @@ impl Editor {
             build_game: None,
             exporting: None,
             tiles: TilePaint::default(),
+            anim: AnimEdit::default(),
             new_map: None,
             want_close: false,
             title: String::new(),
@@ -1307,16 +1311,23 @@ impl Editor {
             self.selected = None;
             return;
         }
-        let (engine, tiles) = (&view.engine, &mut self.tiles);
+        let (engine, tiles, anim) = (&view.engine, &mut self.tiles, &mut self.anim);
+        let mut extra = Vec::new();
         let mut more = |ui: &mut egui::Ui| {
             if let Some(map) = tiles::map_of(engine, e) {
                 ui.separator();
                 ui.strong("Tiles");
                 tiles.ui(ui, engine, map);
             }
+            if engine.world.has(e, orst::components::SPRITE_ANIMATOR) {
+                ui.separator();
+                ui.strong("Animation");
+                extra = anim.ui(ui, engine, e);
+            }
         };
         let overrides = prefabs::overrides(engine, &self.project.assets, e);
-        let actions = inspector::ui(ui, &view.engine, e, &overrides, &mut more);
+        let mut actions = inspector::ui(ui, &view.engine, e, &overrides, &mut more);
+        actions.append(&mut extra);
         if actions.is_empty() {
             return;
         }
@@ -1870,6 +1881,21 @@ mod tests {
             })
             .collect();
         assert_eq!(rotations, [1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn the_animation_editor_shows_for_animated_sprites() {
+        let mut ed = editor("anim");
+        let png = ed.project.assets.file("hero.png");
+        image_png(&png, 64, 32, &[255u8; 64 * 32 * 4]);
+        ed.rescan();
+        ed.drop_asset("hero.png", orst::Vec2::default()).unwrap();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        inspector::add_component(world, e, orst::components::SPRITE_ANIMATOR);
+        let ctx = egui::Context::default();
+        frame(&ctx, &mut ed);
+        frame(&ctx, &mut ed);
     }
 
     fn image_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {
