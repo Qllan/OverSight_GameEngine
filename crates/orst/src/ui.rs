@@ -141,20 +141,18 @@ impl Engine {
             .map(|p| p.entity);
         let pressed = self.input.mouse_pressed(MouseButton::Left);
         let released = self.input.mouse_released(MouseButton::Left);
+        let down = self.input.mouse_down(MouseButton::Left);
         for e in self.world.query(&[UI_BUTTON]) {
             let Some(mut b) = read::<UiButton>(&self.world, e, UI_BUTTON) else {
                 continue;
             };
             let live = b.interactable != 0 && top == Some(e);
             let before = b;
+            // A quick click can press and release within one frame
+            let pressed_on = b.held != 0 || (live && pressed);
             b.hovered = live as u8;
-            b.clicked = (live && released && b.held != 0) as u8;
-            if released || !(live || b.held != 0) || b.interactable == 0 {
-                b.held = 0;
-            }
-            if live && pressed {
-                b.held = 1;
-            }
+            b.clicked = (live && released && pressed_on) as u8;
+            b.held = (pressed_on && down && b.interactable != 0) as u8;
             // A hidden button lets go too
             if !layout.iter().any(|p| p.entity == e) {
                 b.hovered = 0;
@@ -403,6 +401,8 @@ mod tests {
         assert_eq!(frame(&mut e, &[Click(left, true)]), (1, 1, 0));
         assert_eq!(frame(&mut e, &[Click(left, false)]), (1, 0, 1));
         assert_eq!(frame(&mut e, &[]), (1, 0, 0), "one tick only");
+        let quick = [Click(left, true), Click(left, false)];
+        assert_eq!(frame(&mut e, &quick), (1, 0, 1), "within one frame");
         // Pressed on it, released off it: no click
         frame(&mut e, &[Click(left, true)]);
         frame(&mut e, &[MouseMove(Vec2::new(5.0, 5.0))]);
