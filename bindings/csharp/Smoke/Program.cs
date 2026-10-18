@@ -297,6 +297,27 @@ using (var skel = engine.CreateSkeleton(rig))
     skel.SetAttachment("arm", null);
 }
 
+// The interface: a button in the middle clicks once
+Check(engine.Component<UiRect>() == 14 && Marshal.SizeOf<UiRect>() == 56 && engine.Component<UiText>() == 15
+      && Marshal.SizeOf<UiText>() == 24 && Marshal.SizeOf<UiImage>() == 28 && engine.Component<UiButton>() == 17
+      && Marshal.SizeOf<UiButton>() == 20, "UI ids and layouts");
+var button = engine.Spawn();
+engine.Set(button, new UiRect(new Vec2(20, 10)));
+engine.Set(button, new UiButton());
+engine.Set(button, new UiText(engine.Intern("OK")));
+var where = engine.UiRectOf(button);
+var middle = new Vec2(where.X + 10, where.Y + 5);
+Check(where.W == 20 && engine.UiAt(middle) == button, "UiRect");
+engine.InjectMouseMove(middle);
+engine.InjectMouseButton(MouseButton.Left, false);
+foreach (var down in new[] { false, true, false })
+{
+    engine.InjectMouseButton(MouseButton.Left, down);
+    engine.Poll();
+    engine.Step(1f / 60);
+}
+Check(engine.Get<UiButton>(button).Clicked && engine.Text(engine.Get<UiText>(button).Text) == "OK", "UiButton click");
+
 Console.WriteLine("smoke_cs: ok");
 
 struct Pos { public float X, Y; }

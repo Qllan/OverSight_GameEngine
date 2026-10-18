@@ -52,6 +52,7 @@ pub mod tilemap;
 pub mod time;
 pub mod tween;
 pub mod types;
+pub mod ui;
 #[cfg(feature = "window")]
 pub mod window;
 

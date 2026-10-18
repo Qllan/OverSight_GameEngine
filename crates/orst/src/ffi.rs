@@ -483,6 +483,20 @@ pub extern "C" fn orst_draw_entities(e: *mut OrstEngine) {
     engine!(e).draw_entities();
 }
 
+/// Where the entity's UiRect is on the screen; zero when it is hidden
+#[no_mangle]
+pub extern "C" fn orst_ui_rect(e: *mut OrstEngine, entity: u64) -> Rect {
+    engine!(e, Rect::default())
+        .ui_rect(entity)
+        .unwrap_or_default()
+}
+
+/// The topmost box at `pos` with an image, a text or a button; 0: none
+#[no_mangle]
+pub extern "C" fn orst_ui_at(e: *mut OrstEngine, pos: Vec2) -> u64 {
+    engine!(e, 0).ui_at(pos).unwrap_or(0)
+}
+
 fn transition(t: i32) -> Result<crate::scenes::Transition, String> {
     crate::scenes::Transition::from_i32(t).ok_or_else(|| format!("unknown transition {t}"))
 }

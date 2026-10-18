@@ -186,6 +186,10 @@ public sealed partial class Engine
 
     /// <summary>Draw every entity with Transform and SpriteRenderer</summary>
     public void DrawEntities() => Native.orst_draw_entities(Handle);
+    /// <summary>Where the entity's UiRect is on the screen; empty when it is hidden</summary>
+    public Rect UiRectOf(Entity e) => Native.orst_ui_rect(Handle, e.Id);
+    /// <summary>The topmost box at pos with an image, a text or a button</summary>
+    public Entity UiAt(Vec2 pos) => new(Native.orst_ui_at(Handle, pos));
 
     /// <summary>Entities, components, random generator and tick counter as
     /// bytes: save them, or Restore them to continue exactly from here</summary>

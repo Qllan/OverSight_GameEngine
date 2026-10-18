@@ -22,8 +22,12 @@ pub const CAMERA_2D: u32 = 10;
 pub const PARTICLE_EMITTER: u32 = 11;
 pub const TILEMAP_RENDERER: u32 = 12;
 pub const PREFAB: u32 = 13;
+pub const UI_RECT: u32 = 14;
+pub const UI_TEXT: u32 = 15;
+pub const UI_IMAGE: u32 = 16;
+pub const UI_BUTTON: u32 = 17;
 /// Ids up to this one are the engine's own
-pub const LAST_BUILTIN: u32 = PREFAB;
+pub const LAST_BUILTIN: u32 = UI_BUTTON;
 
 pub const BODY_DYNAMIC: u32 = 0;
 pub const BODY_FIXED: u32 = 1;
@@ -445,6 +449,150 @@ pub struct PrefabInstance {
     pub prefab: u32,
 }
 
+/// A box on the screen for the interface (ui.rs), in screen pixels. Its
+/// corners follow two anchor points of the parent's box (or the screen's):
+/// together they pin the box to a point, apart they stretch it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiRect {
+    /// The entity whose UiRect this one sits in; none: the screen
+    pub parent: u64,
+    /// Points of the parent's box, 0..1 from its top-left
+    pub anchor_min: Vec2,
+    pub anchor_max: Vec2,
+    /// The point of this box, 0..1 from its top-left, that `pos` places
+    pub pivot: Vec2,
+    /// From the anchors (between them, by the pivot)
+    pub pos: Vec2,
+    /// The size, or how much bigger than the anchors' area it is when
+    /// they are apart
+    pub size: Vec2,
+    /// Order among the boxes of its parent; children draw over parents
+    pub layer: i32,
+    /// Hides it and the boxes in it, and stops its buttons
+    pub hidden: u8,
+    pub _pad: [u8; 3],
+}
+
+impl Default for UiRect {
+    fn default() -> Self {
+        let centre = Vec2::new(0.5, 0.5);
+        UiRect {
+            parent: 0,
+            anchor_min: centre,
+            anchor_max: centre,
+            pivot: centre,
+            pos: Vec2::default(),
+            size: Vec2::new(160.0, 40.0),
+            layer: 0,
+            hidden: 0,
+            _pad: [0; 3],
+        }
+    }
+}
+
+pub const ALIGN_START: u32 = 0;
+pub const ALIGN_CENTER: u32 = 1;
+pub const ALIGN_END: u32 = 2;
+
+/// Text in the entity's UiRect
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiText {
+    /// A string field (Engine::strings)
+    pub text: u32,
+    /// A loaded font; 0: the built-in one
+    pub font: u32,
+    pub size: f32,
+    pub color: Color,
+    /// ALIGN_START (left), ALIGN_CENTER or ALIGN_END (right)
+    pub align: u32,
+    /// ALIGN_START (top), ALIGN_CENTER or ALIGN_END (bottom)
+    pub valign: u32,
+}
+
+impl Default for UiText {
+    fn default() -> Self {
+        UiText {
+            text: 0,
+            font: 0,
+            size: 16.0,
+            color: Color::WHITE,
+            align: ALIGN_CENTER,
+            valign: ALIGN_CENTER,
+        }
+    }
+}
+
+/// Fills the entity's UiRect with a texture, or with the colour alone
+/// when it has none
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiImage {
+    pub texture: u32,
+    /// Texture region; zero size: the whole texture
+    pub src: Rect,
+    pub color: Color,
+    /// Texels kept unstretched at each edge (nine-slice); 0: it stretches
+    pub border: f32,
+}
+
+impl Default for UiImage {
+    fn default() -> Self {
+        UiImage {
+            texture: 0,
+            src: Rect::default(),
+            color: Color::WHITE,
+            border: 0.0,
+        }
+    }
+}
+
+/// Makes the entity's UiRect clickable. Engine::step works out the state
+/// from the mouse; scripts read `clicked`, true for one tick after a press
+/// and release on the button. The colours tint its UiImage.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct UiButton {
+    pub normal: Color,
+    pub hover: Color,
+    pub pressed: Color,
+    pub disabled: Color,
+    pub interactable: u8,
+    /// The mouse is over it
+    pub hovered: u8,
+    /// Pressed on it and not released yet
+    pub held: u8,
+    pub clicked: u8,
+}
+
+impl Default for UiButton {
+    fn default() -> Self {
+        UiButton {
+            normal: Color::WHITE,
+            hover: Color::rgba(225, 225, 225, 255),
+            pressed: Color::rgba(180, 180, 180, 255),
+            disabled: Color::rgba(128, 128, 128, 160),
+            interactable: 1,
+            hovered: 0,
+            held: 0,
+            clicked: 0,
+        }
+    }
+}
+
+impl UiButton {
+    /// The tint for its state now
+    pub fn tint(&self) -> Color {
+        match (self.interactable != 0, self.held != 0, self.hovered != 0) {
+            (false, _, _) => self.disabled,
+            (_, true, _) => self.pressed,
+            (_, _, true) => self.hover,
+            _ => self.normal,
+        }
+    }
+}
+
 /// Register the built-in components so they get the ids above
 pub fn register(world: &mut World) {
     let size = |n: usize| n as u32;
@@ -478,6 +626,26 @@ pub fn register(world: &mut World) {
             4,
         ),
         world.component("Prefab", size(std::mem::size_of::<PrefabInstance>()), 4),
+        world.component(
+            "UiRect",
+            size(std::mem::size_of::<UiRect>()),
+            size(std::mem::align_of::<UiRect>()),
+        ),
+        world.component(
+            "UiText",
+            size(std::mem::size_of::<UiText>()),
+            size(std::mem::align_of::<UiText>()),
+        ),
+        world.component(
+            "UiImage",
+            size(std::mem::size_of::<UiImage>()),
+            size(std::mem::align_of::<UiImage>()),
+        ),
+        world.component(
+            "UiButton",
+            size(std::mem::size_of::<UiButton>()),
+            size(std::mem::align_of::<UiButton>()),
+        ),
     ];
     let ids: Vec<u32> = ids
         .into_iter()
@@ -498,7 +666,11 @@ pub fn register(world: &mut World) {
             CAMERA_2D,
             PARTICLE_EMITTER,
             TILEMAP_RENDERER,
-            PREFAB
+            PREFAB,
+            UI_RECT,
+            UI_TEXT,
+            UI_IMAGE,
+            UI_BUTTON
         ],
         "built-ins come first"
     );
@@ -657,6 +829,56 @@ fn builtin_fields() -> Vec<(u32, Vec<Field>)> {
                 Field::new("hidden", T::Bool, at(offset_of!(TilemapRenderer, hidden))),
             ],
         ),
+        (
+            UI_RECT,
+            vec![
+                Field::new("parent", T::Entity, at(offset_of!(UiRect, parent))),
+                Field::new("anchor_min", T::Vec2, at(offset_of!(UiRect, anchor_min))),
+                Field::new("anchor_max", T::Vec2, at(offset_of!(UiRect, anchor_max))),
+                Field::new("pivot", T::Vec2, at(offset_of!(UiRect, pivot))),
+                Field::new("pos", T::Vec2, at(offset_of!(UiRect, pos))),
+                Field::new("size", T::Vec2, at(offset_of!(UiRect, size))),
+                Field::new("layer", T::I32, at(offset_of!(UiRect, layer))),
+                Field::new("hidden", T::Bool, at(offset_of!(UiRect, hidden))),
+            ],
+        ),
+        (
+            UI_TEXT,
+            vec![
+                Field::new("text", T::String, at(offset_of!(UiText, text))),
+                Field::new("font", T::U32, at(offset_of!(UiText, font))),
+                Field::new("size", T::F32, at(offset_of!(UiText, size))),
+                Field::new("color", T::Color, at(offset_of!(UiText, color))),
+                Field::new("align", T::U32, at(offset_of!(UiText, align)))
+                    .options(&["Left", "Center", "Right"]),
+                Field::new("valign", T::U32, at(offset_of!(UiText, valign)))
+                    .options(&["Top", "Middle", "Bottom"]),
+            ],
+        ),
+        (
+            UI_IMAGE,
+            vec![
+                Field::new("texture", T::Texture, at(offset_of!(UiImage, texture))),
+                Field::new("src", T::Rect, at(offset_of!(UiImage, src))),
+                Field::new("color", T::Color, at(offset_of!(UiImage, color))),
+                Field::new("border", T::F32, at(offset_of!(UiImage, border))),
+            ],
+        ),
+        // The state is the engine's, worked out every tick
+        (
+            UI_BUTTON,
+            vec![
+                Field::new("normal", T::Color, at(offset_of!(UiButton, normal))),
+                Field::new("hover", T::Color, at(offset_of!(UiButton, hover))),
+                Field::new("pressed", T::Color, at(offset_of!(UiButton, pressed))),
+                Field::new("disabled", T::Color, at(offset_of!(UiButton, disabled))),
+                Field::new(
+                    "interactable",
+                    T::Bool,
+                    at(offset_of!(UiButton, interactable)),
+                ),
+            ],
+        ),
     ]
 }
 
@@ -718,6 +940,10 @@ pub fn default_bytes(component: u32) -> Option<Vec<u8>> {
         PARTICLE_EMITTER => Some(bytes(ParticleEmitter::default())),
         TILEMAP_RENDERER => Some(bytes(TilemapRenderer::default())),
         PREFAB => Some(bytes(PrefabInstance::default())),
+        UI_RECT => Some(bytes(UiRect::default())),
+        UI_TEXT => Some(bytes(UiText::default())),
+        UI_IMAGE => Some(bytes(UiImage::default())),
+        UI_BUTTON => Some(bytes(UiButton::default())),
         _ => None,
     }
 }

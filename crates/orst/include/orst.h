@@ -414,6 +414,10 @@ bool orst_get_field(OrstEngine *e, uint32_t component, uint32_t index, OrstField
 #define ORST_PARTICLE_EMITTER 11
 #define ORST_TILEMAP_RENDERER 12
 #define ORST_PREFAB 13 /* marks a prefab instance; scene loading sets it */
+#define ORST_UI_RECT 14
+#define ORST_UI_TEXT 15
+#define ORST_UI_IMAGE 16
+#define ORST_UI_BUTTON 17
 
 typedef struct OrstTransform {
     OrstVec2 pos;
@@ -542,6 +546,55 @@ typedef struct OrstTilemapRenderer {
     uint8_t hidden;
     uint8_t pad_[2];
 } OrstTilemapRenderer;
+
+/* The interface: a box on the screen, in canvas pixels. Its corners follow
+ * two anchor points (0..1) of the parent's box, or of the screen: together
+ * they pin it to a point, apart they stretch it. orst_draw_entities draws
+ * the interface over the world; orst_step works out the buttons. */
+typedef struct OrstUiRect {
+    OrstEntity parent;   /* 0: the screen */
+    OrstVec2 anchor_min; /* default {0.5, 0.5} */
+    OrstVec2 anchor_max; /* default {0.5, 0.5} */
+    OrstVec2 pivot;      /* the point of the box pos places; default {0.5, 0.5} */
+    OrstVec2 pos;        /* from the anchors */
+    OrstVec2 size;       /* or how much bigger than the anchors' area */
+    int32_t layer;       /* order among its siblings; children draw over parents */
+    uint8_t hidden;      /* hides the boxes in it too */
+    uint8_t pad_[3];
+} OrstUiRect;
+
+#define ORST_ALIGN_START 0
+#define ORST_ALIGN_CENTER 1
+#define ORST_ALIGN_END 2
+
+/* Text in the entity's UiRect */
+typedef struct OrstUiText {
+    uint32_t text; /* a string id (orst_intern) */
+    uint32_t font; /* 0: the built-in font */
+    float size;    /* default 16 */
+    OrstColor color;
+    uint32_t align;  /* ORST_ALIGN_*: left, center (default), right */
+    uint32_t valign; /* ORST_ALIGN_*: top, middle (default), bottom */
+} OrstUiText;
+
+/* Fills the UiRect with a texture, or with the colour when it has none */
+typedef struct OrstUiImage {
+    uint32_t texture;
+    OrstRect src; /* zero size: the whole texture */
+    OrstColor color;
+    float border; /* texels kept unstretched at the edges (nine-slice) */
+} OrstUiImage;
+
+/* Makes the UiRect clickable; clicked is 1 for one tick after a press
+ * and release on it. The colours tint its UiImage. */
+typedef struct OrstUiButton {
+    OrstColor normal, hover, pressed, disabled;
+    uint8_t interactable;
+    uint8_t hovered, held, clicked; /* set by orst_step */
+} OrstUiButton;
+
+OrstRect orst_ui_rect(OrstEngine *e, OrstEntity entity); /* where it is now; zero when hidden */
+OrstEntity orst_ui_at(OrstEngine *e, OrstVec2 pos);      /* the topmost box there with an image, text or button */
 
 /* How two shapes overlap: move the second by normal * depth and they only touch */
 typedef struct OrstOverlap {

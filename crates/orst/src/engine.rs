@@ -447,11 +447,12 @@ impl Engine {
         self.collisions.update(&mut self.world, &self.polygons);
     }
 
-    /// One tick of the built-in systems, in this order: motion, bodies
+    /// One tick of the built-in systems, in this order: interface buttons, motion, bodies
     /// with mass, collisions, sprite animations, then the camera follows
     /// the current Camera2D. Games call it once per fixed tick after their
     /// own logic; the editor's Play runs exactly this.
     pub fn step(&mut self, dt: f32) {
+        self.update_ui();
         self.update_motion(dt);
         self.physics_step(dt);
         self.update_collisions();
@@ -620,7 +621,7 @@ impl Engine {
     }
 
     /// Draw every entity with a Transform and a SpriteRenderer, in the
-    /// current space
+    /// current space, then the interface on the screen
     pub fn draw_entities(&mut self) {
         use crate::components::{read, SpriteRenderer, Transform, SPRITE_RENDERER, TRANSFORM};
         for ent in self.world.query(&[SPRITE_RENDERER, TRANSFORM]) {
@@ -671,6 +672,7 @@ impl Engine {
                 em.draw(&mut self.renderer, src, self.state.depth, self.state.space);
             }
         }
+        self.draw_ui();
     }
 
     /// Make the next `poll` return false

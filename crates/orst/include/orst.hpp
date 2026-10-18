@@ -174,6 +174,26 @@ struct TilemapRenderer : OrstTilemapRenderer {
     constexpr TilemapRenderer(uint32_t map = 0, int32_t layer = 0)
         : OrstTilemapRenderer{map, layer, {255, 255, 255, 255}, 0, 0, {0, 0}} {}
 };
+/// A box of the interface (see OrstUiRect)
+struct UiRect : OrstUiRect {
+    constexpr UiRect(Vec2 size = {160, 40}, Vec2 pos = {0, 0})
+        : OrstUiRect{0, {0.5f, 0.5f}, {0.5f, 0.5f}, {0.5f, 0.5f}, pos, size, 0, 0, {0, 0, 0}} {}
+};
+/// Text in the entity's UiRect (see OrstUiText)
+struct UiText : OrstUiText {
+    constexpr UiText(Str text = {}, float size = 16.0f, Color color = Color::White)
+        : OrstUiText{text.id, 0, size, color, ORST_ALIGN_CENTER, ORST_ALIGN_CENTER} {}
+};
+/// Fills the entity's UiRect (see OrstUiImage)
+struct UiImage : OrstUiImage {
+    constexpr UiImage(uint32_t texture = 0, Color color = Color::White)
+        : OrstUiImage{texture, {0, 0, 0, 0}, color, 0.0f} {}
+};
+/// Makes the entity's UiRect clickable (see OrstUiButton)
+struct UiButton : OrstUiButton {
+    constexpr UiButton()
+        : OrstUiButton{{255, 255, 255, 255}, {225, 225, 225, 255}, {180, 180, 180, 255}, {128, 128, 128, 160}, 1, 0, 0, 0} {}
+};
 /// What an entity is called (see OrstName)
 struct Name : OrstName {
     Name() : OrstName{} {}
@@ -220,6 +240,14 @@ template <>
 struct ComponentName<ParticleEmitter> { static constexpr const char *value = "ParticleEmitter"; };
 template <>
 struct ComponentName<TilemapRenderer> { static constexpr const char *value = "TilemapRenderer"; };
+template <>
+struct ComponentName<UiRect> { static constexpr const char *value = "UiRect"; };
+template <>
+struct ComponentName<UiText> { static constexpr const char *value = "UiText"; };
+template <>
+struct ComponentName<UiImage> { static constexpr const char *value = "UiImage"; };
+template <>
+struct ComponentName<UiButton> { static constexpr const char *value = "UiButton"; };
 
 enum class Transition : int32_t { Cut = ORST_TRANSITION_CUT, Fade = ORST_TRANSITION_FADE, Wipe = ORST_TRANSITION_WIPE };
 enum class Space : int32_t { World = ORST_SPACE_WORLD, Screen = ORST_SPACE_SCREEN };

@@ -286,6 +286,14 @@ int main() {
     skel.set_attachment("arm", "");
     skel.draw(target);
 
+    // The interface components keep the engine's ids
+    auto label = engine.spawn();
+    engine.set(label, orst::UiRect({40, 12}));
+    engine.set(label, orst::UiText(engine.intern("Hi")));
+    engine.set(label, orst::UiButton());
+    CHECK(engine.component<orst::UiButton>() == ORST_UI_BUTTON);
+    CHECK(engine.text(orst::Str{engine.get<orst::UiText>(label)->text}) == "Hi");
+
     std::printf("smoke_cpp: ok\n");
     return 0;
 }

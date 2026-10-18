@@ -391,6 +391,105 @@ public struct TilemapRenderer
     public bool Hidden { readonly get => hidden != 0; set => hidden = (byte)(value ? 1 : 0); }
 }
 
+/// <summary>A box of the interface on the screen, in canvas pixels. Its
+/// corners follow two anchor points (0..1) of the parent's box, or of the
+/// screen: together they pin it to a point, apart they stretch it.
+/// DrawEntities draws the interface over the world; Step works out the
+/// buttons.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct UiRect
+{
+    /// <summary>The box it sits in; Entity.None: the screen</summary>
+    public Entity Parent;
+    public Vec2 AnchorMin, AnchorMax;
+    /// <summary>The point of the box Pos places, 0..1 from its top-left</summary>
+    public Vec2 Pivot;
+    /// <summary>From the anchors</summary>
+    public Vec2 Pos;
+    /// <summary>The size, or how much bigger than the anchors' area</summary>
+    public Vec2 Size;
+    /// <summary>Order among its siblings; children draw over parents</summary>
+    public int Layer;
+    private byte hidden, pad0, pad1, pad2;
+
+    public UiRect() : this(new Vec2(160, 40)) { }
+    public UiRect(Vec2 size, Vec2 pos = default)
+    {
+        AnchorMin = AnchorMax = Pivot = new Vec2(0.5f, 0.5f);
+        Size = size;
+        Pos = pos;
+    }
+
+    /// <summary>Hides the boxes in it too</summary>
+    public bool Hidden { readonly get => hidden != 0; set => hidden = (byte)(value ? 1 : 0); }
+}
+
+public enum Align : uint { Start = 0, Center = 1, End = 2 }
+
+/// <summary>Text in the entity's UiRect</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct UiText
+{
+    public Str Text;
+    /// <summary>A loaded font; 0: the built-in one</summary>
+    public uint Font;
+    public float Size;
+    public Color Color;
+    /// <summary>Start is left, End is right</summary>
+    public Align Align;
+    /// <summary>Start is top, End is bottom</summary>
+    public Align VAlign;
+
+    public UiText() : this(Str.Empty) { }
+    public UiText(Str text, float size = 16f)
+    {
+        Text = text;
+        Size = size;
+        Color = Color.White;
+        Align = VAlign = Align.Center;
+    }
+}
+
+/// <summary>Fills the entity's UiRect with a texture, or with the colour
+/// when it has none</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct UiImage
+{
+    public uint Texture;
+    /// <summary>Texture region; zero size: the whole texture</summary>
+    public Rect Src;
+    public Color Color;
+    /// <summary>Texels kept unstretched at the edges (nine-slice)</summary>
+    public float Border;
+
+    public UiImage() : this(0) { }
+    public UiImage(uint texture) { Texture = texture; Color = Color.White; }
+    public UiImage(Color color) { Color = color; }
+}
+
+/// <summary>Makes the entity's UiRect clickable; Clicked is true for one
+/// tick after a press and release on it. The colours tint its UiImage.</summary>
+[StructLayout(LayoutKind.Sequential)]
+public struct UiButton
+{
+    public Color Normal, Hover, Pressed, Disabled;
+    private byte interactable, hovered, held, clicked;
+
+    public UiButton()
+    {
+        Normal = Color.White;
+        Hover = new Color(225, 225, 225);
+        Pressed = new Color(180, 180, 180);
+        Disabled = new Color(128, 128, 128, 160);
+        interactable = 1;
+    }
+
+    public bool Interactable { readonly get => interactable != 0; set => interactable = (byte)(value ? 1 : 0); }
+    public readonly bool Hovered => hovered != 0;
+    public readonly bool Held => held != 0;
+    public readonly bool Clicked => clicked != 0;
+}
+
 /// <summary>Makes the entity the camera: Step centres the view on it,
 /// turned with it, at this zoom. The first current one wins.</summary>
 [StructLayout(LayoutKind.Sequential)]

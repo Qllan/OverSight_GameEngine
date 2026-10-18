@@ -89,6 +89,8 @@ internal static class Native
     [DllImport(Lib)] internal static extern void orst_update_motion(IntPtr e, float dt);
     [DllImport(Lib)] internal static extern void orst_step(IntPtr e, float dt);
     [DllImport(Lib)] internal static extern void orst_draw_entities(IntPtr e);
+    [DllImport(Lib)] internal static extern Rect orst_ui_rect(IntPtr e, ulong entity);
+    [DllImport(Lib)] internal static extern ulong orst_ui_at(IntPtr e, Vec2 pos);
     [DllImport(Lib)] internal static extern uint orst_create_polygon(IntPtr e, Vec2[] points, uint count);
     [DllImport(Lib)] internal static extern void orst_free_polygon(IntPtr e, uint polygon);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_entity_overlap(IntPtr e, ulong a, ulong b, out Overlap @out);

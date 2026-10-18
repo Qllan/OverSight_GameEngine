@@ -244,6 +244,28 @@ int main(void) {
     orst_free_skeleton_data(e, rig_data);
     orst_free_skeleton(e, skel);
 
+    /* The interface: a button in the middle clicks once */
+    CHECK(sizeof(OrstUiRect) == 56 && sizeof(OrstUiText) == 24 && sizeof(OrstUiImage) == 28 && sizeof(OrstUiButton) == 20);
+    CHECK(orst_component(e, "UiButton", sizeof(OrstUiButton), _Alignof(OrstUiButton)) == ORST_UI_BUTTON);
+    OrstEntity button = orst_spawn(e);
+    OrstUiRect box = {0, {0.5f, 0.5f}, {0.5f, 0.5f}, {0.5f, 0.5f}, {0, 0}, {20, 10}, 0, 0, {0}};
+    OrstUiButton ui_button = {{255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}, {255, 255, 255, 255}, 1, 0, 0, 0};
+    CHECK(orst_set(e, button, ORST_UI_RECT, &box) && orst_set(e, button, ORST_UI_BUTTON, &ui_button));
+    OrstRect where = orst_ui_rect(e, button);
+    OrstVec2 middle = {where.x + 10, where.y + 5};
+    CHECK(where.w == 20 && orst_ui_at(e, middle) == button);
+    orst_inject_mouse_move(e, middle);
+    orst_inject_mouse_button(e, ORST_MOUSE_LEFT, false);
+    orst_poll(e);
+    orst_step(e, 1.0f / 60);
+    orst_inject_mouse_button(e, ORST_MOUSE_LEFT, true);
+    orst_poll(e);
+    orst_step(e, 1.0f / 60);
+    orst_inject_mouse_button(e, ORST_MOUSE_LEFT, false);
+    orst_poll(e);
+    orst_step(e, 1.0f / 60);
+    CHECK(((OrstUiButton *)orst_get(e, button, ORST_UI_BUTTON))->clicked == 1);
+
     orst_engine_destroy(e);
     printf("smoke_c: ok\n");
     return 0;
