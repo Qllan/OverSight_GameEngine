@@ -1349,7 +1349,7 @@ impl Gpu {
                 }
             }
             let batches = first..self.batches.len();
-            let effects = renderer.effects_of(pass.target).to_vec();
+            let effects = renderer.pass_effects(&pass).to_vec();
             let (mut normal_batches, mut lights) = (0..0, Vec::new());
             if effects.iter().any(|e| e.kind == post::EFFECT_LIGHTING) {
                 let cmds = &commands[pass.commands.clone()];
@@ -3135,6 +3135,34 @@ mod tests {
             },
         );
         e.end_frame();
+    }
+
+    #[test]
+    fn the_interface_stays_out_of_the_screen_effects() {
+        use crate::components::{write, UiImage, UiRect, UI_IMAGE, UI_RECT};
+        let red = Color::rgba(255, 0, 0, 255);
+        let frame = |e: &mut Engine| {
+            let panel = e.world.spawn();
+            write(&mut e.world, panel, UI_RECT, &UiRect::default());
+            let image = UiImage {
+                color: red,
+                ..Default::default()
+            };
+            write(&mut e.world, panel, UI_IMAGE, &image);
+            // No light anywhere: the world goes black
+            e.set_effects(0, &[Effect::lighting(Color::WHITE, 0.0)])
+                .unwrap();
+            e.begin_frame(Color::WHITE);
+            e.draw_entities();
+            e.end_frame();
+            (e.pixel(100, 50), e.pixel(5, 5))
+        };
+        let mut software = Engine::headless(200, 100).unwrap();
+        let black = Some(Color::BLACK);
+        assert_eq!(frame(&mut software), (Some(red), black));
+        if let Some(mut gpu) = gpu_engine(200, 100) {
+            assert_eq!(frame(&mut gpu), (Some(red), black));
+        }
     }
 
     #[test]

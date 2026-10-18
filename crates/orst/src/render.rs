@@ -112,7 +112,14 @@ pub struct Pass {
     /// None keeps what the target showed before
     pub clear: Option<Color>,
     pub commands: Range<usize>,
+    /// The screen's layers from OVERLAY_LAYER up, drawn after its effects
+    pub overlay: bool,
 }
+
+/// Screen draw layers from this one up go over the screen's post effects:
+/// the interface, scene transitions and the debug overlay stay as they
+/// are when the world is lit, blurred or glowing
+pub const OVERLAY_LAYER: i32 = 1 << 30;
 
 pub struct Renderer {
     pub canvas: Pixmap,
@@ -247,6 +254,14 @@ impl Renderer {
             .visible_world(self.target_size())
     }
 
+    /// The effects a pass runs when it is drawn (none over the screen's)
+    pub fn pass_effects(&self, pass: &Pass) -> &[Effect] {
+        match pass.overlay {
+            true => &[],
+            false => self.effects_of(pass.target),
+        }
+    }
+
     pub fn effects_of(&self, target: u32) -> &[Effect] {
         if target == 0 {
             &self.effects
@@ -304,12 +319,34 @@ impl Renderer {
                 .iter()
                 .take_while(|c| c.target == target)
                 .count();
-            if target == 0 || self.targets.contains_key(&target) {
+            if target == 0 {
+                // Sorted by layer: the overlay is the end of the screen's
+                let cmds = &sorted[start..start + n];
+                let under = cmds.iter().take_while(|c| c.layer < OVERLAY_LAYER).count();
+                let size = self.target_size_of(0);
+                passes.push(Pass {
+                    target,
+                    size,
+                    clear,
+                    commands: start..start + under,
+                    overlay: false,
+                });
+                if under < n {
+                    passes.push(Pass {
+                        target,
+                        size,
+                        clear: None,
+                        commands: start + under..start + n,
+                        overlay: true,
+                    });
+                }
+            } else if self.targets.contains_key(&target) {
                 passes.push(Pass {
                     target,
                     size: self.target_size_of(target),
                     clear,
                     commands: start..start + n,
+                    overlay: false,
                 });
             }
             start += n;
@@ -400,7 +437,7 @@ impl Renderer {
                     }
                 }
             }
-            let effects = self.effects_of(pass.target);
+            let effects = self.pass_effects(&pass);
             let lit = effects
                 .iter()
                 .any(|e| e.kind == crate::post::EFFECT_LIGHTING);

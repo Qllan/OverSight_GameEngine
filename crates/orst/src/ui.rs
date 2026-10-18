@@ -15,7 +15,7 @@ use crate::Engine;
 
 /// The draw layer of the interface: over every layer a game uses, under
 /// scene transitions and the debug overlay
-pub const UI_LAYER: i32 = 1 << 30;
+pub const UI_LAYER: i32 = crate::render::OVERLAY_LAYER;
 
 /// Boxes inside boxes deeper than this count as on the screen (a parent
 /// loop cannot hang the layout)
