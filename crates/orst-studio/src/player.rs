@@ -16,7 +16,7 @@ use crate::console::Level;
 use crate::history::History;
 use crate::native::NativeScripts;
 use crate::play::Play;
-use crate::project::{Language, ProjectFile, ASSETS, PROJECT_FILE};
+use crate::project::{Language, ProjectFile, ASSETS, LOCALE, PROJECT_FILE};
 use crate::scripts::{take_log, ScriptHost, Scripts};
 use orst::asset_db::AssetDb;
 use orst::ffi::OrstEngine;
@@ -88,6 +88,9 @@ impl Game {
             scripts = Some(host);
         }
         let (mut assets, _) = AssetDb::scan(data.join(ASSETS))?;
+        for error in engine.locale.load_dir(&assets.file(LOCALE)) {
+            crate::scripts::log(1, error.as_ptr(), error.len());
+        }
         let main = file.main_scene.ok_or("the game has no first scene")?;
         let path = assets.file(&main);
         let text = std::fs::read_to_string(&path).map_err(|e| format!("{main}: {e}"))?;

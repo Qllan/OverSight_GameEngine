@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 pub const PROJECT_FILE: &str = "project.orst";
 pub const ASSETS: &str = "Assets";
+/// The folder under Assets with a <language>.json of texts per language
+pub const LOCALE: &str = "Locale";
 pub const LIBRARY: &str = "Library";
 /// Where new scripts go, under Assets
 pub const SCRIPTS: &str = "Scripts";

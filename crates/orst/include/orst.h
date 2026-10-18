@@ -349,6 +349,19 @@ OrstEntity orst_find_named(OrstEngine *e, const char *name); /* oldest with that
 uint32_t orst_intern(OrstEngine *e, const char *text);
 size_t orst_string(OrstEngine *e, uint32_t id, char *buf, size_t size);
 
+/* Translations: a table of texts per language. orst_load_locales loads
+ * every <language>.json in a folder ({"menu": {"play": "Play"}} gives the
+ * key "menu.play"). A UiText whose text is "@menu.play" shows that key's
+ * text; orst_tr gives it to code. A missing text comes from English, else
+ * it is the key itself. The first language is English if there is one. */
+bool orst_load_locale(OrstEngine *e, const char *language, const char *json);
+uint32_t orst_load_locales(OrstEngine *e, const char *dir); /* how many languages */
+bool orst_set_language(OrstEngine *e, const char *language); /* false: not loaded */
+size_t orst_language(OrstEngine *e, char *buf, size_t size);
+uint32_t orst_language_count(OrstEngine *e);
+size_t orst_language_name(OrstEngine *e, uint32_t index, char *buf, size_t size);
+size_t orst_tr(OrstEngine *e, const char *key, char *buf, size_t size);
+
 /* What is inside a component, for tools: the editor's inspector shows a
  * widget per field, scene files store fields by name, undo changes one
  * field. Built-ins come described; a game's component works without it,

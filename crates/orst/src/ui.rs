@@ -233,7 +233,7 @@ impl Engine {
     }
 
     fn draw_ui_text(&mut self, t: &UiText, rect: Rect, depth: f32, space: Space) {
-        let text = self.strings.get(t.text).to_string();
+        let text = self.locale.text(self.strings.get(t.text)).into_owned();
         if text.is_empty() {
             return;
         }

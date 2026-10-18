@@ -82,6 +82,13 @@ internal static class Native
     [DllImport(Lib)] internal static extern ulong orst_find_named(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
     [DllImport(Lib)] internal static extern uint orst_intern(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string text);
     [DllImport(Lib)] internal static extern nuint orst_string(IntPtr e, uint id, [In, Out] byte[]? buf, nuint size);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_load_locale(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string language, [MarshalAs(UnmanagedType.LPUTF8Str)] string json);
+    [DllImport(Lib)] internal static extern uint orst_load_locales(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string dir);
+    [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_set_language(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string language);
+    [DllImport(Lib)] internal static extern nuint orst_language(IntPtr e, [In, Out] byte[]? buf, nuint size);
+    [DllImport(Lib)] internal static extern uint orst_language_count(IntPtr e);
+    [DllImport(Lib)] internal static extern nuint orst_language_name(IntPtr e, uint index, [In, Out] byte[]? buf, nuint size);
+    [DllImport(Lib)] internal static extern nuint orst_tr(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string key, [In, Out] byte[]? buf, nuint size);
     [DllImport(Lib)] [return: MarshalAs(UnmanagedType.U1)] internal static extern bool orst_set_fields(IntPtr e, uint component, NativeField[] fields, uint count);
     [DllImport(Lib)] internal static extern uint orst_define_component(IntPtr e, [MarshalAs(UnmanagedType.LPUTF8Str)] string name, uint size, uint align, NativeField[] fields, uint count, IntPtr defaults);
     [DllImport(Lib)] internal static extern uint orst_field_count(IntPtr e, uint component);

@@ -103,6 +103,48 @@ public sealed partial class Engine
         Native.orst_string(Handle, s.Id, buf, (nuint)buf.Length);
         return Encoding.UTF8.GetString(buf, 0, (int)n);
     }
+
+    static string Out(Func<byte[]?, nuint, nuint> get)
+    {
+        var n = get(null, 0);
+        var buf = new byte[(int)n + 1];
+        get(buf, (nuint)buf.Length);
+        return Encoding.UTF8.GetString(buf, 0, (int)n);
+    }
+
+    /// <summary>Load every &lt;language&gt;.json in dir in place of the
+    /// tables there were ({"menu": {"play": "Play"}} gives "menu.play");
+    /// how many languages there are</summary>
+    public uint LoadLocales(string dir) => Native.orst_load_locales(Handle, dir);
+
+    /// <summary>Add the texts of a JSON object to a language</summary>
+    public void LoadLocale(string language, string json)
+    {
+        if (!Native.orst_load_locale(Handle, language, json))
+            throw new OrstException(LastError);
+    }
+
+    /// <summary>The language texts come in; setting one not loaded does nothing</summary>
+    public string Language
+    {
+        get => Out((b, n) => Native.orst_language(Handle, b, n));
+        set => Native.orst_set_language(Handle, value);
+    }
+
+    public string[] Languages
+    {
+        get
+        {
+            var names = new string[Native.orst_language_count(Handle)];
+            for (uint i = 0; i < names.Length; i++)
+                names[i] = Out((b, n) => Native.orst_language_name(Handle, i, b, n));
+            return names;
+        }
+    }
+
+    /// <summary>The text of key in the current language (else English,
+    /// else the key); a UiText shows it for "@key"</summary>
+    public string Tr(string key) => Out((b, n) => Native.orst_tr(Handle, key, b, n));
     public bool Despawn(Entity e) => Native.orst_despawn(Handle, e.Id);
     public bool Alive(Entity e) => Native.orst_alive(Handle, e.Id);
     public uint EntityCount => Native.orst_entity_count(Handle);

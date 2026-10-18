@@ -9,7 +9,7 @@ use crate::history::History;
 use crate::inspector::{self, Action};
 use crate::play::{self, Play};
 use crate::prefabs;
-use crate::project::{Language, Project};
+use crate::project::{self, Language, Project};
 use crate::scene_view::{self, AssetPath, SceneEvent, SceneView};
 use crate::scripts::{self, BuildResult, ScriptHost, ScriptProject, Scripts, Sources};
 use crate::sprite_anim::AnimEdit;
@@ -84,6 +84,8 @@ pub struct Editor {
     /// The game is running in the editor; Stop throws its changes away
     pub play: Option<Play>,
     pub scripts: ScriptState,
+    /// The files of Assets/Locale as last loaded, with their times
+    locale_files: Vec<(PathBuf, Option<std::time::SystemTime>)>,
 }
 
 /// Scripts in C# or C++: built when a script under Assets changes,
@@ -167,6 +169,7 @@ impl Editor {
             title: String::new(),
             play: None,
             scripts: ScriptState::default(),
+            locale_files: Vec::new(),
         }
         .with_scripts()
         .with_main_scene()
@@ -288,6 +291,26 @@ impl Editor {
         }
     }
 
+    /// Load the texts of Assets/Locale again when a file there changed
+    pub fn watch_locale(&mut self) {
+        let dir = self.project.assets.file(project::LOCALE);
+        let mut files: Vec<(PathBuf, Option<std::time::SystemTime>)> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| (e.path(), e.metadata().and_then(|m| m.modified()).ok()))
+            .collect();
+        files.sort();
+        if files == self.locale_files {
+            return;
+        }
+        self.locale_files = files;
+        let Ok(view) = &mut self.scene else { return };
+        for error in view.engine.locale.load_dir(&dir) {
+            self.console.error(error);
+        }
+    }
+
     /// Build again when a .cs file changed, at most once a second
     fn watch_scripts(&mut self, ctx: &egui::Context) {
         for (level, text) in scripts::take_log() {
@@ -315,6 +338,7 @@ impl Editor {
         }
         self.scripts.next_check = Some(now + Duration::from_secs(1));
         ctx.request_repaint_after(Duration::from_secs(1));
+        self.watch_locale();
         let Some(project) = &self.scripts.project else {
             return;
         };
@@ -876,6 +900,28 @@ impl Editor {
                     ui.toggle_value(&mut view.interface, "UI").on_hover_text(
                         "Show the interface on the game's screen; F fits it in the view",
                     );
+                    let languages: Vec<String> = view
+                        .engine
+                        .locale
+                        .languages()
+                        .iter()
+                        .map(|l| l.to_string())
+                        .collect();
+                    if view.interface && !languages.is_empty() {
+                        let current = view.engine.locale.language().to_string();
+                        egui::ComboBox::from_id_salt("language")
+                            .selected_text(&current)
+                            .width(48.0)
+                            .show_ui(ui, |ui| {
+                                for l in &languages {
+                                    if ui.selectable_label(*l == current, l).clicked() {
+                                        view.engine.locale.set_language(l);
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text("The language @key texts show in (Assets/Locale)");
+                    }
                     ui.separator();
                     for (tool, name, key) in [
                         (Tool::Move, "Move", "W"),
@@ -1844,6 +1890,25 @@ mod tests {
         ed.undo(false);
         let engine = &ed.scene.as_ref().unwrap().engine;
         assert_eq!(read::<UiRect>(&engine.world, button, UI_RECT), Some(r));
+    }
+
+    #[test]
+    fn locale_files_load_and_reload() {
+        let mut ed = editor("locale");
+        let dir = ed.project.assets.file(project::LOCALE);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("en.json"), r#"{"play": "Play"}"#).unwrap();
+        std::fs::write(dir.join("ru.json"), r#"{"play": "Играть"}"#).unwrap();
+        ed.watch_locale();
+        let locale = &mut ed.scene.as_mut().unwrap().engine.locale;
+        assert_eq!(locale.languages(), ["en", "ru"]);
+        locale.set_language("ru");
+        // A file changed: it loads again, in the same language
+        std::fs::write(dir.join("ru.json"), r#"{"play": "Начать"}"#).unwrap();
+        ed.locale_files.clear();
+        ed.watch_locale();
+        let locale = &ed.scene.as_ref().unwrap().engine.locale;
+        assert_eq!(locale.text("@play"), "Начать");
     }
 
     #[test]

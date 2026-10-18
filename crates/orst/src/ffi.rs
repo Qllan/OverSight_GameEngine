@@ -849,6 +849,100 @@ pub unsafe extern "C" fn orst_find_named(e: *mut OrstEngine, name: *const c_char
     engine!(e, 0).world.find_named(string(name)).unwrap_or(0)
 }
 
+/// Add the texts of a JSON object to the table of `language`; false (see
+/// orst_last_error) when it is not one
+///
+/// # Safety
+/// `language` and `json` are NULL or NUL-terminated strings
+#[no_mangle]
+pub unsafe extern "C" fn orst_load_locale(
+    e: *mut OrstEngine,
+    language: *const c_char,
+    json: *const c_char,
+) -> bool {
+    let engine = engine!(e, false);
+    match engine.locale.add(string(language), string(json)) {
+        Ok(_) => true,
+        Err(err) => {
+            engine.set_error(format!("{}: {err}", string(language)));
+            false
+        }
+    }
+}
+
+/// Load every <language>.json in `dir` in place of the tables there were;
+/// how many languages there are now
+///
+/// # Safety
+/// `dir` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_load_locales(e: *mut OrstEngine, dir: *const c_char) -> u32 {
+    let engine = engine!(e, 0);
+    let errors = engine.locale.load_dir(std::path::Path::new(string(dir)));
+    if !errors.is_empty() {
+        engine.set_error(errors.join("\n"));
+    }
+    engine.locale.languages().len() as u32
+}
+
+/// Switch to a loaded language; false for others
+///
+/// # Safety
+/// `language` is NULL or a NUL-terminated string
+#[no_mangle]
+pub unsafe extern "C" fn orst_set_language(e: *mut OrstEngine, language: *const c_char) -> bool {
+    engine!(e, false).locale.set_language(string(language))
+}
+
+/// The current language into `buf`; its length in bytes
+///
+/// # Safety
+/// `buf` is NULL or `size` writable bytes
+#[no_mangle]
+pub unsafe extern "C" fn orst_language(e: *mut OrstEngine, buf: *mut c_char, size: usize) -> usize {
+    copy_out(engine!(e, 0).locale.language(), buf, size)
+}
+
+#[no_mangle]
+pub extern "C" fn orst_language_count(e: *mut OrstEngine) -> u32 {
+    engine!(e, 0).locale.languages().len() as u32
+}
+
+/// The name of loaded language `index` (by name order); its length
+///
+/// # Safety
+/// `buf` is NULL or `size` writable bytes
+#[no_mangle]
+pub unsafe extern "C" fn orst_language_name(
+    e: *mut OrstEngine,
+    index: u32,
+    buf: *mut c_char,
+    size: usize,
+) -> usize {
+    let engine = engine!(e, 0);
+    let name = engine
+        .locale
+        .languages()
+        .get(index as usize)
+        .copied()
+        .unwrap_or("");
+    copy_out(name, buf, size)
+}
+
+/// The text of `key` in the current language (or English, or the key)
+///
+/// # Safety
+/// `key` is NULL or a NUL-terminated string; `buf` NULL or `size` bytes
+#[no_mangle]
+pub unsafe extern "C" fn orst_tr(
+    e: *mut OrstEngine,
+    key: *const c_char,
+    buf: *mut c_char,
+    size: usize,
+) -> usize {
+    copy_out(engine!(e, 0).locale.tr(string(key)), buf, size)
+}
+
 /// The id of a text for String fields: the same text always gets the
 /// same id, "" is 0
 ///

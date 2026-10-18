@@ -244,6 +244,11 @@ int main(void) {
     orst_free_skeleton_data(e, rig_data);
     orst_free_skeleton(e, skel);
 
+    /* Translations */
+    CHECK(orst_load_locale(e, "ru", "{\"menu\": {\"play\": \"Играть\"}}") && orst_load_locale(e, "en", "{\"menu\": {\"play\": \"Play\"}}"));
+    CHECK(!orst_load_locale(e, "de", "[1]") && orst_language_count(e) == 2 && orst_language(e, text, sizeof text) == 2 && strcmp(text, "ru") == 0);
+    CHECK(orst_tr(e, "menu.play", text, sizeof text) == strlen("Играть") && orst_set_language(e, "en") && orst_tr(e, "menu.play", text, sizeof text) == 4);
+
     /* The interface: a button in the middle clicks once */
     CHECK(sizeof(OrstUiRect) == 56 && sizeof(OrstUiText) == 24 && sizeof(OrstUiImage) == 28 && sizeof(OrstUiButton) == 20);
     CHECK(orst_component(e, "UiButton", sizeof(OrstUiButton), _Alignof(OrstUiButton)) == ORST_UI_BUTTON);

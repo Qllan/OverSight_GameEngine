@@ -73,6 +73,8 @@ pub struct Engine {
     pub strings: crate::strings::Strings,
     /// Where the interface goes (the editor shows it apart from the world)
     pub ui_view: crate::ui::UiView,
+    /// Texts by language, for `@key` texts and scripts
+    pub locale: crate::locale::Locale,
     /// Collider layers that cast shadows
     shadow_layers: u32,
     /// Maps whose solid cells cast shadows
@@ -149,6 +151,7 @@ impl Engine {
             prefabs: Store::default(),
             strings: Default::default(),
             ui_view: Default::default(),
+            locale: Default::default(),
             shadow_layers: 0,
             shadow_maps: Default::default(),
             state: DrawState::default(),

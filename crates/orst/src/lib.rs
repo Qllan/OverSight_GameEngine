@@ -28,6 +28,7 @@ pub use wgpu;
 pub mod hotreload;
 pub mod input;
 pub mod light;
+pub mod locale;
 pub mod particles;
 pub mod pathfind;
 #[cfg(feature = "physics")]

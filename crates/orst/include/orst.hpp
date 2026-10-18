@@ -1008,6 +1008,33 @@ public:
         return out;
     }
 
+    /// Translations (see orst_load_locales)
+    uint32_t load_locales(const std::string &dir) { return orst_load_locales(e_, dir.c_str()); }
+    bool load_locale(const std::string &language, const std::string &json) {
+        return orst_load_locale(e_, language.c_str(), json.c_str());
+    }
+    bool set_language(const std::string &language) { return orst_set_language(e_, language.c_str()); }
+    std::string language() const {
+        std::string out(orst_language(e_, nullptr, 0), '\0');
+        orst_language(e_, out.data(), out.size() + 1);
+        return out;
+    }
+    std::vector<std::string> languages() const {
+        std::vector<std::string> out;
+        for (uint32_t i = 0; i < orst_language_count(e_); ++i) {
+            std::string name(orst_language_name(e_, i, nullptr, 0), '\0');
+            orst_language_name(e_, i, name.data(), name.size() + 1);
+            out.push_back(name);
+        }
+        return out;
+    }
+    /// The text of key in the current language
+    std::string tr(const std::string &key) const {
+        std::string out(orst_tr(e_, key.c_str(), nullptr, 0), '\0');
+        orst_tr(e_, key.c_str(), out.data(), out.size() + 1);
+        return out;
+    }
+
     /// What is inside T, for tools (see orst_set_fields):
     ///     engine.set_fields<Enemy>({{"speed", ORST_FIELD_F32, offsetof(Enemy, speed), 0, 0, 10}});
     template <class T>

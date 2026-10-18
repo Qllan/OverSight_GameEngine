@@ -297,6 +297,15 @@ using (var skel = engine.CreateSkeleton(rig))
     skel.SetAttachment("arm", null);
 }
 
+// Translations
+engine.LoadLocale("ru", "{\"menu\": {\"play\": \"Играть\"}}");
+engine.LoadLocale("en", "{\"menu\": {\"play\": \"Play\"}}");
+var noGerman = false;
+try { engine.LoadLocale("de", "[1]"); } catch (OrstException) { noGerman = true; }
+Check(noGerman && engine.Language == "ru" && engine.Tr("menu.play") == "Играть" && engine.Languages is ["en", "ru"], "locale");
+engine.Language = "en";
+Check(engine.Tr("menu.play") == "Play" && engine.Tr("menu.gone") == "menu.gone", "Language");
+
 // The interface: a button in the middle clicks once
 Check(engine.Component<UiRect>() == 14 && Marshal.SizeOf<UiRect>() == 56 && engine.Component<UiText>() == 15
       && Marshal.SizeOf<UiText>() == 24 && Marshal.SizeOf<UiImage>() == 28 && engine.Component<UiButton>() == 17

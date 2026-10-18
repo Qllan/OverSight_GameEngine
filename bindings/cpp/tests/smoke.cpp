@@ -286,6 +286,10 @@ int main() {
     skel.set_attachment("arm", "");
     skel.draw(target);
 
+    // Translations
+    CHECK(engine.load_locale("en", R"({"hi": "Hello"})") && engine.load_locale("ru", R"({"hi": "Привет"})"));
+    CHECK(engine.languages().size() == 2 && engine.language() == "en" && engine.set_language("ru") && engine.tr("hi") == "Привет");
+
     // The interface components keep the engine's ids
     auto label = engine.spawn();
     engine.set(label, orst::UiRect({40, 12}));
