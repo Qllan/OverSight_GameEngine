@@ -796,6 +796,19 @@ impl Editor {
                         ui.selectable_value(&mut view.tool, tool, name)
                             .on_hover_text(format!("{key}; hold Ctrl to snap"));
                     }
+                    ui.separator();
+                    let p = &mut view.preview;
+                    ui.toggle_value(&mut p.particles, "Particles")
+                        .on_hover_text("Run particle emitters without Play");
+                    ui.toggle_value(&mut p.light, "Light")
+                        .on_hover_text("Light the scene with its Light entities");
+                    if p.light {
+                        ui.add(
+                            egui::Slider::new(&mut p.ambient, 0.0..=1.0)
+                                .text("Ambient")
+                                .max_decimals(2),
+                        );
+                    }
                 }
             });
             ui.separator();
@@ -812,6 +825,7 @@ impl Editor {
                         }
                     }
                     view.painting = self.tiles.on && map.is_some();
+                    view.playing = self.play.is_some();
                     view.brush = map
                         .zip(view.hover)
                         .and_then(|(map, at)| tiles::cell_rect(&view.engine, map, at));
@@ -1896,6 +1910,43 @@ mod tests {
         let ctx = egui::Context::default();
         frame(&ctx, &mut ed);
         frame(&ctx, &mut ed);
+    }
+
+    #[test]
+    fn the_scene_previews_particles_and_light_without_play() {
+        let mut ed = editor("preview");
+        ed.create_entity();
+        let e = ed.selected.unwrap();
+        let world = &mut ed.scene.as_mut().unwrap().engine.world;
+        inspector::add_component(world, e, orst::components::PARTICLE_EMITTER);
+        let ctx = egui::Context::default();
+        let view = ed.scene.as_mut().unwrap();
+        view.preview.particles = true;
+        view.preview.light = true;
+        ed.dirty = false;
+        frame(&ctx, &mut ed);
+        frame(&ctx, &mut ed);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert_eq!(engine.entity_emitters.len(), 1);
+        assert_eq!(engine.renderer.effects.len(), 1, "lit");
+        let before = engine
+            .world
+            .get(e, orst::components::PARTICLE_EMITTER)
+            .unwrap()
+            .to_vec();
+        assert!(!ed.dirty, "the scene itself does not change");
+        let view = ed.scene.as_mut().unwrap();
+        view.preview = Default::default();
+        frame(&ctx, &mut ed);
+        let engine = &ed.scene.as_ref().unwrap().engine;
+        assert!(engine.entity_emitters.is_empty() && engine.renderer.effects.is_empty());
+        assert_eq!(
+            engine
+                .world
+                .get(e, orst::components::PARTICLE_EMITTER)
+                .unwrap(),
+            &before[..]
+        );
     }
 
     fn image_png(path: &std::path::Path, w: u32, h: u32, rgba: &[u8]) {

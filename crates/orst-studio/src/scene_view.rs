@@ -10,6 +10,7 @@ use crate::gizmo::{self, Drag, Tool};
 use orst::components::{read, Name, SpriteRenderer, Transform, NAME, SPRITE_RENDERER, TRANSFORM};
 use orst::ecs::Entity;
 use orst::ffi::OrstEngine;
+use orst::post::Effect;
 use orst::{Camera, Color, Engine, Vec2};
 
 const BACKGROUND: Color = Color::rgba(38, 40, 46, 255);
@@ -39,6 +40,31 @@ pub struct SceneView {
     pub hover: Option<Vec2>,
     /// A rectangle to outline: the cell the brush would paint
     pub brush: Option<orst::Rect>,
+    /// Preview of what Play would show: particles flying, scene lit
+    pub preview: Preview,
+    /// The game is running: it moves the particles and sets the effects
+    pub playing: bool,
+    /// The lighting last put on the view
+    lit: Option<f32>,
+}
+
+/// What the Scene window shows of the game without Play
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Preview {
+    pub particles: bool,
+    pub light: bool,
+    /// The light everywhere when `light` is on, 0 to 1
+    pub ambient: f32,
+}
+
+impl Default for Preview {
+    fn default() -> Self {
+        Preview {
+            particles: false,
+            light: false,
+            ambient: 0.3,
+        }
+    }
 }
 
 /// An asset path under Assets, dragged out of the Project window
@@ -92,6 +118,9 @@ impl SceneView {
             painting: false,
             hover: None,
             brush: None,
+            preview: Preview::default(),
+            playing: false,
+            lit: None,
         };
         view.engine.set_camera(Camera::default());
         Ok(view)
@@ -234,9 +263,37 @@ impl SceneView {
         let gizmo = selected.map(|_| (self.tool, self.drag.map(|(_, d)| d.handle)));
         let gizmo = gizmo.filter(|_| !self.painting);
         let brush = self.brush.filter(|_| self.painting);
+        if self.playing {
+            // The game may set its own effects: put the preview's back after
+            self.lit = Some(f32::NAN);
+        } else {
+            self.preview(ui);
+        }
         draw(&mut self.engine, selected, gizmo, brush);
         self.present(ui, rect);
         events
+    }
+
+    /// Run the particles and light the scene as Play would, without
+    /// changing the world
+    fn preview(&mut self, ui: &egui::Ui) {
+        if self.preview.particles {
+            let dt = ui.input(|i| i.stable_dt).min(0.1);
+            self.engine.update_entity_particles(dt);
+            ui.ctx().request_repaint();
+        } else {
+            self.engine.entity_emitters.clear();
+        }
+        let lit = self.preview.light.then_some(self.preview.ambient);
+        if lit != self.lit {
+            let effects: Vec<Effect> = lit
+                .map(|a| Effect::lighting(Color::WHITE, a))
+                .into_iter()
+                .collect();
+            // Lighting is a built-in effect: setting it does not fail
+            let _ = self.engine.set_effects(0, &effects);
+            self.lit = lit;
+        }
     }
 
     /// A left drag from the canvas point `at`: a handle of the selection's
