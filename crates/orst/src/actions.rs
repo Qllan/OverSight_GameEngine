@@ -56,6 +56,18 @@ impl Binding {
         }
     }
 
+    /// Pressed this frame, even if already let go again (a quick tap
+    /// between two frames leaves the button up)
+    pub fn tapped(&self, input: &Input) -> bool {
+        let g = &input.gamepads;
+        match *self {
+            Binding::Key(k) => input.key_pressed(k),
+            Binding::Mouse(b) => input.mouse_pressed(b),
+            Binding::PadButton(pad, b) => pads(pad).any(|p| g.pressed(p, b)),
+            Binding::PadAxis(..) => false,
+        }
+    }
+
     /// As in a config file: `key:Space`, `pad:South`, `pad1:LeftX-`
     pub fn to_text(&self) -> String {
         let pad = |p: i32| {
@@ -258,8 +270,9 @@ impl Actions {
                 Binding::PadAxis(..) => b.value(input) >= AXIS_THRESHOLD,
                 _ => b.value(input) > 0.0,
             });
-            a.pressed = down && !a.down;
-            a.released = !down && a.down;
+            let tapped = a.bindings.iter().any(|b| b.tapped(input));
+            a.pressed = !a.down && (down || tapped);
+            a.released = (a.down || a.pressed) && !down;
             a.down = down;
             a.value = value;
         }
@@ -375,6 +388,16 @@ mod tests {
         assert!(a.down(jump) && !a.released(jump));
         frame(&mut a, &mut input, |i| i.set_key(Key::W, false));
         assert!(a.released(jump) && !a.down(jump));
+        frame(&mut a, &mut input, |i| {
+            i.set_key(Key::Space, true);
+            i.set_key(Key::Space, false);
+        });
+        assert!(
+            a.pressed(jump) && a.released(jump) && !a.down(jump),
+            "a tap between two frames"
+        );
+        frame(&mut a, &mut input, |_| {});
+        assert!(!a.pressed(jump) && !a.released(jump));
     }
 
     #[test]
